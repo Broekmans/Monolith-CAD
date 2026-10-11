@@ -1,0 +1,80 @@
+0.1.31 (2026-10-11)
+- New "Interface" menu (next to View): Dark Mode on/off, UI Scale… (slider 60%–200%, remembered) and Reset UI Scale.
+- The dark mode button in the top bar has moved to Interface > Dark Mode.
+
+0.1.30 (2026-10-11)
+- Dark mode: sketches on an empty plane now use light colours (white = fully defined, light blue = under defined, light dimension lines); sketches on a part face keep black/blue. Dimension numbers are always dark on their white label.
+
+0.1.29 (2026-10-11)
+- Sketch colours in dark mode now match light mode: black = fully defined, blue = under defined (dimension text readable again).
+- Selected sketch geometry is now magenta instead of light blue, so it can't be confused with under-defined (blue).
+
+0.1.28 (2026-10-11)
+- Internal: program code reorganised into smaller files per topic (faster, safer updates). No change in how the program works.
+
+0.1.27 (2026-10-11)
+- Action log permission popup now explains exactly what is and isn't recorded, where the log is stored, that it is never sent anywhere, and how long it is kept. Shown once more so you can review your choice.
+
+0.1.26 (2026-10-11)
+- New: action log. Monolith records what you do (commands, clicks, keys, field values) and any errors in the "Logs" folder next to the program (one file per day, kept 14 days). Asks for permission on first start; can be switched on/off on the Home screen (on by default).
+
+0.1.25 (2026-10-11)
+- Viewport: Shift + middle-mouse drag now pans, Ctrl + middle-mouse drag now zooms (swapped).
+
+MONOLITH (EKCAD) - CHANGELOG
+============================
+Newest version at the top. Install a patch by double-clicking UPDATE-EKCAD.bat.
+
+0.1.24  (11 Oct 2026)
+  - Part: double-click a face to show the feature that made it:
+    its sketch is shown on top of the model with its dimensions, and the feature
+    parameters (Depth, Angle, Radius, ...) appear as orange labels.
+  - Double-click one of those dimensions to change it; the part rebuilds (undo works).
+  - Click empty space or press Esc to hide the dimensions again.
+  - FeatureManager tree: hovering over a feature highlights its faces in the viewport
+    (orange) and shows its sketch.
+
+0.1.23  (11 Oct 2026)
+  - Assembly: Measure tool (Evaluate tab). Edge length / diameter, face area,
+    centre distance, normal distance or angle - also between different components.
+
+0.1.22  (11 Oct 2026)
+  - Assembly: Width mate. In Mate, select 2 parallel faces on one
+    component and 2 on another -> the second component is centred between the first.
+
+0.1.21  (11 Oct 2026)
+  - Section View: dotted X and Y lines are always shown across the cut plane.
+
+0.1.20
+  - Section View: drag the red cut face or scroll the mouse wheel over it to move the cut.
+  - "Saved Views" folder in the tree with "Cross section N" entries (on/off, edit,
+    flip side, rename, delete). Clicking Section View while a section is on turns it off.
+
+0.1.18 - 0.1.19
+  - Section View in part and assembly: Front/Top/Right plane, a picked planar face,
+    or a drawn cut line; offset and flip side. Cut faces shown in red.
+
+0.1.17
+  - Program renamed to Monolith (files, extensions and folders stay EKCAD internally).
+
+0.1.16
+  - Toolbox with DIN fasteners: DIN 933/931 hex bolts, DIN 912 socket head cap screws,
+    DIN 7991 countersunk screws, DIN 934 hex nuts, DIN 985 nyloc nuts,
+    DIN 125-A and DIN 9021 washers, M3-M24.
+
+0.1.15
+  - Assemblies: Insert Component, mates (Coincident, Concentric, Distance, Angle,
+    Parallel, Perpendicular, Tangent, Lock) with live preview, flip, edit/suppress/delete,
+    DOF markers, drag/rotate within freedom, Fix/Float, Hide/Show, Rebuild,
+    STEP/IGES export of the whole assembly.
+
+0.1.0 - 0.1.14  (first versions)
+  - Parametric part modelling: sketches with constraints and Smart Dimension,
+    Extruded/Revolved Boss and Cut, Fillet, Chamfer, Shell, Linear/Circular Pattern,
+    Mirror, Mass Properties, Measure, rollback bar, suppress, edit feature/sketch.
+  - Sketch tools: line, centerline, rectangles, circle, arcs, slot, point, text,
+    trim, convert entities, mirror entities, construction geometry.
+  - STEP/IGES import and export, DXF import/export, DWG via ODA File Converter.
+  - Point clouds (LAS/LAZ/PLY/XYZ/PTS) as reference with colour modes and height slice.
+  - 2D Plan environment (command line, walls/doors/windows/slabs).
+  - Document tabs, dark mode, view cube.
