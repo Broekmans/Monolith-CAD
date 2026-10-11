@@ -1,5 +1,5 @@
-// Electron main process: windows, menus, file dialogs, kernel worker and
-// DWG conversion through the ODA File Converter.
+// Electron main process: windows, menus, file dialogs, IPC and app lifecycle.
+// Kernel workers -> kernel.cjs, settings/logs/recent -> settings.cjs, DWG + fonts -> tools.cjs.
 const { app, BrowserWindow, Menu, ipcMain, dialog, shell, protocol, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -11,98 +11,11 @@ const { pathToFileURL } = require('node:url');
 const ROOT = path.join(__dirname, '..');
 const RENDERER = path.join(ROOT, 'renderer');
 const isTest = !!process.env.MONOLITH_TEST;
-// One-time: carry recent files + action-log consent over from the pre-rename settings folder
-function migrateSettings() {
-  try {
-    const ud = app.getPath('userData'), legacy = path.join(path.dirname(ud), ['EK', 'CAD'].join(''));
-    if (!fs.existsSync(legacy)) return;
-    fs.mkdirSync(ud, { recursive: true });
-    for (const f of ['recent.json', 'actionlog.json']) {
-      const src = path.join(legacy, f), dst = path.join(ud, f);
-      if (fs.existsSync(src) && !fs.existsSync(dst)) fs.copyFileSync(src, dst);
-    }
-  } catch { /* ignore */ }
-}
-if (!isTest) migrateSettings();
-// ---------- action log: <CAD Program>\Logs\MonoLith-YYYY-MM-DD.log (one file per day, 14 days kept) ----------
-function logDir() {
-  const d = app.isPackaged ? path.join(path.dirname(path.dirname(process.execPath)), 'Logs') : path.join(app.getPath('userData'), 'Logs');
-  try { fs.mkdirSync(d, { recursive: true }); } catch { return app.getPath('userData'); }
-  return d;
-}
-function pruneLogs() {
-  try { const d = logDir(), cut = Date.now() - 14 * 864e5; for (const f of fs.readdirSync(d)) if (/^MonoLith-.*\.log$/i.test(f) && fs.statSync(path.join(d, f)).mtimeMs < cut) fs.unlinkSync(path.join(d, f)); } catch {}
-}
-const logCfgFile = () => path.join(app.getPath('userData'), 'actionlog.json');
-let logCfg = null;
-function getLogCfg() { if (!logCfg) { try { logCfg = JSON.parse(fs.readFileSync(logCfgFile(), 'utf8')); } catch { logCfg = { enabled: true, asked: false }; } if (isTest && !process.env.MONOLITH_LOGTEST) { logCfg.asked = true; logCfg.consentV = 9; } } return logCfg; }
-function setLogCfg(c) { logCfg = { ...getLogCfg(), ...c }; try { fs.writeFileSync(logCfgFile(), JSON.stringify(logCfg)); } catch {} return logCfg; }
-function writeLog(lines) {
-  if (!getLogCfg().enabled) return;
-  if ((isTest && !process.env.MONOLITH_LOGTEST) || !lines?.length) return;
-  const day = new Date().toISOString().slice(0, 10);
-  fs.appendFile(path.join(logDir(), `MonoLith-${day}.log`), lines.join('\n') + '\n', () => {});
-}
-
+const { listProjects, createProject, openFolder, projectsRoot } = require('./projects.cjs');
+const { pcCall, startWorker, kernel, stopWorkers } = require('./kernel.cjs');
+const { logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
+const { dwgToDxf, dxfToDwg, listFonts } = require('./tools.cjs');
 protocol.registerSchemesAsPrivileged([{ scheme: 'monolith', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
-
-// ---------------- kernel worker ----------------
-let worker = null;
-let nextId = 1;
-const pending = new Map();
-// ---------------- point cloud worker ----------------
-let pcWorker = null;
-let pcNext = 1;
-const pcPending = new Map();
-function pcCall(op, args, sender) {
-  if (!pcWorker) {
-    const p = path.join(ROOT, 'kernel', 'pointcloud.mjs').replace('app.asar', 'app.asar.unpacked');
-    pcWorker = new Worker(pathToFileURL(p));
-    pcWorker.on('message', (m) => {
-      const q = pcPending.get(m.id);
-      if (!q) return;
-      if (m.progress !== undefined) { if (!q.sender.isDestroyed()) q.sender.send('pc-progress', m.progress); return; }
-      pcPending.delete(m.id);
-      if (m.error) q.reject(new Error(m.error)); else q.resolve(m.result);
-    });
-    pcWorker.on('error', (e) => { for (const q of pcPending.values()) q.reject(e); pcPending.clear(); pcWorker = null; });
-  }
-  return new Promise((resolve, reject) => {
-    const id = pcNext++;
-    pcPending.set(id, { resolve, reject, sender });
-    pcWorker.postMessage({ id, op, args });
-  });
-}
-
-function startWorker() {
-  const kernelPath = path.join(ROOT, 'kernel', 'worker.mjs').replace('app.asar', 'app.asar.unpacked');
-  worker = new Worker(pathToFileURL(kernelPath));
-  worker.on('message', (m) => {
-    if (m.ready || m.fatal) { if (m.fatal) console.error('Kernel failed:', m.fatal); return; }
-    const p = pending.get(m.id);
-    if (!p) return;
-    pending.delete(m.id);
-    if (m.error) p.resolve({ __error: m.error }); else p.resolve(m.result);
-  });
-  worker.on('error', (e) => { console.error('Kernel worker error', e); for (const p of pending.values()) p.resolve({ __error: String(e) }); pending.clear(); startWorker(); });
-}
-function kernel(op, args) {
-  return new Promise((resolve) => {
-    const id = nextId++;
-    pending.set(id, { resolve });
-    worker.postMessage({ id, op, args });
-  });
-}
-
-// ---------------- recent files ----------------
-const recentFile = () => path.join(app.getPath('userData'), 'recent.json');
-function getRecent() { try { return JSON.parse(fs.readFileSync(recentFile(), 'utf8')).filter((p) => fs.existsSync(p)); } catch { return []; } }
-function addRecent(p) {
-  if (!/\.(lithprt|lithasm|lithpln|ekprt|ekasm|ekpln)$/i.test(p)) return;
-  const list = [p, ...getRecent().filter((x) => x !== p)].slice(0, 12);
-  try { fs.writeFileSync(recentFile(), JSON.stringify(list)); } catch { /* ignore */ }
-  app.addRecentDocument?.(p);
-}
 
 // ---------------- windows ----------------
 const windows = new Set();
@@ -183,116 +96,6 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(tpl));
 }
 
-// ---------------- DWG via ODA File Converter ----------------
-function findODA() {
-  const candidates = [];
-  const roots = process.platform === 'win32'
-    ? [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], 'C:\\Program Files', 'C:\\Program Files (x86)'].filter(Boolean).map((r) => path.join(r, 'ODA'))
-    : ['/usr/bin', '/usr/local/bin', '/opt/ODAFileConverter'];
-  for (const r of roots) {
-    try {
-      if (process.platform !== 'win32') { const p = path.join(r, 'ODAFileConverter'); if (fs.existsSync(p)) candidates.push(p); continue; }
-      for (const d of fs.readdirSync(r)) {
-        const p = path.join(r, d, 'ODAFileConverter.exe');
-        if (fs.existsSync(p)) candidates.push(p);
-      }
-    } catch { /* not installed */ }
-  }
-  return candidates.sort().pop() || null;
-}
-function runODA(inDir, outDir, version, type) {
-  const exe = findODA();
-  if (!exe) return Promise.reject(new Error('ODA File Converter not found'));
-  return new Promise((resolve, reject) => {
-    execFile(exe, [inDir, outDir, version, type, '0', '1', '*.*'], { timeout: 120000, windowsHide: true }, (err) => (err ? reject(err) : resolve()));
-  });
-}
-async function dwgToDxf(file) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'monolith-'));
-  const inDir = path.join(tmp, 'in'), outDir = path.join(tmp, 'out');
-  fs.mkdirSync(inDir); fs.mkdirSync(outDir);
-  fs.copyFileSync(file, path.join(inDir, path.basename(file)));
-  await runODA(inDir, outDir, 'ACAD2018', 'DXF');
-  const out = fs.readdirSync(outDir).find((f) => f.toLowerCase().endsWith('.dxf'));
-  if (!out) throw new Error('Conversion produced no DXF');
-  const text = fs.readFileSync(path.join(outDir, out), 'latin1');
-  fs.rmSync(tmp, { recursive: true, force: true });
-  return text;
-}
-async function dxfToDwg(text, outPath) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'monolith-'));
-  const inDir = path.join(tmp, 'in'), outDir = path.join(tmp, 'out');
-  fs.mkdirSync(inDir); fs.mkdirSync(outDir);
-  const base = path.basename(outPath).replace(/\.dwg$/i, '');
-  fs.writeFileSync(path.join(inDir, base + '.dxf'), text, 'latin1');
-  await runODA(inDir, outDir, 'ACAD2018', 'DWG');
-  const out = fs.readdirSync(outDir).find((f) => f.toLowerCase().endsWith('.dwg'));
-  if (!out) throw new Error('Conversion produced no DWG');
-  fs.copyFileSync(path.join(outDir, out), outPath);
-  fs.rmSync(tmp, { recursive: true, force: true });
-}
-
-// ---------------- installed fonts ----------------
-function fontDirs() {
-  if (process.platform === 'win32') {
-    const dirs = [path.join(process.env.WINDIR || 'C:\\Windows', 'Fonts')];
-    if (process.env.LOCALAPPDATA) dirs.push(path.join(process.env.LOCALAPPDATA, 'Microsoft', 'Windows', 'Fonts'));
-    return dirs;
-  }
-  if (process.platform === 'darwin') return ['/Library/Fonts', '/System/Library/Fonts', path.join(os.homedir(), 'Library/Fonts')];
-  return ['/usr/share/fonts', path.join(os.homedir(), '.fonts')];
-}
-// Read the full font name (nameID 4) from a TrueType/OpenType 'name' table.
-function fontName(file) {
-  const fd = fs.openSync(file, 'r');
-  try {
-    const head = Buffer.alloc(12); fs.readSync(fd, head, 0, 12, 0);
-    const numTables = head.readUInt16BE(4);
-    const dir = Buffer.alloc(numTables * 16); fs.readSync(fd, dir, 0, dir.length, 12);
-    for (let i = 0; i < numTables; i++) {
-      if (dir.toString('latin1', i * 16, i * 16 + 4) !== 'name') continue;
-      const off = dir.readUInt32BE(i * 16 + 8), len = dir.readUInt32BE(i * 16 + 12);
-      const t = Buffer.alloc(Math.min(len, 65536)); fs.readSync(fd, t, 0, t.length, off);
-      const count = t.readUInt16BE(2), strOff = t.readUInt16BE(4);
-      let best = null;
-      for (let k = 0; k < count; k++) {
-        const r = 6 + k * 12;
-        const plat = t.readUInt16BE(r), lang = t.readUInt16BE(r + 4), nameId = t.readUInt16BE(r + 6), l = t.readUInt16BE(r + 8), o = t.readUInt16BE(r + 10);
-        if (nameId !== 4) continue;
-        const raw = t.subarray(strOff + o, strOff + o + l);
-        if (plat === 3) {
-          const sw = Buffer.from(raw); sw.swap16();
-          const str = sw.toString('utf16le');
-          if (lang === 0x409) return str;
-          best = best || str;
-        } else if (plat === 1 && !best) best = raw.toString('latin1');
-      }
-      return best;
-    }
-    return null;
-  } finally { fs.closeSync(fd); }
-}
-let fontList = null;
-function listFonts() {
-  if (fontList) return fontList;
-  const out = [];
-  const walk = (dir, depth = 0) => {
-    let ents = [];
-    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of ents) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory() && depth < 3) walk(p, depth + 1);
-      else if (/\.(ttf|otf)$/i.test(e.name)) {
-        try { const n = fontName(p); if (n) out.push({ name: n, path: p }); } catch { /* unreadable font */ }
-      }
-    }
-  };
-  fontDirs().forEach((d) => walk(d));
-  const seen = new Set();
-  fontList = out.filter((f) => !seen.has(f.name) && seen.add(f.name)).sort((a, b) => a.name.localeCompare(b.name));
-  return fontList;
-}
-
 // ---------------- IPC ----------------
 function readDoc(p) {
   const ext = path.extname(p).toLowerCase();
@@ -340,6 +143,10 @@ function setupIPC() {
   ipcMain.on('win:dirty', (e, d) => { BrowserWindow.fromWebContents(e.sender)?.setDocumentEdited?.(!!d); });
   ipcMain.on('win:confirmClose', (e) => { const w = BrowserWindow.fromWebContents(e.sender); if (w) { w.forceClose = true; w.close(); } });
   ipcMain.handle('recent', () => getRecent());
+  ipcMain.handle('projects:list', () => listProjects());
+  ipcMain.handle('projects:create', (_e, name) => { try { return { dir: createProject(name) }; } catch (e) { return { error: e.message }; } });
+  ipcMain.handle('projects:open-folder', (_e, dir) => openFolder(dir));
+  ipcMain.handle('projects:root', () => projectsRoot());
   ipcMain.handle('fonts:list', () => listFonts());
   ipcMain.handle('fonts:read', (_e, p) => {
     if (!listFonts().some((f) => f.path === p)) throw new Error('Unknown font');
@@ -377,7 +184,7 @@ else {
     const kind = process.env.MONOLITH_KIND;
     createWindow(f ? { open: f } : kind ? { kind } : {});
   });
-  app.on('window-all-closed', () => { worker?.terminate(); pcWorker?.terminate(); app.quit(); });
+  app.on('window-all-closed', () => { stopWorkers(); app.quit(); });
 }
 
 module.exports = { kernel };

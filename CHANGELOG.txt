@@ -1,3 +1,24 @@
+0.1.36 (2026-10-12)
+- Projects on the Home screen: every folder in "CAD Program\Projects" is a project, shown as a card with a picture and its name. The picture is the main assembly, or a subassembly when there is no main assembly, or a part when there are no assemblies.
+- Click a project to see its files (main assembly, subassemblies, parts, plans) with pictures; "Open main assembly", "Show folder", and New Part/Assembly/Plan straight into the project folder.
+- "+ New project" creates the project folder. The selected project is remembered.
+- Recent files moved to a side column on the Home screen.
+- Subassemblies: an assembly can now be inserted into another assembly (Insert Component accepts .lithasm). It moves and mates as one piece; STEP/IGES export includes all its parts.
+- Saving a part, assembly or plan stores a small picture of the model in the file (used on the Home screen).
+
+0.1.35 (2026-10-12)
+- Internal tidy-up: program code split into smaller modules per area (file management, program settings, part commands, plan commands, geometry kernel parts, kernel workers). No visible changes.
+
+0.1.34 (2026-10-12)
+- Old .ekprt/.ekasm/.ekpln files: opening one now opens the .lith version next to it when that exists; otherwise Save writes the .lith file directly (no more Save As question).
+- Assemblies whose parts still point to old .ekprt files automatically use the .lithprt saved next to them (with the stored shape, so they load fast). Save the assembly once to keep this.
+
+0.1.33 (2026-10-12)
+- Faster assemblies: when you save a part, its finished 3D shape is now stored in the file. Assemblies show such parts right away instead of rebuilding them (parts are only rebuilt when they changed since saving).
+- Parts that do need a rebuild are processed in parallel on several processor cores when an assembly has many of them.
+- Status bar shows "Loading parts x/y" while an assembly opens.
+- Tip: open and save your existing parts once to give them the stored shape.
+
 0.1.32 (2026-10-12)
 - Program renamed to MonoLith everywhere: MonoLith.exe, MonoLith folder, window/menus/dialogs.
 - New file extensions: .lithprt (part), .lithasm (assembly), .lithpln (plan).

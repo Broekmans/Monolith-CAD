@@ -1,39 +1,13 @@
 // Geometry kernel built on OpenCascade (opencascade.js / WebAssembly).
 // Rebuilds parametric part features into a B-rep body, tessellates it for
-// display, and handles STEP / IGES exchange.
+// display (mesh.mjs) and handles STEP / IGES exchange (exchange.mjs). Shared helpers: core.mjs.
 
 import { sketchCurves, findRegions, arcSweep } from '../shared/profile.mjs';
-
-let oc = null;
-const PR = () => new oc.Message_ProgressRange_1();
-
-export const __oc = () => oc;
-export async function initKernel(initFn) {
-  oc = await initFn();
-  return true;
-}
-
-// ---------- small vector helpers ----------
-const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
-const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-const len = (a) => Math.hypot(a[0], a[1], a[2]);
-const norm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
-
-export function planeFrame(pl) {
-  const n = norm(pl.normal);
-  const x = norm(pl.xDir);
-  const y = cross(n, x);
-  return { o: pl.origin, n, x, y };
-}
-const to3 = (fr, p) => add(fr.o, add(mul(fr.x, p[0]), mul(fr.y, p[1])));
-
-const P = (p) => new oc.gp_Pnt_3(p[0], p[1], p[2]);
-const V = (v) => new oc.gp_Vec_4(v[0], v[1], v[2]);
-const Dir = (v) => new oc.gp_Dir_4(v[0], v[1], v[2]);
-const ptArr = (p) => [p.X(), p.Y(), p.Z()];
+import { oc, PR, add, sub, mul, dot, len, norm, planeFrame, to3, P, V, Dir, ptArr, checkValid, unify, transformed, bbox, diag, listEdges, planeOfFace, listFaces } from './core.mjs';
+import { readStepText } from './exchange.mjs';
+export * from './core.mjs';
+export * from './mesh.mjs';
+export * from './exchange.mjs';
 
 // ---------- profile -> OCC faces ----------
 function edgeFromCurve(fr, s) {
@@ -257,107 +231,6 @@ function boolCommon(a, b) {
   if (!op.IsDone()) throw new Error('Boolean intersect failed');
   return unify(op.Shape());
 }
-function checkValid(s, what) {
-  const an = new oc.BRepCheck_Analyzer(s, true, false);
-  if (!an.IsValid_2()) throw new Error(`${what} produced invalid geometry - adjust its parameters`);
-  return s;
-}
-function unify(s) {
-  if (globalThis.__noUnify) return s;
-  try {
-    const u = new oc.ShapeUpgrade_UnifySameDomain_2(s, true, true, false);
-    u.Build();
-    return u.Shape();
-  } catch { return s; }
-}
-function transformed(shape, trsf) {
-  return new oc.BRepBuilderAPI_Transform_2(shape, trsf, true).Shape();
-}
-
-function bbox(shape) {
-  const b = new oc.Bnd_Box_1();
-  oc.BRepBndLib.Add(shape, b, false);
-  if (b.IsVoid()) return null;
-  const mn = b.CornerMin(), mx = b.CornerMax();
-  return { min: ptArr(mn), max: ptArr(mx) };
-}
-const diag = (bb) => (bb ? len(sub(bb.max, bb.min)) : 100);
-
-// Sketch plane for a planar face: origin is the part origin projected onto
-// the face, X follows the matching standard plane (SolidWorks convention).
-function facePlane(n, c) {
-  const d = dot(c, n);
-  const origin = mul(n, d);
-  let xd;
-  const ax = [Math.abs(n[0]), Math.abs(n[1]), Math.abs(n[2])];
-  if (ax[1] > 0.999) xd = [1, 0, 0];
-  else if (ax[2] > 0.999) xd = [Math.sign(n[2]), 0, 0];
-  else if (ax[0] > 0.999) xd = [0, 0, -Math.sign(n[0])];
-  else {
-    xd = sub([1, 0, 0], mul(n, n[0]));
-    if (len(xd) < 1e-6) xd = sub([0, 0, -1], mul(n, -n[2]));
-  }
-  return { origin, normal: n, xDir: norm(xd) };
-}
-
-// ---------- topology listings (with stable-ish references) ----------
-function listEdges(shape) {
-  const map = new oc.TopTools_IndexedMapOfShape_1();
-  oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, map);
-  const out = [];
-  for (let i = 1; i <= map.Extent(); i++) {
-    const e = oc.TopoDS.Edge_1(map.FindKey(i));
-    let ad;
-    try { ad = new oc.BRepAdaptor_Curve_2(e); } catch { continue; }
-    const f = ad.FirstParameter(), l = ad.LastParameter();
-    const mid = ptArr(ad.Value((f + l) / 2));
-    const t = ad.GetType();
-    const type = t === oc.GeomAbs_CurveType.GeomAbs_Line ? 'line' : t === oc.GeomAbs_CurveType.GeomAbs_Circle ? 'circle' : 'curve';
-    out.push({ edge: e, mid, type, adaptor: ad, f, l });
-  }
-  return out;
-}
-
-function planeOfFace(face) {
-  const ad = new oc.BRepAdaptor_Surface_2(face, true);
-  if (ad.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane) return null;
-  let n = ptArr(ad.Plane().Position().Direction());
-  if (face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED) n = mul(n, -1);
-  const props = new oc.GProp_GProps_1();
-  oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
-  return facePlane(n, ptArr(props.CentreOfMass()));
-}
-
-function listFaces(shape) {
-  const map = new oc.TopTools_IndexedMapOfShape_1();
-  oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE, map);
-  const out = [];
-  for (let i = 1; i <= map.Extent(); i++) {
-    const face = oc.TopoDS.Face_1(map.FindKey(i));
-    const props = new oc.GProp_GProps_1();
-    oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
-    const c = ptArr(props.CentreOfMass());
-    const area = props.Mass();
-    const ad = new oc.BRepAdaptor_Surface_2(face, true);
-    let plane = null, type = 'surface', axis, r;
-    const st = ad.GetType();
-    if (st === oc.GeomAbs_SurfaceType.GeomAbs_Plane) {
-      type = 'plane';
-      const ax = ad.Plane().Position();
-      let n = ptArr(ax.Direction());
-      const x = ptArr(ax.XDirection());
-      if (face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED) n = mul(n, -1);
-      void x;
-      plane = facePlane(n, c);
-    } else if (st === oc.GeomAbs_SurfaceType.GeomAbs_Cylinder) {
-      type = 'cylinder';
-      try { const cy = ad.Cylinder(); const ax = cy.Axis(); axis = { p: ptArr(ax.Location()), d: ptArr(ax.Direction()) }; r = cy.Radius(); } catch { /* no axis */ }
-    }
-    out.push({ face, c, area, type, plane, axis, r });
-  }
-  return out;
-}
-
 // Topology references are stored as geometric signatures (midpoint/centroid,
 // direction, and position relative to the body's bounding box) and matched
 // to the rebuilt shape, so they survive upstream dimension changes.
@@ -493,19 +366,6 @@ function applyOp(body, tool, op) {
     return boolCommon(body, tool);
   }
   return body ? boolFuse(body, tool) : tool;
-}
-
-function readStepText(text, fmt = 'step') {
-  const path = `/in_${Date.now()}.${fmt === 'iges' ? 'igs' : 'stp'}`;
-  oc.FS.writeFile(path, text);
-  const reader = fmt === 'iges' ? new oc.IGESControl_Reader_1() : new oc.STEPControl_Reader_1();
-  const st = reader.ReadFile(path);
-  if (st !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) throw new Error(`Could not read ${fmt.toUpperCase()} file`);
-  reader.TransferRoots(PR());
-  const shape = reader.OneShape();
-  oc.FS.unlink(path);
-  if (shape.IsNull()) throw new Error('File contains no shapes');
-  return shape;
 }
 
 // ---------- regeneration with prefix cache ----------
@@ -660,142 +520,6 @@ export function regenerate(features, opts = {}) {
     }
   }
   return { body, status, stages };
-}
-
-// ---------- face -> feature ownership (SolidWorks-style double-click / tree hover) ----------
-// A face belongs to the earliest feature whose result already had a face on the same surface.
-const sigCache = new WeakMap();
-function surfSig(fi) {
-  const r = (v, k = 3) => (Math.round(v * 10 ** k) / 10 ** k + 0).toFixed(k);
-  if (fi.type === 'plane' && fi.plane) { const n = fi.plane.normal; return `p${r(n[0], 4)},${r(n[1], 4)},${r(n[2], 4)}|${r(n[0] * fi.c[0] + n[1] * fi.c[1] + n[2] * fi.c[2])}`; }
-  if (fi.type === 'cylinder' && fi.axis) {
-    let d = fi.axis.d; const k = Math.abs(d[0]) > 1e-6 ? 0 : Math.abs(d[1]) > 1e-6 ? 1 : 2; if (d[k] < 0) d = mul(d, -1);
-    const p = fi.axis.p, t = p[0] * d[0] + p[1] * d[1] + p[2] * d[2];
-    const q = [p[0] - t * d[0], p[1] - t * d[1], p[2] - t * d[2]];
-    return `c${r(fi.r)}|${r(d[0], 4)},${r(d[1], 4)},${r(d[2], 4)}|${r(q[0])},${r(q[1])},${r(q[2])}`;
-  }
-  return `s${fi.type}|${r(fi.c[0])},${r(fi.c[1])},${r(fi.c[2])}|${r(fi.area, 2)}`;
-}
-function sigsOf(body) {
-  let s = sigCache.get(body);
-  if (!s) { s = new Set(listFaces(body).map(surfSig)); sigCache.set(body, s); }
-  return s;
-}
-export function faceOwners(stages, body) {
-  if (!body || !stages?.length) return [];
-  const sets = stages.map((st) => sigsOf(st.body));
-  return listFaces(body).map((fi) => { const sg = surfSig(fi); const i = sets.findIndex((S) => S.has(sg)); return i >= 0 ? stages[i].id : stages[stages.length - 1].id; });
-}
-
-// ---------- tessellation ----------
-export function tessellate(shape, quality = 1) {
-  if (!shape) return { positions: new Float32Array(0), indices: new Uint32Array(0), faces: [], edges: [] };
-  const bb = bbox(shape);
-  const lin = Math.max(0.005, (diag(bb) * 0.0008) / quality);
-  new oc.BRepMesh_IncrementalMesh_2(shape, lin, false, 0.35, false);
-  const positions = [], normals = [], indices = [];
-  const faces = [];
-  const faceList = listFaces(shape);
-  faceList.forEach((fi, fid) => {
-    const loc = new oc.TopLoc_Location_1();
-    const hTri = oc.BRep_Tool.Triangulation(fi.face, loc, 0);
-    if (hTri.IsNull()) return;
-    const tri = hTri.get();
-    const trsf = loc.Transformation();
-    const base = positions.length / 3;
-    const nn = tri.NbNodes();
-    for (let i = 1; i <= nn; i++) {
-      const p = tri.Node(i).Transformed(trsf);
-      positions.push(p.X(), p.Y(), p.Z());
-    }
-    const reversed = fi.face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED;
-    const start = indices.length;
-    const nt = tri.NbTriangles();
-    for (let i = 1; i <= nt; i++) {
-      const t = tri.Triangle(i);
-      let a = t.Value(1), b = t.Value(2), c = t.Value(3);
-      if (reversed) [b, c] = [c, b];
-      indices.push(base + a - 1, base + b - 1, base + c - 1);
-    }
-    faces.push({ id: fid, start, count: indices.length - start, c: fi.c, area: fi.area, type: fi.type, plane: fi.plane, ...(fi.axis ? { axis: fi.axis, r: fi.r } : {}) });
-  });
-  // seam edges (closed surfaces) are hidden like in SolidWorks
-  let seamOf = () => false;
-  try {
-    const anc = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
-    oc.TopExp.MapShapesAndUniqueAncestors(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_FACE, anc, false);
-    seamOf = (edge) => { try { const i = anc.FindIndex(edge); return i > 0 && anc.FindFromIndex(i).Size() === 1; } catch { return false; } };
-  } catch { /* keep all edges */ }
-  const edges = listEdges(shape).filter((e) => !seamOf(e.edge)).map((e, id) => {
-    const pts = [];
-    try {
-      const td = new oc.GCPnts_TangentialDeflection_2(e.adaptor, 0.1, lin, 2, 1e-9, 1e-7);
-      for (let i = 1; i <= td.NbPoints(); i++) pts.push(...ptArr(td.Value(i)));
-    } catch {
-      pts.push(...ptArr(e.adaptor.Value(e.f)), ...ptArr(e.adaptor.Value(e.l)));
-    }
-    let length = 0;
-    for (let i = 3; i < pts.length; i += 3) length += Math.hypot(pts[i] - pts[i - 3], pts[i + 1] - pts[i - 2], pts[i + 2] - pts[i - 1]);
-    return { id, mid: e.mid, type: e.type, pts: new Float32Array(pts), length };
-  });
-  return { positions: new Float32Array(positions), indices: new Uint32Array(indices), faces, edges, bbox: bb };
-}
-
-export function massProps(shape) {
-  if (!shape) return null;
-  const vp = new oc.GProp_GProps_1();
-  oc.BRepGProp.VolumeProperties_1(shape, vp, true, false, false);
-  const sp = new oc.GProp_GProps_1();
-  oc.BRepGProp.SurfaceProperties_1(shape, sp, false, false);
-  return { volume: vp.Mass(), area: sp.Mass(), com: ptArr(vp.CentreOfMass()), bbox: bbox(shape) };
-}
-
-// ---------- exchange ----------
-export function writeStep(shape) {
-  if (!shape) throw new Error('Nothing to export');
-  const w = new oc.STEPControl_Writer_1();
-  const st = w.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true, PR());
-  if (st !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) throw new Error('STEP transfer failed');
-  const path = '/out.step';
-  w.Write(path);
-  const txt = oc.FS.readFile(path, { encoding: 'utf8' });
-  oc.FS.unlink(path);
-  return txt;
-}
-
-// assembly: each part body placed with a 4x4 column-major matrix, written as one compound
-export function assemblyShape(parts) {
-  const builder = new oc.BRep_Builder();
-  const comp = new oc.TopoDS_Compound();
-  builder.MakeCompound(comp);
-  let n = 0;
-  for (const { body, m } of parts) {
-    if (!body) continue;
-    const t = new oc.gp_Trsf_1();
-    t.SetValues(m[0], m[4], m[8], m[12], m[1], m[5], m[9], m[13], m[2], m[6], m[10], m[14]);
-    builder.Add(comp, new oc.BRepBuilderAPI_Transform_2(body, t, true).Shape());
-    n++;
-  }
-  if (!n) throw new Error('Nothing to export');
-  return comp;
-}
-
-export function writeIges(shape) {
-  if (!shape) throw new Error('Nothing to export');
-  const w = new oc.IGESControl_Writer_2('MM', 1); // 1 = B-rep (solid) mode
-  w.AddShape(shape, PR());
-  w.ComputeModel();
-  const path = '/out.igs';
-  w.Write_2(path, false);
-  const txt = oc.FS.readFile(path, { encoding: 'utf8' });
-  oc.FS.unlink(path);
-  return txt;
-}
-
-// Convert an IGES/STEP file into STEP text so it can be stored in a part.
-export function importToStep(text, format) {
-  const shape = readStepText(text, format);
-  return { step: format === 'step' ? text : writeStep(shape), mesh: tessellate(shape) };
 }
 
 // ---------- plan (architecture) model ----------

@@ -100,7 +100,8 @@ export class AsmTree {
     if (!comps.length) { toast('Nothing to export'); return; }
     this.app.setBusy(true);
     try {
-      const parts = comps.map((c) => ({ features: c._part.data.features, upTo: c._part.data.rollback ?? undefined, m: M.poseMatrix(c) }));
+      // subassemblies are flattened into their parts
+      const parts = comps.flatMap((c) => (c._part.flat || []).map((fp) => ({ features: fp.features, upTo: fp.upTo, m: new THREE.Matrix4().fromArray(M.poseMatrix(c)).multiply(new THREE.Matrix4().fromArray(fp.m)).toArray() })));
       const text = await api.kernel('exportAssembly', { parts, format: fmtName });
       const ext = fmtName === 'iges' ? 'igs' : 'step';
       const path = await api.saveFile({ defaultPath: `${this.doc.name}.${ext}`, filters: [{ name: fmtName.toUpperCase(), extensions: fmtName === 'iges' ? ['igs', 'iges'] : ['step', 'stp'] }], text });

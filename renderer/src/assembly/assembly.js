@@ -2,6 +2,7 @@
 // inserted as components, positioned with mates (coincident, concentric,
 // distance, angle, parallel, perpendicular, tangent, lock) solved by
 // shared/mates.mjs, and can be dragged within their remaining freedom.
+import { cachedMesh } from '../meshcache.js';
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
@@ -30,28 +31,91 @@ export const IDENT = [0, 0, 0, 1];
 export const partCache = new Map(); // path -> Promise<{data, mesh, geom, err}>
 export const partVersion = new Map(); // path -> save counter
 export function partSaved(path) { partVersion.set(path, (partVersion.get(path) || 0) + 1); partCache.delete(path); }
-export function loadPart(path, text = null) {
+const IDENT_M = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+// three.js geometry + lookup tables for a kernel mesh
+function meshGeometry(mesh) {
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(mesh.positions), 3));
+  geom.setIndex(new THREE.BufferAttribute(new Uint32Array(mesh.indices), 1));
+  geom.computeVertexNormals();
+  geom.computeBoundingBox();
+  const faceOfTri = new Int32Array(mesh.indices.length / 3);
+  for (const fc of mesh.faces) for (let t = fc.start / 3; t < (fc.start + fc.count) / 3; t++) faceOfTri[t] = fc.id;
+  const segs = [];
+  for (const e of mesh.edges) { const p = e.pts; for (let i = 3; i < p.length; i += 3) segs.push(p[i - 3], p[i - 2], p[i - 1], p[i], p[i + 1], p[i + 2]); }
+  const egeom = new THREE.BufferGeometry();
+  egeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs), 3));
+  return { geom, egeom, faceOfTri };
+}
+
+// ---------- subassemblies: an assembly inserted into another assembly ----------
+// Its components (at their saved positions) are merged into one mesh, so it behaves like one rigid part:
+// it can be mated and dragged as a whole. Face/edge ids are offset per component to stay unique.
+const ID_STEP = 100000;
+const PT_KEYS = new Set(['c', 'origin', 'p', 'mid']), DIR_KEYS = new Set(['normal', 'xDir', 'd', 'n']);
+function xfObj(o, m4, n3) {
+  if (Array.isArray(o) || !o || typeof o !== 'object') return o;
+  const r = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (Array.isArray(v) && v.length === 3 && typeof v[0] === 'number' && (PT_KEYS.has(k) || DIR_KEYS.has(k))) {
+      const t = new THREE.Vector3(...v);
+      if (PT_KEYS.has(k)) t.applyMatrix4(m4); else t.applyMatrix3(n3).normalize();
+      r[k] = [t.x, t.y, t.z];
+    } else r[k] = v && typeof v === "object" && !Array.isArray(v) && !ArrayBuffer.isView(v) ? xfObj(v, m4, n3) : v;
+  }
+  return r;
+}
+async function resolveCompPath(asmPath, c) {
+  const cands = [];
+  const lith = (p) => p.replace(/\.ekprt$/i, '.lithprt').replace(/\.ekasm$/i, '.lithasm');
+  cands.push(lith(c.path), c.path);
+  const dir = asmPath?.replace(/[\\/][^\\/]*$/, '');
+  if (dir) { const b = c.path.split(/[\\/]/).pop(); const sep = asmPath.includes('\\') ? '\\' : '/'; cands.push(lith(dir + sep + b), dir + sep + b); }
+  for (const p of cands) if (await api.fileExists(p).catch(() => false)) return p;
+  return c.path;
+}
+async function loadSubassembly(path, data, stack) {
+  const st = [...stack, (path || '').toLowerCase()];
+  const pos = [], idx = [], faces = [], edges = [], flat = [];
+  let k = 0;
+  for (const c of data.components || []) {
+    if (c.hidden) continue;
+    const cp = c.lib ? compKey(c) : await resolveCompPath(path, c);
+    const sub = await loadPart(cp, c.lib ? libText(c.lib) : null, st);
+    k++;
+    if (sub.err) continue;
+    const pm = M.poseMatrix(c), m4 = new THREE.Matrix4().fromArray(pm), n3 = new THREE.Matrix3().getNormalMatrix(m4);
+    const mesh = sub.mesh, v0 = pos.length / 3, i0 = idx.length, off = k * ID_STEP, t = new THREE.Vector3();
+    for (let i = 0; i < mesh.positions.length; i += 3) { t.set(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]).applyMatrix4(m4); pos.push(t.x, t.y, t.z); }
+    for (let i = 0; i < mesh.indices.length; i++) idx.push(mesh.indices[i] + v0);
+    for (const f of mesh.faces) faces.push({ ...xfObj(f, m4, n3), id: f.id + off, start: f.start + i0, comp: c.name });
+    for (const e of mesh.edges) {
+      const p = new Float32Array(e.pts.length);
+      for (let i = 0; i < p.length; i += 3) { t.set(e.pts[i], e.pts[i + 1], e.pts[i + 2]).applyMatrix4(m4); p[i] = t.x; p[i + 1] = t.y; p[i + 2] = t.z; }
+      edges.push({ ...xfObj(e, m4, n3), id: e.id + off, pts: p });
+    }
+    for (const fp of sub.flat || []) flat.push({ ...fp, m: new THREE.Matrix4().fromArray(pm).multiply(new THREE.Matrix4().fromArray(fp.m)).toArray() });
+  }
+  if (!pos.length) throw new Error('Subassembly has no parts');
+  const mesh = { positions: new Float32Array(pos), indices: new Uint32Array(idx), faces, edges };
+  const r = { data, mesh, ...meshGeometry(mesh), flat, isAssembly: true, ver: partVersion.get(path) || 0 };
+  const bb = r.geom.boundingBox; mesh.bbox = { min: bb.min.toArray(), max: bb.max.toArray() };
+  return r;
+}
+
+export function loadPart(path, text = null, stack = []) {
+  if (path && stack.includes(path.toLowerCase())) return Promise.resolve({ err: 'Assembly cannot contain itself' });
   if (partCache.has(path)) return partCache.get(path);
   const pr = (async () => {
     try {
       const f = text != null ? { text } : await api.readFile(path);
       const data = JSON.parse(f.text);
+      if (data.kind === 'assembly') return await loadSubassembly(path, data, stack);
       if (data.kind !== 'part') throw new Error('Not a part document');
-      const res = await api.kernel('regen', { features: data.features, upTo: data.rollback ?? undefined });
-      const mesh = res.mesh;
+      // use the finished mesh saved in the file when it is up to date; otherwise rebuild
+      const mesh = cachedMesh(data) || (await api.kernel('regen', { features: data.features, upTo: data.rollback ?? undefined, parallel: true })).mesh;
       if (!mesh?.positions?.length) throw new Error('Part has no solid body');
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(mesh.positions), 3));
-      geom.setIndex(new THREE.BufferAttribute(new Uint32Array(mesh.indices), 1));
-      geom.computeVertexNormals();
-      geom.computeBoundingBox();
-      const faceOfTri = new Int32Array(mesh.indices.length / 3);
-      for (const fc of mesh.faces) for (let t = fc.start / 3; t < (fc.start + fc.count) / 3; t++) faceOfTri[t] = fc.id;
-      const segs = [];
-      for (const e of mesh.edges) { const p = e.pts; for (let i = 3; i < p.length; i += 3) segs.push(p[i - 3], p[i - 2], p[i - 1], p[i], p[i + 1], p[i + 2]); }
-      const egeom = new THREE.BufferGeometry();
-      egeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs), 3));
-      return { data, mesh, geom, egeom, faceOfTri, ver: partVersion.get(path) || 0 };
+      return { data, mesh, ...meshGeometry(mesh), flat: [{ features: data.features, upTo: data.rollback ?? undefined, m: IDENT_M }], ver: partVersion.get(path) || 0 };
     } catch (e) {
       return { err: e.message || String(e) };
     }
@@ -131,7 +195,7 @@ export class AssemblyDoc {
     const C = (id, label, ic, run, extra = {}) => ({ id, label, icon: ic, run, ...extra });
     const idle = () => !this.app.pm.open;
     const groups = [
-      [C('insert', 'Insert Component', 'insertComp', () => this.cmdInsert(), { enabled: idle, tip: 'Insert a saved part (.lithprt) into the assembly' }),
+      [C('insert', 'Insert Component', 'insertComp', () => this.cmdInsert(), { enabled: idle, tip: 'Insert a saved part (.lithprt) or assembly (.lithasm, as subassembly)' }),
         C('toolbox', 'Toolbox', 'bolt', () => this.cmdToolbox(), { enabled: idle, active: () => this.pmKind === 'toolbox', tip: 'Insert standard DIN bolts, screws, nuts and washers' }),
         C('mate', 'Mate', 'mate', () => this.cmdMate(), { enabled: idle, active: () => this.pmKind === 'mate', tip: 'Mate two faces or edges of different components' })],
       [C('fixc', 'Fix / Float', 'fix', () => this.toggleFixSelected(), { enabled: idle, tip: 'Fix the selected component in place, or let it float' }),
@@ -172,7 +236,11 @@ export class AssemblyDoc {
     if (fromDisk) for (const c of this.doc.components) partCache.delete(compKey(c));
     this.app.setBusy(true);
     try {
-      await Promise.all(this.doc.components.map((c) => this.loadComp(c)));
+      const n = this.doc.components.length; let done = 0;
+      const tick = () => { if (n > 1) this.app.setStatus(`Loading parts ${done}/${n}...`); };
+      tick();
+      await Promise.all(this.doc.components.map((c) => this.loadComp(c).finally(() => { done++; tick(); })));
+      if (n > 1 && !fromDisk) this.app.setStatus('Ready');
       this.rematchAll();
       this.solve();
       if (fromDisk) this.app.setStatus('Rebuilt: parts reloaded and mates solved');
@@ -180,7 +248,13 @@ export class AssemblyDoc {
   }
   async loadComp(c, text = null) {
     if (c.lib) text = libText(c.lib);
-    let part = await loadPart(compKey(c), text);
+    // component still points at an old .ekprt: use the .lithprt saved next to it (has the stored shape)
+    if (!text && /\.ekprt$/i.test(c.path || '')) {
+      const np = c.path.replace(/\.ekprt$/i, '.lithprt');
+      if (await api.fileExists(np).catch(() => false)) { c.path = np; this.app.setDirty?.(true); }
+    }
+    const own = this.app.path ? [this.app.path.toLowerCase()] : [];
+    let part = await loadPart(compKey(c), text, own);
     if (part.err && !text) {
       // file moved together with the assembly: look next to it
       const dir = this.app.path?.replace(/[\\/][^\\/]*$/, '');
@@ -312,22 +386,22 @@ export class AssemblyDoc {
 
   // ======================= commands =======================
   async cmdInsert() {
-    const open = this.app.root.tabs.filter((t) => t.doc?.doc.kind === 'part');
+    const open = this.app.root.tabs.filter((t) => t !== this.app && (t.doc?.doc.kind === 'part' || t.doc?.doc.kind === 'assembly'));
     let choice = 'browse';
     if (open.length) {
       choice = await dialog({
         title: 'Insert Component',
-        body: h('div', {}, h('p', {}, 'Insert one of the open parts, or browse for a part file.'), open.some((t) => !t.path) ? h('p', { class: 'muted' }, 'Unsaved parts must be saved first.') : null),
+        body: h('div', {}, h('p', {}, 'Insert one of the open parts or assemblies (as subassembly), or browse for a file.'), open.some((t) => !t.path) ? h('p', { class: 'muted' }, 'Unsaved documents must be saved first.') : null),
         buttons: [{ label: 'Cancel', value: null }, ...open.filter((t) => t.path).map((t) => ({ label: t.path.split(/[\\/]/).pop(), value: t })), { label: 'Browse…', value: 'browse', primary: true }],
       });
       if (!choice) return;
     }
     let path, text = null;
     if (choice === 'browse') {
-      const f = await api.openFile({ filters: [{ name: 'MonoLith Part', extensions: ['lithprt', 'ekprt'] }] });
+      const f = await api.openFile({ filters: [{ name: 'MonoLith Part or Assembly', extensions: ['lithprt', 'lithasm', 'ekprt', 'ekasm'] }] });
       if (!f) return;
       path = f.path; text = f.text;
-    } else { path = choice.path; text = JSON.stringify(choice.doc.doc); partCache.delete(path); }
+    } else { path = choice.path; text = JSON.stringify(choice.doc.toJSON ? choice.doc.toJSON() : choice.doc.doc); partCache.delete(path); }
     await this.insertComponent(path, text);
   }
   async insertComponent(path, text = null, lib = null) {
@@ -341,7 +415,7 @@ export class AssemblyDoc {
     try {
       const box = this.assemblyBox();
       Object.defineProperty(c, '_part', { value: null, writable: true, enumerable: false });
-      part = await loadPart(key, text);
+      part = await loadPart(key, text, this.app.path ? [this.app.path.toLowerCase()] : []);
       if (part.err) { toast(`Cannot insert ${base}: ${part.err}`, 'error'); return null; }
       if (!box.isEmpty()) {
         const pb = part.geom.boundingBox;

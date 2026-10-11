@@ -1,6 +1,7 @@
-// Application shell: layout, welcome screen, document lifecycle, file I/O,
-// menus and keyboard routing.
-import { h, CommandManager, PropertyManager, toast, dialog } from './ui.js';
+// Application shell: layout, tabs, welcome screen, menus and keyboard routing.
+// File management (open/save/import) -> app/files.js, program settings (theme, UI scale) -> app/settings.js.
+import { cacheKey, packMesh } from './meshcache.js';
+import { h, CommandManager, PropertyManager, toast, dialog, promptText } from './ui.js';
 import { icon } from './icons.js';
 import { api } from './api.js';
 import { initActionLog, askLogConsentOnce } from './actionlog.js';
@@ -8,51 +9,27 @@ import { initSolver } from './sketch/solver.js';
 import { setSketchTheme } from './sketch/sketcher.js';
 import { PartDoc, newPartDoc } from './part/part.js';
 import { PlanDoc, newPlanDoc } from './plan/plan.js';
-import { AssemblyDoc, newAssemblyDoc, partSaved } from './assembly/assembly.js';
-const EXT = { part: 'lithprt', plan: 'lithpln', assembly: 'lithasm' };
-const extOf = (k) => EXT[k] || 'lithprt';
+import { AssemblyDoc, newAssemblyDoc, partSaved, partCache } from './assembly/assembly.js';
 import { PC_EXTS, isPointCloud, askImportOptions } from './pointcloud.js';
+import { AppFiles } from './app/files.js';
+import { AppSettings } from './app/settings.js';
+export const EXT = { part: 'lithprt', plan: 'lithpln', assembly: 'lithasm' };
+export const extOf = (k) => EXT[k] || 'lithprt';
 
-const APP_NAME = 'MonoLith';
-const SLOTS = ['cmd', 'tree', 'props', 'pm', 'views', 'headsUp', 'corner', 'sketchStatus', 'toggles', 'right'];
+export const APP_NAME = 'MonoLith';
+export const SLOTS = ['cmd', 'tree', 'props', 'pm', 'views', 'headsUp', 'corner', 'sketchStatus', 'toggles', 'right'];
 
-class App {
+export class App {
   constructor() {
     this.doc = null;
     this.path = null;
     this.dirty = false;
     this.root = this;
+    try { this.currentProject = localStorage.getItem('monolith.project') || null; } catch { this.currentProject = null; }
     this.tabs = [];
     this.active = this;
     this.buildLayout();
     this.bindGlobal();
-  }
-
-  setTheme(dark, init) {
-    document.body.classList.toggle('dark', dark);
-    setSketchTheme(dark);
-    try { localStorage.setItem('monolith.theme', dark ? 'dark' : 'light'); } catch {}
-    window.dispatchEvent(new Event('monolith-theme'));
-    api.setDarkMenu(dark);
-    if (!init) { try { this.doc?.vp?.requestRender?.(); } catch {} }
-  }
-
-  setUiScale(f, save = true) {
-    f = Math.min(2, Math.max(0.6, Math.round(f * 20) / 20));
-    this.uiScale = f; api.setZoom(f);
-    if (save) { try { localStorage.setItem('monolith.uiScale', String(f)); } catch {} }
-  }
-  uiScaleDialog() {
-    const start = this.uiScale || 1;
-    const val = h('b', { style: 'min-width:48px;display:inline-block;text-align:right' }, Math.round(start * 100) + '%');
-    const sl = h('input', { type: 'range', min: '60', max: '200', step: '5', value: String(Math.round(start * 100)), style: 'flex:1' });
-    sl.addEventListener('input', () => { val.textContent = sl.value + '%'; });
-    sl.addEventListener('change', () => this.setUiScale(+sl.value / 100, false)); // live preview on release
-    dialog({ title: 'UI Scale', body: h('div', { style: 'min-width:340px' },
-      h('p', {}, 'Make buttons, text and panels bigger or smaller. The 3D view stays sharp.'),
-      h('div', { style: 'display:flex;align-items:center;gap:10px' }, h('span', {}, '60%'), sl, h('span', {}, '200%'), val)),
-      buttons: [{ label: 'Cancel', value: false }, { label: 'OK', value: true, primary: true }] })
-      .then((ok) => this.setUiScale(ok ? +sl.value / 100 : start, true));
   }
 
   buildLayout() {
@@ -138,6 +115,7 @@ class App {
     this.el.toggles.innerHTML = '';
     for (const t of list) this.el.toggles.appendChild(h('button', { class: 'tog' + (t.on ? ' on' : ''), title: t.key, onclick: t.run }, t.label));
   }
+  clearPartCacheForTest() { partCache.clear(); }
   setBusy(b) { document.getElementById('busy').classList.toggle('on', !!b); }
   setDirty(d) { this.dirty = d; this.updateTitle(); api.setDirty(this.root.tabs.some((t) => t.dirty)); }
   updateTitle() {
@@ -266,153 +244,77 @@ class App {
       mk(t, name + (t.dirty ? ' *' : ''), kind === 'plan' ? 'plan' : kind === 'assembly' ? 'assembly' : 'part');
     }
   }
-  async loadDoc(docData, path = null) {
-    const app = this.root;
-    if (path) { const ex = app.tabs.find((t) => t.path === path); if (ex) { app.activate(ex); return; } }
-    const t = app.newTab();
-    // old-format files (.ek*) open normally; the first Save asks where to store the new .lith* file
-    const legacy = path && /\.ek(prt|asm|pln)$/i.test(path);
-    t.path = legacy ? null : path;
-    t.suggestPath = legacy ? path.replace(/\.ek(prt|asm|pln)$/i, '.lith$1') : null;
-    t.dirty = false;
-    t.doc = docData.kind === 'plan' ? new PlanDoc(t, docData) : docData.kind === 'assembly' ? new AssemblyDoc(t, docData) : new PartDoc(t, docData);
-    document.body.dataset.kind = docData.kind;
-    t.showPanel('tree');
-    t.doc.init();
-    t.updateTitle();
-    t.renderLeftTabs();
-  }
   closeDoc() { this.root.closeTab(this); }
-
-  async newDoc(kind) {
-    const app = this.root;
-    app.docCounter ||= { part: 0, plan: 0, assembly: 0 };
-    const n = ++app.docCounter[kind];
-    await this.loadDoc(kind === 'plan' ? newPlanDoc(`Plan${n}`) : kind === 'assembly' ? newAssemblyDoc(`Assembly${n}`) : newPartDoc(`Part${n}`));
-  }
-  async newDialog() {
-    const pick = await dialog({
-      title: 'New Document',
-      body: h('div', { class: 'newdlg' },
-        h('div', { class: 'nd' }, h('span', { html: icon('part') }), h('b', {}, 'Part'), h('small', {}, 'Feature-based 3D part: sketches, extrudes, revolves, fillets…')),
-        h('div', { class: 'nd' }, h('span', { html: icon('plan') }), h('b', {}, 'Plan / Drawing'), h('small', {}, '2D drafting and architecture: walls, doors, windows, DXF/DWG')),
-        h('div', { class: 'nd' }, h('span', { html: icon('assembly') }), h('b', {}, 'Assembly'), h('small', {}, 'Insert parts and position them with mates'))),
-      buttons: [{ label: 'Cancel', value: null }, { label: 'Assembly', value: 'assembly' }, { label: 'Part', value: 'part' }, { label: 'Plan', value: 'plan', primary: true }],
-    });
-    if (pick) this.newDoc(pick);
-  }
-
-  async open(pathArg) {
-    const f = pathArg ? await api.readFile(pathArg) : await api.openFile({ filters: [{ name: 'MonoLith documents', extensions: ['lithprt', 'lithasm', 'lithpln', 'ekprt', 'ekasm', 'ekpln'] }, { name: 'CAD files', extensions: ['dxf', 'dwg', 'step', 'stp', 'igs', 'iges'] }, { name: 'Point clouds', extensions: PC_EXTS }, { name: 'All files', extensions: ['*'] }] });
-    if (!f) return;
-    const ext = f.path.split('.').pop().toLowerCase();
-    if (isPointCloud(f.path)) {
-      // a scan opened on its own starts a Plan (scan-to-plan); use Import to add it to a part
-      await this.loadDoc(newPlanDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
-      await this.importPointCloud(f.path);
-      return;
-    }
-    if (['dxf', 'dwg'].includes(ext)) {
-      await this.loadDoc(newPlanDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
-      await this.importPath(f);
-      return;
-    }
-    if (['step', 'stp', 'igs', 'iges'].includes(ext)) {
-      await this.loadDoc(newPartDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
-      await this.importPath(f);
-      return;
-    }
-    let data;
-    try { data = JSON.parse(f.text); } catch { toast('Not a valid MonoLith document', 'error'); return; }
-    await this.loadDoc(data, f.path);
-  }
-
-  async save(as = false) {
-    if (!this.doc) return false;
-    const kind = this.doc.doc.kind;
-    const ext = extOf(kind);
-    const text = JSON.stringify(this.doc.toJSON ? this.doc.toJSON() : this.doc.doc);
-    let path = this.path;
-    if (!path || as) {
-      path = await api.saveFile({ defaultPath: (!as && this.suggestPath) || `${this.doc.title}.${ext}`, filters: [{ name: { plan: 'MonoLith Plan', assembly: 'MonoLith Assembly' }[kind] || 'MonoLith Part', extensions: [ext] }], text });
-      if (!path) return false;
-    } else await api.writeFile(path, text);
-    this.path = path; this.suggestPath = null;
-    if (kind === 'part') partSaved(path);
-    this.setDirty(false);
-    toast(`Saved ${path.split(/[\\/]/).pop()}`, 'ok', 2000);
-    return true;
-  }
-
-  async importFile() {
-    if (!this.doc) return;
-    const filters = this.doc.doc.kind === 'plan'
-      ? [{ name: 'Drawings & point clouds', extensions: ['dxf', 'dwg', ...PC_EXTS] }]
-      : [{ name: 'CAD models, sketches & point clouds', extensions: ['step', 'stp', 'igs', 'iges', 'dxf', 'dwg', ...PC_EXTS] }];
-    const f = await api.openFile({ filters });
-    if (f) await this.importPath(f);
-  }
-  async importPointCloud(path) {
-    if (!this.doc) return;
-    if (!path) {
-      const f = await api.openFile({ filters: [{ name: 'Point clouds', extensions: PC_EXTS }], noRead: true });
-      if (!f) return;
-      path = f.path;
-    }
-    let rec;
-    try { rec = await askImportOptions(path); } catch (e) { toast('Cannot read point cloud: ' + e.message, 'error'); return; }
-    if (rec) await this.doc.addPointCloud(rec);
-  }
-  async importPath(f) {
-    if (isPointCloud(f.path)) { await this.importPointCloud(f.path); return; }
-    const name = f.path.split(/[\\/]/).pop();
-    const ext = name.split('.').pop().toLowerCase();
-    let text = f.text;
-    if (ext === 'dwg') {
-      const r = await api.dwgToDxf(f.path);
-      if (!r?.ok) { this.dwgHelp(r?.error); return; }
-      text = r.text;
-    }
-    if (ext === 'dxf' || ext === 'dwg') {
-      if (this.doc.doc.kind === 'plan') this.doc.importDxfText(text, name);
-      else this.doc.importDxf(text, name);
-      return;
-    }
-    if (this.doc.doc.kind !== 'part') { toast('STEP/IGES can be imported into a Part document'); return; }
-    await this.doc.importCAD(text, ext.startsWith('ig') ? 'iges' : 'step', name);
-  }
-
-  async dwgHelp(err) {
-    await dialog({
-      title: 'DWG conversion',
-      body: h('div', {}, h('p', {}, 'DWG files are converted through the free ODA File Converter, which was not found or failed on this computer.'),
-        err ? h('p', { class: 'muted' }, String(err)) : null,
-        h('p', {}, 'Install it from opendesign.com (ODA File Converter, free) and try again. MonoLith looks for it in C:\\Program Files\\ODA\\. DXF import/export works without it.')),
-      buttons: [{ label: 'Open download page', value: 'dl' }, { label: 'OK', primary: true }],
-    }).then((v) => { if (v === 'dl') api.openExternal('https://www.opendesign.com/guestfiles/oda_file_converter'); });
-  }
 
   // ---------- welcome ----------
   async showWelcome() {
     const w = this.el.welcome;
     w.style.display = 'block';
     w.innerHTML = '';
-    let recent = [];
+    let recent = [], pj = { projects: [], root: '' };
     try { recent = (await api.recent()) || []; } catch { /* ignore */ }
+    try { pj = (await api.projects()) || pj; } catch { /* ignore */ }
     const info = await api.info().catch(() => ({}));
     const logc = (await api.logCfg?.().catch(() => null)) || { enabled: true };
-    w.append(h('div', { class: 'wl' },
-      h('div', { class: 'wl-head' }, h('span', { class: 'wl-logo', html: icon('part') }), h('div', {}, h('h1', {}, APP_NAME), h('p', {}, 'Parametric CAD for engineering and architecture'))),
-      h('div', { class: 'wl-cards' },
-        h('button', { class: 'wl-card', onclick: () => this.newDoc('part') }, h('span', { class: 'big', html: icon('part') }), h('b', {}, 'New Part'), h('small', {}, 'Sketch on a plane, constrain with relations and dimensions, then extrude, revolve, fillet and pattern — with a full feature history.')),
-        h('button', { class: 'wl-card', onclick: () => this.newDoc('plan') }, h('span', { class: 'big', html: icon('plan') }), h('b', {}, 'New Plan / Drawing'), h('small', {}, '2D drafting with object snaps and a command line, plus walls, doors, windows and slabs with a live 3D model.')),
-        h('button', { class: 'wl-card', onclick: () => this.newDoc('assembly') }, h('span', { class: 'big', html: icon('assembly') }), h('b', {}, 'New Assembly'), h('small', {}, 'Insert saved parts and position them with mates: coincident, concentric, distance, angle, parallel, tangent…')),
-        h('button', { class: 'wl-card', onclick: () => this.open() }, h('span', { class: 'big', html: icon('open') }), h('b', {}, 'Open…'), h('small', {}, 'MonoLith documents, or import STEP, IGES, DXF and DWG files.'))),
-      recent.length ? h('div', { class: 'wl-recent' }, h('h3', {}, 'Recent'), recent.slice(0, 8).map((p) => h('button', { class: 'wl-r', onclick: () => this.open(p) }, h('span', { class: 'ico sm', html: icon(p.endsWith('.lithpln') ? 'plan' : p.endsWith('.lithasm') ? 'assembly' : 'part') }), p))) : null,
+    const kindIco = (p) => icon(/\.(lith|ek)pln$/i.test(p) ? 'plan' : /\.(lith|ek)asm$/i.test(p) ? 'assembly' : 'part');
+    const base = (p) => p.split(/[\\/]/).pop();
+    const dirOf = (p) => p.replace(/[\\/][^\\/]*$/, '');
+    const thumbEl = (f, cls = 'pj-thumb') => h('div', { class: cls }, f?.thumb ? h('img', { src: f.thumb, alt: '' }) : h('span', { class: 'pj-noimg', html: icon(f?.kind === 'assembly' ? 'assembly' : f?.kind === 'plan' ? 'plan' : 'part') }));
+    const cur = pj.projects.find((x) => x.dir === this.root.currentProject);
+
+    // ----- main column: projects grid, or the files of the selected project -----
+    let mainCol;
+    if (cur) {
+      const ROLE = { main: 'Main assembly', sub: 'Subassembly', part: 'Part', plan: 'Plan' };
+      mainCol = h('div', { class: 'wl-main' },
+        h('div', { class: 'pj-bar' },
+          h('button', { class: 'pj-btn', onclick: () => { this.root.setProject(null); } }, '← All projects'),
+          h('h2', {}, cur.name),
+          h('span', { class: 'pj-spacer' }),
+          cur.main ? h('button', { class: 'pj-btn primary', onclick: () => this.open(cur.main) }, 'Open main assembly') : null,
+          h('button', { class: 'pj-btn', onclick: () => api.openProjectFolder(cur.dir) }, 'Show folder')),
+        h('div', { class: 'pj-new' }, 'New in this project: ',
+          h('button', { class: 'pj-btn', onclick: () => this.newDoc('part') }, 'Part'),
+          h('button', { class: 'pj-btn', onclick: () => this.newDoc('assembly') }, 'Assembly'),
+          h('button', { class: 'pj-btn', onclick: () => this.newDoc('plan') }, 'Plan')),
+        cur.files.length ? h('div', { class: 'pj-grid' }, cur.files.map((f) => h('button', { class: 'pj-card file ' + f.role, title: f.path, onclick: () => this.open(f.path) },
+          thumbEl(f), h('div', { class: 'pj-name' }, h('span', { class: 'ico sm', html: kindIco(f.path) }), f.name), h('small', { class: 'pj-role' }, ROLE[f.role] || f.kind))))
+          : h('p', { class: 'pj-empty' }, 'No MonoLith files in this project yet. Files you save while this project is open go into its folder.'));
+    } else {
+      mainCol = h('div', { class: 'wl-main' },
+        h('div', { class: 'wl-cards' },
+          h('button', { class: 'wl-card', onclick: () => this.newDoc('part') }, h('span', { class: 'big', html: icon('part') }), h('b', {}, 'New Part'), h('small', {}, 'Sketch, extrude, revolve, fillet — with a full feature history.')),
+          h('button', { class: 'wl-card', onclick: () => this.newDoc('plan') }, h('span', { class: 'big', html: icon('plan') }), h('b', {}, 'New Plan / Drawing'), h('small', {}, '2D drafting with a command line, walls, doors and windows.')),
+          h('button', { class: 'wl-card', onclick: () => this.newDoc('assembly') }, h('span', { class: 'big', html: icon('assembly') }), h('b', {}, 'New Assembly'), h('small', {}, 'Insert parts and subassemblies, position them with mates.')),
+          h('button', { class: 'wl-card', onclick: () => this.open() }, h('span', { class: 'big', html: icon('open') }), h('b', {}, 'Open…'), h('small', {}, 'MonoLith documents, or import STEP, IGES, DXF and DWG.'))),
+        h('div', { class: 'pj-bar' }, h('h2', {}, 'Projects'), h('span', { class: 'pj-spacer' }),
+          h('button', { class: 'pj-btn primary', onclick: () => this.newProject() }, '+ New project'),
+          h('button', { class: 'pj-btn', onclick: () => api.openProjectFolder(), title: pj.root }, 'Projects folder')),
+        pj.projects.length ? h('div', { class: 'pj-grid' }, pj.projects.map((p) => h('button', { class: 'pj-card', title: p.dir, onclick: () => { this.root.setProject(p.dir); } },
+          thumbEl(p.cover), h('div', { class: 'pj-name' }, p.name),
+          h('small', { class: 'pj-role' }, `${p.files.filter((f) => f.kind === 'assembly').length} assemblies · ${p.files.filter((f) => f.kind === 'part').length} parts`))))
+          : h('p', { class: 'pj-empty' }, `No projects yet. Click "New project", or put a folder with your files in ${pj.root}.`));
+    }
+    // ----- side column: recent files, settings, version -----
+    const side = h('div', { class: 'wl-side' },
+      h('h3', {}, 'Recent'),
+      recent.length ? recent.slice(0, 12).map((p) => h('button', { class: 'wl-r', title: p, onclick: () => this.open(p) }, h('span', { class: 'ico sm', html: kindIco(p) }), h('span', { class: 'wl-rt' }, h('b', {}, base(p)), h('small', {}, dirOf(p))))) : h('p', { class: 'pj-empty' }, 'Nothing yet'),
       h('label', { class: 'wl-log', title: 'Keeps a log of your actions and errors in the Logs folder, to help find problems' },
         h('input', { type: 'checkbox', checked: logc.enabled !== false, onchange: (e) => api.logCfg({ enabled: e.target.checked, asked: true }) }), ' Record action log (for troubleshooting)'),
-      h('div', { class: 'wl-foot' }, `Version ${info.version || ''}  ·  Geometry: OpenCascade ${info.occt || ''} · Sketch solver: FreeCAD PlaneGCS`)));
+      h('div', { class: 'wl-foot' }, `Version ${info.version || ''} · Geometry: OpenCascade ${info.occt || ''} · Sketch solver: FreeCAD PlaneGCS`));
+    w.append(h('div', { class: 'wl wl-wide' },
+      h('div', { class: 'wl-head' }, h('span', { class: 'wl-logo', html: icon('part') }), h('div', {}, h('h1', {}, APP_NAME), h('p', {}, 'Parametric CAD for engineering and architecture'))),
+      h('div', { class: 'wl-cols' }, mainCol, side)));
     this.updateTitle();
+  }
+  // selected project (remembered between sessions); new files are saved into its folder
+  setProject(dir) { this.root.currentProject = dir; try { localStorage.setItem('monolith.project', dir || ''); } catch {} this.root.showWelcome(); }
+  async newProject() {
+    const name = await promptText('New project name', '');
+    if (!name) return;
+    const r = await api.createProject(name);
+    if (r?.error) { toast(r.error, 'error'); return; }
+    this.root.setProject(r.dir);
   }
 
   // ---------- global input ----------
@@ -484,7 +386,10 @@ class App {
   }
 }
 
-async function boot() {
+// mix in methods split off into separate files
+for (const M of [AppFiles, AppSettings]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(App.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));
+
+export async function boot() {
   initActionLog();
   const app = new App();
   // tests/devtools: lithApp forwards to the active tab

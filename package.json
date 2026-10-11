@@ -1,6 +1,6 @@
 {
   "name": "monolith",
-  "version": "0.1.32",
+  "version": "0.1.36",
   "description": "Standalone parametric CAD for engineering and architecture",
   "main": "main/main.cjs",
   "scripts": {
