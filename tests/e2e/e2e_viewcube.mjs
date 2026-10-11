@@ -1,0 +1,28 @@
+import { _electron as electron } from 'playwright-core';
+import fs from 'node:fs';
+const app = await electron.launch({ executablePath: './node_modules/.bin/electron', args: ['.', '--no-sandbox'], env: { ...process.env, MONOLITH_TEST: '1', MONOLITH_KIND: 'part' }, timeout: 60000 });
+const win = await app.firstWindow();
+const logs = [];
+win.on('console', (m) => { if (!/Security|WebGL|GPU stall|swiftshader|boot\]/.test(m.text())) logs.push(`[${m.type()}] ${m.text()}`); });
+win.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}\n${e.stack}`));
+await win.waitForTimeout(3500);
+const shot = async (n) => { await win.waitForTimeout(500); await win.screenshot({ path: `tests/e2e/shots/${n}.png` }); };
+const btn = (label) => win.locator(`.cm-btn:has-text("${label}")`).first().click();
+const tab = (label) => win.locator(`.cm-tab:has-text("${label}")`).click();
+const W = (ms) => win.waitForTimeout(ms);
+process.on('exit', () => console.log(logs.join('\n')));
+const idle = async () => { await W(300); await win.waitForFunction(() => !document.getElementById('busy').classList.contains('on'), null, { timeout: 30000 }); await W(200); };
+// world point -> page
+const WP = async (p) => win.evaluate((p) => { const vp = lithApp.doc.vp; const r = vp.el.getBoundingClientRect(); const s = vp.toScreen(p); return [r.left + s[0], r.top + s[1]]; }, p);
+await win.locator('.tr-row:has-text("Top Plane")').click();
+await tab('Features'); await W(300);
+const vc = await win.locator('.viewcube').boundingBox();
+const dir = () => win.evaluate(() => lithApp.doc.vp.viewDir().toArray().map((v) => +v.toFixed(2)).join());
+await win.mouse.move(vc.x + vc.width / 2 + 3, vc.y + vc.height / 2 + 3); await W(300); await shot('vc_light_hover');
+await win.mouse.click(vc.x + vc.width / 2 + 3, vc.y + vc.height / 2 + 3); await W(600); console.log('after face click', await dir());
+await win.evaluate(() => lithApp.onMenu('theme', !document.body.classList.contains('dark'))); await W(200);
+await win.evaluate(() => lithApp.doc.vp.setView('iso', false)); await W(300);
+await win.mouse.move(vc.x + vc.width / 2, vc.y + 12); await W(300); await shot('vc_dark');
+await win.mouse.click(vc.x + vc.width / 2, vc.y + 12); await W(600); console.log('after click', await dir());
+await win.evaluate(() => lithApp.onMenu('theme', !document.body.classList.contains('dark')));
+await app.close();

@@ -1,0 +1,94 @@
+{
+  "name": "monolith",
+  "version": "0.1.32",
+  "description": "Standalone parametric CAD for engineering and architecture",
+  "main": "main/main.cjs",
+  "scripts": {
+    "build:renderer": "node scripts/build.mjs",
+    "start": "npm run build:renderer && electron .",
+    "dist": "node scripts/build.mjs --min && electron-builder --win --x64",
+    "test:kernel": "node tests/kernel.test.mjs",
+    "test:e2e": "npm run build:renderer && node tests/e2e/e2e_part2.mjs && node tests/e2e/e2e_plan.mjs",
+    "test:pointcloud": "node tests/pointcloud.test.mjs"
+  },
+  "keywords": [],
+  "author": "Enerkorp",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "laz-perf": "^0.0.7",
+    "opencascade.js": "^2.0.0-beta.b5ff984"
+  },
+  "devDependencies": {
+    "@salusoft89/planegcs": "^1.3.0",
+    "dxf-parser": "^1.1.2",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.28.2",
+    "opentype.js": "^1.3.4",
+    "playwright-core": "^1.48.2",
+    "three": "^0.170.0"
+  },
+  "productName": "MonoLith",
+  "type": "module",
+  "build": {
+    "appId": "com.enerkorp.monolith",
+    "productName": "MonoLith",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main/**",
+      "kernel/**",
+      "shared/**",
+      "renderer/index.html",
+      "renderer/styles.css",
+      "renderer/fonts/**",
+      "renderer/planegcs.wasm",
+      "renderer/dist/app.js",
+      "build/icon.png",
+      "package.json",
+      "!node_modules/opencascade.js/starter-templates/**",
+      "!**/*.d.ts",
+      "!**/*.map"
+    ],
+    "asarUnpack": [
+      "kernel/**",
+      "shared/**",
+      "node_modules/opencascade.js/**",
+      "node_modules/laz-perf/**"
+    ],
+    "fileAssociations": [
+      {
+        "ext": "lithprt",
+        "name": "MonoLith Part",
+        "description": "MonoLith Part"
+      },
+      {
+        "ext": "lithasm",
+        "name": "MonoLith Assembly",
+        "description": "MonoLith Assembly"
+      },
+      {
+        "ext": "lithpln",
+        "name": "MonoLith Plan",
+        "description": "MonoLith Plan"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "publish": null,
+    "linux": {
+      "target": "dir"
+    }
+  }
+}

@@ -1,3 +1,10 @@
+0.1.32 (2026-10-12)
+- Program renamed to MonoLith everywhere: MonoLith.exe, MonoLith folder, window/menus/dialogs.
+- New file extensions: .lithprt (part), .lithasm (assembly), .lithpln (plan).
+- Old .ekprt/.ekasm/.ekpln files still open; the first Save asks to store them as the new extension (the old file is kept).
+- Updater is now UPDATE-MONOLITH.bat with MonoLith-patch.zip; it renames the old EKCAD folder and exe to MonoLith once.
+- Recent files and action-log setting are carried over. Dark mode and UI scale need to be set once more.
+
 0.1.31 (2026-10-11)
 - New "Interface" menu (next to View): Dark Mode on/off, UI Scale… (slider 60%–200%, remembered) and Reset UI Scale.
 - The dark mode button in the top bar has moved to Interface > Dark Mode.

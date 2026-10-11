@@ -1,0 +1,5 @@
+node_modules/
+release/
+dist/
+renderer/dist/
+tests/e2e/shots/

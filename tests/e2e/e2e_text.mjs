@@ -1,0 +1,33 @@
+import { launch } from './common.mjs';
+const T = await launch('part');
+const { win, W } = T;
+// base plate on Top plane
+await win.locator('.tr-row:has-text("Top Plane")').click();
+await T.tab('Sketch'); await T.btn('Sketch'); await W(700);
+await win.evaluate(() => { const vp = lithApp.doc.vp; vp.scale = 0.25; vp.requestRender(); });
+await T.btn('Center Rectangle'); await T.click(0, 0); await T.click(70, 25); await win.keyboard.press('Escape');
+await win.locator('.cc.ok').click(); await T.idle();
+await T.tab('Features'); await T.btn('Extruded Boss'); await T.idle(); await T.num(0, 8); await T.ok();
+// sketch text on top face
+await win.evaluate(() => { lithApp.doc.vp.setView('iso', false); lithApp.doc.zoomFit(); }); await W(300);
+await T.clickWorld([0, 8, 10]);
+await T.tab('Sketch'); await T.btn('Sketch'); await W(700);
+await win.evaluate(() => { const vp = lithApp.doc.vp; vp.scale = 0.25; vp.requestRender(); });
+await T.btn('Text'); await T.click(0, -5); await W(800);
+const ta = win.locator('textarea.sp-text');
+await ta.fill("This doesn't work so good"); await W(800);
+const h = win.locator('.sp-field.row input').first(); await h.fill('6'); await h.press('Enter'); await W(500);
+await win.locator('.sp-field select').nth(1).selectOption('center'); await W(800);
+const info = await win.evaluate(() => { const g = lithApp.doc.sketcher.sk.geo.find(g => g.type === 'text'); return { font: g.font, loops: g.outline.length, text: g.text, h: g.h }; });
+console.log('text', JSON.stringify(info));
+await T.shot('t1_text_sketch');
+await win.locator('.cc.ok').click(); await T.idle();
+await T.tab('Features'); await T.btn('Extruded Cut'); await T.idle();
+await win.locator('.pm-field select').first().selectOption('blind'); await T.idle(); await T.num(0, 1.5);
+console.log('segs', await win.evaluate(() => { const f = lithApp.doc.doc.features.find(f=>f.type==='sketch' && f.geo.some(g=>g.type==='text')); const g = f.geo.find(g=>g.type==='text'); return g.segs?.length + ' loops ' + g.outline.length; }));
+await T.ok();
+console.log('status', await win.evaluate(() => JSON.stringify(lithApp.doc.status.map(s => s.state + (s.error || '')))));
+await win.evaluate(() => { lithApp.doc.vp.setView('iso', false); lithApp.doc.zoomFit(); }); await W(400);
+await T.shot('t2_engraved');
+console.log('ERRORS:', T.logs.filter(l => /pageerror|error/i.test(l)).join('\n') || 'none');
+await T.app.close();

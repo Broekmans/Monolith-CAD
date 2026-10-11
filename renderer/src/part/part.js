@@ -1,0 +1,579 @@
+// Part document: SolidWorks/Inventor-style feature-based modeling with a
+// FeatureManager tree, PropertyManager feature dialogs, sketches on planes or
+// faces, rollback, suppression, and live regeneration through the kernel.
+import * as THREE from 'three';
+import { Viewport } from '../viewport.js';
+import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
+import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
+import { icon } from '../icons.js';
+import { toggleSection, sectionTreeRows } from '../sectionview.js';
+import { api } from '../api.js';
+import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
+import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
+import { circleFrom3 } from '../sketch/geom2d.js';
+import { dxfToSketch, sketchToDxf } from '../io/dxf.js';
+import { CloudManager, cloudPanel } from '../pointcloud.js';
+import { PartPicking } from './picking.js';
+import { PartTree } from './tree.js';
+import { PartSketching } from './sketching.js';
+import { PartFeatures } from './features.js';
+import { PartExchange } from './exchange.js';
+
+export const STD_PLANES = {
+  Front: { origin: [0, 0, 0], normal: [0, 0, 1], xDir: [1, 0, 0] },
+  Top: { origin: [0, 0, 0], normal: [0, 1, 0], xDir: [1, 0, 0] },
+  Right: { origin: [0, 0, 0], normal: [1, 0, 0], xDir: [0, 0, -1] },
+};
+
+export const FEATURE_META = {
+  sketch: { icon: 'sketch', base: 'Sketch' },
+  extrude: { icon: 'extrude', base: 'Boss-Extrude' },
+  extrudeCut: { icon: 'cutExtrude', base: 'Cut-Extrude' },
+  revolve: { icon: 'revolve', base: 'Revolve' },
+  revolveCut: { icon: 'cutRevolve', base: 'Cut-Revolve' },
+  fillet: { icon: 'fillet', base: 'Fillet' },
+  chamfer: { icon: 'chamfer', base: 'Chamfer' },
+  shell: { icon: 'shell', base: 'Shell' },
+  linearPattern: { icon: 'linearPattern', base: 'LPattern' },
+  circularPattern: { icon: 'circularPattern', base: 'CirPattern' },
+  mirror: { icon: 'mirror', base: 'Mirror' },
+  import: { icon: 'import', base: 'Imported' },
+};
+export const metaKey = (f) => (f.type === 'extrude' && f.op === 'cut' ? 'extrudeCut' : f.type === 'revolve' && f.op === 'cut' ? 'revolveCut' : f.type);
+
+export const MATERIALS = [
+  { name: 'Not specified', density: 1.0 },
+  { name: 'Plain Carbon Steel', density: 7.8 },
+  { name: 'AISI 304 Stainless', density: 8.0 },
+  { name: '6061 Aluminium Alloy', density: 2.7 },
+  { name: 'Brass', density: 8.5 },
+  { name: 'Copper', density: 8.9 },
+  { name: 'Titanium Ti-6Al-4V', density: 4.43 },
+  { name: 'ABS', density: 1.04 },
+  { name: 'Nylon 6/6', density: 1.14 },
+  { name: 'Oak', density: 0.75 },
+];
+
+export function newPartDoc(name = 'Part1') {
+  return { kind: 'part', version: 1, name, units: 'mm', material: 'Not specified', features: [], rollback: null, next: 1 };
+}
+
+export const COLORS = { body: 0xcfd6df, edge: 0x111111, hover: 0xff9a1a, sel: 0x1e90ff, plane: 0x6a9ad8 };
+
+export class PartDoc {
+  constructor(app, doc) {
+    this.app = app;
+    this.doc = doc;
+    this.sel = [];
+    this.hover = null;
+    this.mesh = null;
+    this.status = [];
+    this.undoStack = [];
+    this.redoStack = [];
+    this.displayMode = 'shadedEdges';
+    this.showPlanes = false;
+    this.regenToken = 0;
+    this.pmState = null;
+  }
+
+  // ======================= setup =======================
+  init() {
+    const app = this.app;
+    this.viewport = new Viewport(app.el.views, { mode: '3d' });
+    this.vp = this.viewport;
+    this.vp.onContextMenu = (e) => this.viewContextMenu(e);
+    this.scene = this.vp.scene;
+    this.bodyGroup = new THREE.Group(); this.scene.add(this.bodyGroup);
+    this.sketchGroup = new THREE.Group(); this.scene.add(this.sketchGroup);
+    this.planeGroup = new THREE.Group(); this.scene.add(this.planeGroup);
+    this.hlGroup = new THREE.Group(); this.scene.add(this.hlGroup);
+    this.vp.overlayDrawers.push((ctx) => this.drawOverlay(ctx));
+    this.sketchPanel = app.el.props;
+    this.buildCommands();
+    this.buildHeadsUp();
+    this.bindViewport();
+    this.renderTree();
+    this.updateSketchDisplay();
+    this.updatePlanes();
+    this.vp.setView('iso', false);
+    this.vp.fit({ min: [-60, -60, -60], max: [60, 60, 60] });
+    this.doc.pointClouds ||= [];
+    this.clouds = new CloudManager(app, () => this.doc.pointClouds, () => [this.scene], () => { this.renderTree(); this.vp.requestRender(); });
+    this.regen().then(async () => {
+      if (this.mesh?.bbox) this.vp.fit(this.mesh.bbox);
+      if (this.doc.pointClouds.length) { await this.clouds.loadAll(); if (!this.mesh?.bbox) this.zoomFit(); }
+    });
+    app.setStatusRight('MMGS');
+  }
+
+  get title() { return this.doc.name; }
+  // Geometry used for picking: while a feature PropertyManager shows a live
+  // preview, selections are made on the model as it was before the feature.
+  get pick() { return this.pickOverride !== undefined ? this.pickOverride : this.pickDefault; }
+  async setPickBase(features) {
+    this.pickOverride = null;
+    const res = await api.kernel('regen', { features }).catch(() => null);
+    if (!res?.mesh?.positions?.length || !this.app.pm.open) return;
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(res.mesh.positions), 3));
+    geom.setIndex(new THREE.BufferAttribute(new Uint32Array(res.mesh.indices), 1));
+    geom.computeVertexNormals();
+    this.pickOverride = makePickData(res.mesh, new THREE.Mesh(geom));
+  }
+  clearPickBase() { this.pickOverride = undefined; }
+
+  // ======================= commands =======================
+  buildCommands() {
+    const inSketch = () => !!this.sketcher;
+    const notSketch = () => !this.sketcher && !this.app.pm.open;
+    const C = (id, label, ic, run, extra = {}) => ({ id, label, icon: ic, run, ...extra });
+    const sketchTools = SKETCH_TOOLS.map((t) => C('sk-' + t.id, t.label, t.icon, () => this.sketchTool(t.id), {
+      enabled: () => inSketch(), active: () => this.sketcher?.tool?.id === t.id, tip: `${t.label}${t.key ? ` (${t.key})` : ''}`,
+    }));
+    const features = [
+      [C('extrude', 'Extruded Boss/Base', 'extrude', () => this.cmdExtrude('boss'), { enabled: () => !this.app.pm.open }),
+        C('revolve', 'Revolved Boss/Base', 'revolve', () => this.cmdRevolve('boss'), { enabled: () => !this.app.pm.open })],
+      [C('cut', 'Extruded Cut', 'cutExtrude', () => this.cmdExtrude('cut'), { enabled: () => !this.app.pm.open }),
+        C('rcut', 'Revolved Cut', 'cutRevolve', () => this.cmdRevolve('cut'), { enabled: () => !this.app.pm.open })],
+      [C('fillet', 'Fillet', 'fillet', () => this.cmdFillet('fillet'), { enabled: notSketch }),
+        C('chamfer', 'Chamfer', 'chamfer', () => this.cmdFillet('chamfer'), { enabled: notSketch }),
+        C('shell', 'Shell', 'shell', () => this.cmdShell(), { enabled: notSketch })],
+      [C('lpattern', 'Linear Pattern', 'linearPattern', () => this.cmdPattern('linearPattern'), { enabled: notSketch }),
+        C('cpattern', 'Circular Pattern', 'circularPattern', () => this.cmdPattern('circularPattern'), { enabled: notSketch }),
+        C('mirror', 'Mirror', 'mirror', () => this.cmdPattern('mirror'), { enabled: notSketch })],
+    ];
+    const sketchTab = [
+      [C('sketch', 'Sketch', 'sketch', () => this.cmdSketch(), { enabled: () => !this.app.pm.open || inSketch(), active: inSketch, tip: 'Sketch: select a plane or planar face' }),
+        C('exitSketch', 'Exit Sketch', 'exitSketch', () => this.exitSketch(true), { enabled: inSketch }),
+        C('sk-dimension', 'Smart Dimension', 'dimension', () => this.sketchTool('dimension'), { enabled: inSketch, active: () => this.sketcher?.tool?.id === 'dimension', tip: 'Smart Dimension (D)' })],
+      sketchTools.filter((t) => !['sk-trim', 'sk-dimension'].includes(t.id)),
+      [sketchTools.find((t) => t.id === 'sk-trim'),
+        C('convert', 'Convert Entities', 'convert', () => this.cmdConvert(), { enabled: inSketch, tip: 'Project selected model edges into the sketch' }),
+        C('mirror', 'Mirror Entities', 'mirror', () => this.sketcher?.startMirror(), { enabled: inSketch, active: () => !!this.sketcher?.mirrorMode, tip: 'Mirror: 1) select entities, 2) click the mirror line' }),
+        C('construction', 'Construction Geometry', 'construction', () => this.sketcher?.toggleConstruction(), { enabled: inSketch }),
+        C('relations', 'Show Relations', 'relation', () => { if (this.sketcher) { this.sketcher.showRelations = !this.sketcher.showRelations; this.vp.requestRender(); this.app.cm.refresh(); } }, { enabled: inSketch, active: () => this.sketcher?.showRelations })],
+    ];
+    const evaluate = [
+      [C('mass', 'Mass Properties', 'massProps', () => this.cmdMass(), { enabled: notSketch }),
+        C('measure', 'Measure', 'measure', () => this.cmdMeasure(), { enabled: notSketch }),
+        C('section', 'Section View', 'section', () => toggleSection(this), { enabled: () => !this.sketcher, active: () => !!this.vp?.section })],
+      [C('impStep', 'Import STEP/IGES', 'import', () => this.app.importFile(), { enabled: notSketch }),
+        C('impPc', 'Import Point Cloud', 'cloud', () => this.app.importPointCloud(), { enabled: notSketch, tip: 'Import a scan (LAS, LAZ, PLY, XYZ, PTS) as a reference' }),
+        C('expStep', 'Export STEP', 'step', () => this.exportCAD('step'), { enabled: notSketch }),
+        C('expIges', 'Export IGES', 'export', () => this.exportCAD('iges'), { enabled: notSketch })],
+    ];
+    this.tabs = [{ name: 'Sketch', groups: sketchTab }, { name: 'Features', groups: features }, { name: 'Evaluate', groups: evaluate }];
+    this.app.cm.setTabs(this.tabs, 'Sketch');
+  }
+
+  buildHeadsUp() {
+    const bar = this.app.el.headsUp;
+    bar.innerHTML = '';
+    const B = (ic, tip, run) => h('button', { class: 'hu-btn', title: tip, html: icon(ic), onclick: run });
+    const viewsMenu = (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      contextMenu(r.left, r.bottom + 4, [
+        { label: 'Front', key: 'Ctrl+1', run: () => this.vp.setView('front') }, { label: 'Back', key: 'Ctrl+2', run: () => this.vp.setView('back') },
+        { label: 'Left', key: 'Ctrl+3', run: () => this.vp.setView('left') }, { label: 'Right', key: 'Ctrl+4', run: () => this.vp.setView('right') },
+        { label: 'Top', key: 'Ctrl+5', run: () => this.vp.setView('top') }, { label: 'Bottom', key: 'Ctrl+6', run: () => this.vp.setView('bottom') },
+        { label: 'Isometric', key: 'Ctrl+7', run: () => this.vp.setView('iso') }, { label: 'Trimetric', run: () => this.vp.setView('trimetric') },
+        { label: 'Normal To', key: 'Ctrl+8', run: () => this.normalTo() },
+      ]);
+    };
+    const dispMenu = (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      contextMenu(r.left, r.bottom + 4, [
+        { label: 'Shaded With Edges', icon: 'shaded', run: () => this.setDisplay('shadedEdges') },
+        { label: 'Shaded', icon: 'shaded', run: () => this.setDisplay('shaded') },
+        { label: 'Wireframe', icon: 'wire', run: () => this.setDisplay('wire') },
+        '-',
+        { label: (this.showPlanes ? 'Hide' : 'Show') + ' Planes', icon: 'plane', run: () => { this.showPlanes = !this.showPlanes; this.updatePlanes(); } },
+      ]);
+    };
+    bar.append(B('zoomFit', 'Zoom to Fit (F)', () => this.zoomFit()), B('normalTo', 'Normal To (Ctrl+8)', () => this.normalTo()),
+      B('views', 'View Orientation', viewsMenu), B('shaded', 'Display Style', dispMenu), B('section', 'Section View', () => toggleSection(this)));
+  }
+
+  setDisplay(m) { this.displayMode = m; this.applyMesh(this.mesh); }
+
+  zoomFit() {
+    const box = new THREE.Box3();
+    if (this.mesh?.bbox) box.union(new THREE.Box3(new THREE.Vector3(...this.mesh.bbox.min), new THREE.Vector3(...this.mesh.bbox.max)));
+    this.sketchGroup.traverse((o) => { if (o.geometry) { o.geometry.computeBoundingBox(); box.union(o.geometry.boundingBox); } });
+    if (this.sketcher) {
+      for (const c of this.sketcher.curves()) for (const p of sampleCurve(c, 16)) box.expandByPoint(new THREE.Vector3(...this.sketcher.to3(p)));
+      box.expandByPoint(new THREE.Vector3(...this.sketcher.to3([0, 0])));
+    }
+    if (this.clouds) box.union(this.clouds.box());
+    if (box.isEmpty()) box.set(new THREE.Vector3(-50, -50, -50), new THREE.Vector3(50, 50, 50));
+    this.vp.fit(box);
+  }
+
+  normalTo() {
+    if (this.sketcher) { this.vp.normalTo(this.sketcher.fr); return; }
+    const s = this.sel.find((x) => x.plane);
+    if (s) { const fr = frameOf(s.plane); this.vp.normalTo(fr); }
+    else toast('Select a plane or planar face to look normal to it');
+  }
+
+  // ======================= history =======================
+  snapshot() { return JSON.stringify(this.doc); }
+  commit(label) {
+    this.undoStack.push(this._last ?? this.snapshot());
+    if (this.undoStack.length > 80) this.undoStack.shift();
+    this.redoStack = [];
+    this._last = null;
+    this.app.setDirty(true);
+    void label;
+  }
+  beginChange() { this._last = this.snapshot(); }
+  undo() {
+    if (this.sketcher) { this.sketcher.undo(); return; }
+    if (this.app.pm.open) return;
+    if (!this.undoStack.length) return;
+    this.redoStack.push(this.snapshot());
+    this.doc = JSON.parse(this.undoStack.pop());
+    this.afterDocChange();
+  }
+  redo() {
+    if (this.sketcher) { this.sketcher.redo(); return; }
+    if (!this.redoStack.length) return;
+    this.undoStack.push(this.snapshot());
+    this.doc = JSON.parse(this.redoStack.pop());
+    this.afterDocChange();
+  }
+  // keep loaded point clouds in step with the document (undo/redo)
+  syncClouds() {
+    if (!this.clouds) return;
+    this.doc.pointClouds ||= [];
+    const ids = new Set(this.doc.pointClouds.map((r) => r.id));
+    for (const id of [...this.clouds.views.keys()]) if (!ids.has(id)) this.clouds.remove(id);
+    for (const r of this.doc.pointClouds) {
+      const v = this.clouds.views.get(r.id);
+      if (!v) this.clouds.load(r); else { v.rec = r; v.refresh(); }
+    }
+  }
+  async addPointCloud(rec) {
+    this.beginChange();
+    this.doc.pointClouds.push(rec);
+    this.commit('import point cloud');
+    const v = await this.clouds.load(rec);
+    this.renderTree();
+    if (v) this.zoomFit();
+  }
+  removePointCloud(id) {
+    this.beginChange();
+    this.doc.pointClouds = this.doc.pointClouds.filter((r) => r.id !== id);
+    this.commit('remove point cloud');
+    this.clouds.remove(id);
+    this.app.pm.close(false);
+    this.renderTree(); this.vp.requestRender();
+  }
+  showCloudProps(id) {
+    const rec = this.doc.pointClouds.find((r) => r.id === id);
+    if (!rec) return;
+    this.app.pm.show({ title: 'Point Cloud', iconName: 'cloud', fields: [], okLabel: 'Close', onOk: () => true });
+    this.app.showPanel('pm');
+    const body = this.app.el.pm.querySelector('.pm-body');
+    const render = () => {
+      body.innerHTML = '';
+      body.appendChild(cloudPanel(rec, this.clouds.views.get(id), {
+        onChange: () => { this.app.setDirty(true); this.vp.requestRender(); this.renderTree(); },
+        onRemove: () => this.removePointCloud(id),
+        onZoom: () => { const v = this.clouds.views.get(id); if (v) this.vp.fit(v.box); },
+        onReload: async () => { await this.clouds.load(rec); render(); },
+      }));
+    };
+    render();
+  }
+  afterDocChange() {
+    this.syncClouds();
+    this.sel = [];
+    this.renderTree();
+    this.updateSketchDisplay();
+    this.regen();
+    this.app.setDirty(true);
+  }
+
+  newId() { this.doc.next = (this.doc.next || 1) + 1; return 'f' + this.doc.next; }
+  nextName(f) {
+    const base = FEATURE_META[metaKey(f)].base;
+    let n = 1;
+    const names = new Set(this.doc.features.map((x) => x.name));
+    while (names.has(base + n)) n++;
+    return base + n;
+  }
+  insertIndex() { return this.doc.rollback ?? this.doc.features.length; }
+  insertFeature(f) {
+    const i = this.insertIndex();
+    this.doc.features.splice(i, 0, f);
+    if (this.doc.rollback !== null && this.doc.rollback !== undefined) this.doc.rollback++;
+  }
+  F(id) { return this.doc.features.find((f) => f.id === id); }
+  faceRefOf(it) { return it?.kind === 'face' && it.plane ? { c: it.c, n: it.plane.normal, bb: this.pick?.mesh.bbox } : null; }
+  planeOf(f) { return this.resolvedPlanes?.get(f.id) || f.plane; }
+  consumedSketches() {
+    const s = new Set();
+    for (const f of this.doc.features) if (f.sketch) s.add(f.sketch);
+    return s;
+  }
+
+  // ======================= regeneration =======================
+  async regen(previewFeatures = null) {
+    const token = ++this.regenToken;
+    const features = previewFeatures || this.doc.features;
+    const upTo = previewFeatures ? undefined : this.doc.rollback ?? undefined;
+    this.app.setBusy(true);
+    try {
+      const res = await api.kernel('regen', { features, upTo });
+      if (token !== this.regenToken) return res;
+      this.applyMesh(res.mesh);
+      this.mass = res.mass;
+      if (!previewFeatures) {
+        this.status = res.status;
+        this.resolvedPlanes = new Map(res.status.filter((x) => x.plane).map((x) => [x.id, x.plane]));
+        this.renderTree(); this.updateSketchDisplay();
+      }
+      const err = res.status.find((s) => s.state === 'error');
+      if (previewFeatures) this.app.pm.current?.setMessage(err ? err.error : '', err ? 'error' : 'info');
+      else if (err) this.app.setStatus(`Rebuild error in ${this.F(err.id)?.name}: ${err.error}`, 'error');
+      else this.app.setStatus('Ready');
+      return res;
+    } catch (e) {
+      toast('Kernel error: ' + e.message, 'error');
+      return null;
+    } finally {
+      if (token === this.regenToken) this.app.setBusy(false);
+    }
+  }
+
+  applyMesh(m) {
+    this.mesh = m;
+    const g = this.bodyGroup;
+    for (const o of [...g.children]) { g.remove(o); o.geometry?.dispose(); }
+    this.clearHighlights();
+    if (!m || !m.positions?.length) { this.bodyMesh = null; this.pickDefault = null; this.vp.requestRender(); return; }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(m.positions), 3));
+    geom.setIndex(new THREE.BufferAttribute(new Uint32Array(m.indices), 1));
+    geom.computeVertexNormals();
+
+    const wire = this.displayMode === 'wire';
+    const mat = new THREE.MeshStandardMaterial({
+      color: COLORS.body, metalness: 0.18, roughness: 0.42, side: THREE.DoubleSide,
+      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+      transparent: wire, opacity: wire ? 0.0 : 1, depthWrite: !wire,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.name = 'body';
+    g.add(mesh);
+    this.bodyMesh = mesh;
+    this.pickDefault = makePickData(m, mesh);
+    if (this.displayMode !== 'shaded') {
+      const segs = [];
+      for (const e of m.edges) { const p = e.pts; for (let i = 3; i < p.length; i += 3) segs.push(p[i - 3], p[i - 2], p[i - 1], p[i], p[i + 1], p[i + 2]); }
+      const eg = new THREE.BufferGeometry();
+      eg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs), 3));
+      const lines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: COLORS.edge, depthTest: !wire }));
+      g.add(lines);
+    }
+    this.vp.requestRender();
+  }
+
+  // ======================= planes & sketches display =======================
+  planeSize() {
+    if (this.mesh?.bbox) {
+      const b = this.mesh.bbox;
+      return Math.max(20, Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) * 0.7);
+    }
+    return 60;
+  }
+  updatePlanes() {
+    const g = this.planeGroup;
+    for (const o of [...g.children]) { g.remove(o); o.geometry?.dispose(); }
+    const visible = new Set();
+    if (this.showPlanes) Object.keys(STD_PLANES).forEach((k) => visible.add(k));
+    for (const s of this.sel) if (s.kind === 'plane') visible.add(s.name);
+    if (this.hover?.kind === 'plane') visible.add(this.hover.name);
+    if (this.hoverTreePlane) visible.add(this.hoverTreePlane);
+    const S = this.planeSize();
+    for (const name of visible) {
+      const fr = frameOf(STD_PLANES[name]);
+      const corners = [[-S, -S], [S, -S], [S, S], [-S, S]].map(([u, v]) => new THREE.Vector3(
+        fr.o[0] + fr.x[0] * u + fr.y[0] * v, fr.o[1] + fr.x[1] * u + fr.y[1] * v, fr.o[2] + fr.x[2] * u + fr.y[2] * v));
+      const sel = this.sel.some((s) => s.kind === 'plane' && s.name === name);
+      const hov = (this.hover?.kind === 'plane' && this.hover.name === name) || this.hoverTreePlane === name;
+      const col = sel ? COLORS.sel : hov ? COLORS.hover : COLORS.plane;
+      const geom = new THREE.BufferGeometry().setFromPoints([corners[0], corners[1], corners[2], corners[0], corners[2], corners[3]]);
+      const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+      mesh.userData.plane = name;
+      g.add(mesh);
+      const lg = new THREE.BufferGeometry().setFromPoints([...corners, corners[0]]);
+      g.add(new THREE.Line(lg, new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.8 })));
+    }
+    this.vp.requestRender();
+  }
+
+  updateSketchDisplay() {
+    const g = this.sketchGroup;
+    for (const o of [...g.children]) { g.remove(o); o.geometry?.dispose(); }
+    const consumed = this.consumedSketches();
+    const roll = this.doc.rollback ?? Infinity;
+    this.doc.features.forEach((f, i) => {
+      if (f.type !== 'sketch' || i >= roll) return;
+      if (this.sketcher && this.sketcher.original.id === f.id) return;
+      const shownBy = [this.dimFeat, this.hoverFeat].some((id) => id && (id === f.id || this.F(id)?.sketch === f.id));
+      const show = shownBy || (f.visible ?? !consumed.has(f.id));
+      if (!show) return;
+      const fr = frameOf(this.planeOf(f));
+      const pts = [];
+      const cpts = [];
+      for (const c of sketchCurves(f, { includeConstruction: true })) {
+        const arr = c.construction ? cpts : pts;
+        const s = sampleCurve(c, 64);
+        for (let k = 1; k < s.length; k++) arr.push(...to3(fr, s[k - 1]), ...to3(fr, s[k]));
+      }
+      const selected = this.sel.some((s) => s.kind === 'sketch' && s.id === f.id);
+      const hov = (this.hover?.kind === 'sketch' && this.hover.id === f.id) || (this.hoverFeat && (this.hoverFeat === f.id || this.F(this.hoverFeat)?.sketch === f.id));
+      const color = selected ? COLORS.sel : hov ? COLORS.hover : 0x3050a0;
+      if (pts.length) {
+        const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+        const ls = new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color, depthTest: !shownBy })); if (shownBy) ls.renderOrder = 5; g.add(ls);
+      }
+      if (cpts.length) {
+        const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(cpts, 3));
+        const ls = new THREE.LineSegments(geom, new THREE.LineDashedMaterial({ color, dashSize: 3 * this.vp.scale, gapSize: 2 * this.vp.scale }));
+        ls.computeLineDistances(); g.add(ls);
+      }
+    });
+    this.vp.requestRender();
+  }
+
+  // ======================= keyboard =======================
+  onKey(e) {
+    const k = e.key;
+    if (e.ctrlKey && !e.shiftKey && /^[1-8]$/.test(k)) {
+      const v = ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso'][+k - 1];
+      if (v) this.vp.setView(v); else this.normalTo();
+      return true;
+    }
+    if (e.ctrlKey && (k === 'z' || k === 'Z')) { this.undo(); return true; }
+    if (e.ctrlKey && (k === 'y' || k === 'Y')) { this.redo(); return true; }
+    if (k === 'f' && !e.ctrlKey) { this.zoomFit(); return true; }
+    if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown') {
+      const a = Math.PI / 12;
+      this.vp.rotateBy(k === 'ArrowLeft' ? -a : k === 'ArrowRight' ? a : 0, k === 'ArrowUp' ? -a : k === 'ArrowDown' ? a : 0);
+      return true;
+    }
+    if (this.sketcher) {
+      const sk = this.sketcher;
+      if (sk.mirrorMode && k === 'Escape') { sk.endMirror(); return true; }
+      if (sk.mirrorMode && k === 'Enter') { if (sk.mirrorMode.step === 1) sk.mirrorNext(); return true; }
+      if (k === 'Escape') { if (sk.tool) { if (sk.tool.pts?.length || sk.tool.pending) { sk.tool.pts = []; sk.tool.snaps = []; sk.tool.prevEnd = null; sk.tool.pending = null; sk.tool.picks = []; sk.vp.requestRender(); } else sk.setTool(null); } else { sk.sel.clear(); sk.renderPanel(); sk.vp.requestRender(); } this.app.cm.refresh(); return true; }
+      if (k === 'Delete' || k === 'Backspace') { sk.deleteSelection(); return true; }
+      if (!e.ctrlKey) {
+        const t = SKETCH_TOOLS.find((x) => x.key && x.key.toLowerCase() === k.toLowerCase());
+        if (t) { this.sketchTool(t.id); return true; }
+      }
+      return false;
+    }
+    if (k === 'Escape') { if (this.dimFeat) this.showFeatureDims(null); if (this.app.pm.open) this.app.pm.cancel(); else { this.sel = []; this.afterSelection(); } return true; }
+    if (k === 'Enter' && this.app.pm.open) { this.app.pm.ok(); return true; }
+    if (k === 'Delete') {
+      const f = this.sel.find((s) => s.kind === 'feature' || s.kind === 'sketch');
+      if (f && !this.app.pm.open) { this.deleteFeature(f.id); return true; }
+    }
+    return false;
+  }
+
+  viewContextMenu(e) {
+    if (this.sketcher) {
+      const sk = this.sketcher;
+      contextMenu(e.clientX, e.clientY, [
+        { label: 'Exit Sketch', icon: 'exitSketch', run: () => this.exitSketch(true) },
+        { label: 'Discard Changes', icon: 'cancel', run: () => this.exitSketch(false) },
+        '-',
+        ...SKETCH_TOOLS.slice(0, 6).map((t) => ({ label: t.label, icon: t.icon, run: () => this.sketchTool(t.id) })),
+        { label: 'Smart Dimension', icon: 'dimension', run: () => this.sketchTool('dimension') },
+        '-', { label: 'Zoom to Fit', icon: 'zoomFit', key: 'F', run: () => this.zoomFit() }, { label: 'Normal To', icon: 'normalTo', run: () => this.normalTo() },
+        sk.sel.size ? { label: 'Delete', icon: 'delete', key: 'Del', run: () => sk.deleteSelection() } : null,
+      ]);
+      return;
+    }
+    const p = this.pickAt(e);
+    const items = [];
+    if (p?.kind === 'face' && p.plane) items.push({ label: 'Sketch', icon: 'sketch', run: () => this.startSketch(p.plane, 'Face', null, this.faceRefOf(p)) }, { label: 'Normal To', icon: 'normalTo', run: () => this.vp.normalTo(frameOf(p.plane)) });
+    if (p?.kind === 'face') items.push({ label: 'Shell (remove face)', icon: 'shell', run: () => { this.sel = [p]; this.cmdShell(); } });
+    if (p?.kind === 'edge') items.push({ label: 'Fillet', icon: 'fillet', run: () => { if (!this.sel.some((s) => s.key === p.key)) this.sel.push(p); this.cmdFillet('fillet'); } }, { label: 'Chamfer', icon: 'chamfer', run: () => { if (!this.sel.some((s) => s.key === p.key)) this.sel.push(p); this.cmdFillet('chamfer'); } });
+    if (p?.kind === 'sketch') items.push({ label: 'Edit Sketch', icon: 'sketch', run: () => this.editSketch(p.id) }, { label: 'Extruded Boss/Base', icon: 'extrude', run: () => { this.sel = [p]; this.cmdExtrude('boss'); } }, { label: 'Extruded Cut', icon: 'cutExtrude', run: () => { this.sel = [p]; this.cmdExtrude('cut'); } });
+    if (p?.kind === 'plane') items.push({ label: 'Sketch', icon: 'sketch', run: () => this.startSketch(p.plane, p.name) });
+    if (items.length) items.push('-');
+    items.push({ label: 'Zoom to Fit', icon: 'zoomFit', key: 'F', run: () => this.zoomFit() }, { label: 'Isometric', icon: 'views', key: 'Ctrl+7', run: () => this.vp.setView('iso') });
+    contextMenu(e.clientX, e.clientY, items);
+  }
+
+  dispose() {
+    this.clouds?.dispose();
+    this.sketcher?.dispose();
+    this.vp.dispose();
+  }
+}
+
+// ---------- helpers ----------
+export function makePickData(mesh, obj) {
+  const faceOfTri = new Int32Array(mesh.indices.length / 3);
+  for (const f of mesh.faces) for (let t = f.start / 3; t < (f.start + f.count) / 3; t++) faceOfTri[t] = f.id;
+  return { mesh, obj, faceOfTri };
+}
+export function edgeRef(e, mesh) {
+  if (e.bb || !e.edge) return { mid: e.mid, type: e.type, ...(e.dir ? { dir: e.dir } : {}), ...(e.bb ? { bb: e.bb } : {}) };
+  const p = e.edge.pts;
+  const ref = { mid: e.mid, type: e.type, bb: mesh?.bbox };
+  if (e.type === 'line' && p.length >= 6) {
+    const d = [p[p.length - 3] - p[0], p[p.length - 2] - p[1], p[p.length - 1] - p[2]];
+    ref.dir = norm(d);
+  }
+  return ref;
+}
+export function frameOf(pl) {
+  const n = norm(pl.normal), x = norm(pl.xDir);
+  const y = [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]];
+  return { o: pl.origin, n, x, y };
+}
+export function norm(a) { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; }
+export function to3(fr, p) { return [fr.o[0] + fr.x[0] * p[0] + fr.y[0] * p[1], fr.o[1] + fr.x[1] * p[0] + fr.y[1] * p[1], fr.o[2] + fr.x[2] * p[0] + fr.y[2] * p[1]]; }
+export function segDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const L2 = dx * dx + dy * dy || 1e-9;
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
+  return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
+}
+// circle through edge polyline points (3D)
+export function circle3(pts) {
+  const n = pts.length / 3;
+  if (n < 3) return null;
+  const P = (i) => [pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]];
+  const a = P(0), b = P(Math.floor(n / 3)), c = P(Math.floor((2 * n) / 3));
+  const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+  const nn = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+  const nl = Math.hypot(...nn);
+  if (nl < 1e-12) return null;
+  const nz = nn.map((v) => v / nl);
+  const ux = norm(ab), uy = [nz[1] * ux[2] - nz[2] * ux[1], nz[2] * ux[0] - nz[0] * ux[2], nz[0] * ux[1] - nz[1] * ux[0]];
+  const L = (p) => { const d = [p[0] - a[0], p[1] - a[1], p[2] - a[2]]; return [d[0] * ux[0] + d[1] * ux[1] + d[2] * ux[2], d[0] * uy[0] + d[1] * uy[1] + d[2] * uy[2]]; };
+  const cc = circleFrom3(L(a), L(b), L(c));
+  if (!cc) return null;
+  const center = [a[0] + ux[0] * cc.c[0] + uy[0] * cc.c[1], a[1] + ux[1] * cc.c[0] + uy[1] * cc.c[1], a[2] + ux[2] * cc.c[0] + uy[2] * cc.c[1]];
+  return { c: center, r: cc.r, n: nz };
+}
+// axis from an edge: line direction, or circle center + normal
+export function edgeAxis(ed) {
+  const pts = ed.pts;
+  if (!pts || pts.length < 6) return null;
+  if (ed.type === 'circle') { const c = circle3(pts); return c ? { p: c.c, d: c.n } : null; }
+  const a = [pts[0], pts[1], pts[2]], b = [pts[pts.length - 3], pts[pts.length - 2], pts[pts.length - 1]];
+  return { p: a, d: norm([b[0] - a[0], b[1] - a[1], b[2] - a[2]]) };
+}
+
+// mix in methods split off into separate files
+for (const M of [PartPicking, PartTree, PartSketching, PartFeatures, PartExchange]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(PartDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));

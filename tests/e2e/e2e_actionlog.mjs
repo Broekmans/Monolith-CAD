@@ -1,0 +1,18 @@
+import { _electron as electron } from 'playwright-core';
+import fs from 'node:fs';
+const app = await electron.launch({ executablePath: './node_modules/.bin/electron', args: ['.', '--no-sandbox'], env: { ...process.env, MONOLITH_TEST: '1', MONOLITH_LOGTEST: '1' }, timeout: 60000 });
+const win = await app.firstWindow();
+const errs = []; win.on('pageerror', (e) => errs.push(e.message));
+await win.waitForTimeout(3500);
+console.log('dialog', await win.locator('.dlg-title').textContent());
+await win.screenshot({ path: 'tests/e2e/shots/consent.png' });
+await win.locator('.dlg button:has-text("Yes")').click(); await win.waitForTimeout(500);
+const cb = win.locator('.wl-log input');
+console.log('toggle checked', await cb.isChecked());
+await cb.click(); await win.waitForTimeout(300);
+console.log('cfg', await win.evaluate(() => window.monolith.logCfg()));
+await cb.click(); await win.waitForTimeout(300);
+console.log('cfg', await win.evaluate(() => window.monolith.logCfg()));
+await win.screenshot({ path: 'tests/e2e/shots/home.png' });
+console.log('errors', errs);
+await app.close();
