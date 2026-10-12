@@ -86,6 +86,7 @@ export const ICONS = {
   insertComp: svg(`<path d="M12 6l8 4v8l-8 4-8-4v-8z" fill="#e8c27a"/><path d="M4 10l8 4 8-4M12 14v8"/><path d="M12 1v6M9.5 4.5L12 7l2.5-2.5" stroke="#1a9a3a" stroke-width="2"/>`),
   bolt: svg(`<path d="M6 3h12l2 4H4z" fill="#b8c0cc"/><path d="M9 7h6v14H9z" fill="#d6dbe2"/><path d="M9 10l6 1.5M9 13l6 1.5M9 16l6 1.5M9 19l6 1.5"/>`),
   part: svg(`<path d="M12 2l9 5v10l-9 5-9-5V7z" fill="#e8c27a"/><path d="M3 7l9 5 9-5M12 12v10"/>`),
+  drawing: svg(`<path d="M3 4h18v16H3z" fill="#fff"/><path d="M5 6h14v12H5z" stroke-width="1"/><path d="M13 14h6M13 16h6M13 14v4" stroke-width="1"/><path d="M7 8h4v4H7z" stroke-width="1.4"/>`),
   plan: svg(`<path d="M3 3h18v18H3z" fill="#fff"/><path d="M3 10h8v11M11 10V3M15 14h6M11 15h2" stroke-width="1.8"/>`),
   origin: svg(`<path d="M12 4v16M4 12h16" stroke="#c03030"/><circle cx="12" cy="12" r="3"/>`),
   folder: svg(`<path d="M3 6h6l2 2h10v11H3z" fill="#f0d070"/>`),

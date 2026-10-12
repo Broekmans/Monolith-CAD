@@ -1,6 +1,6 @@
 {
   "name": "monolith",
-  "version": "0.1.36",
+  "version": "0.1.45",
   "description": "Standalone parametric CAD for engineering and architecture",
   "main": "main/main.cjs",
   "scripts": {
@@ -72,6 +72,11 @@
         "ext": "lithpln",
         "name": "MonoLith Plan",
         "description": "MonoLith Plan"
+      },
+      {
+        "ext": "lithpcd",
+        "name": "MonoLith Point Cloud",
+        "description": "MonoLith Point Cloud"
       }
     ],
     "win": {

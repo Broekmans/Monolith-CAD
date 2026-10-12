@@ -11,6 +11,8 @@ import { PartDoc, newPartDoc } from '../part/part.js';
 import { PlanDoc, newPlanDoc } from '../plan/plan.js';
 import { AssemblyDoc, newAssemblyDoc, partSaved, partCache } from '../assembly/assembly.js';
 import { PC_EXTS, isPointCloud, askImportOptions } from '../pointcloud.js';
+import { CloudDoc, newCloudDoc, CLOUD_EXTS } from '../cloud/clouddoc.js';
+import { DrawingDoc, newDrawingDoc } from '../drawing/drawing.js';
 import { EXT, extOf, APP_NAME, SLOTS, boot, App } from '../main.js';
 
 export class AppFiles {
@@ -23,7 +25,7 @@ export class AppFiles {
     t.path = path ? path.replace(/\.ek(prt|asm|pln)$/i, '.lith$1') : null;
     t.dirty = false;
     if (docData.kind === 'part') delete docData.cache; // display cache is only for assemblies; rebuilt on save
-    t.doc = docData.kind === 'plan' ? new PlanDoc(t, docData) : docData.kind === 'assembly' ? new AssemblyDoc(t, docData) : new PartDoc(t, docData);
+    t.doc = docData.kind === 'drawing' ? new DrawingDoc(t, docData) : docData.kind === 'cloud' ? new CloudDoc(t, docData) : docData.kind === 'plan' ? new PlanDoc(t, docData) : docData.kind === 'assembly' ? new AssemblyDoc(t, docData) : new PartDoc(t, docData);
     document.body.dataset.kind = docData.kind;
     t.showPanel('tree');
     t.doc.init();
@@ -33,9 +35,9 @@ export class AppFiles {
 
   async newDoc(kind) {
     const app = this.root;
-    app.docCounter ||= { part: 0, plan: 0, assembly: 0 };
+    app.docCounter ||= { part: 0, plan: 0, assembly: 0, cloud: 0, drawing: 0 };
     const n = ++app.docCounter[kind];
-    await this.loadDoc(kind === 'plan' ? newPlanDoc(`Plan${n}`) : kind === 'assembly' ? newAssemblyDoc(`Assembly${n}`) : newPartDoc(`Part${n}`));
+    await this.loadDoc(kind === 'drawing' ? newDrawingDoc(`Drawing${n}`) : kind === 'cloud' ? newCloudDoc(`PointCloud${n}`) : kind === 'plan' ? newPlanDoc(`Plan${n}`) : kind === 'assembly' ? newAssemblyDoc(`Assembly${n}`) : newPartDoc(`Part${n}`));
   }
 
   async newDialog() {
@@ -43,9 +45,11 @@ export class AppFiles {
       title: 'New Document',
       body: h('div', { class: 'newdlg' },
         h('div', { class: 'nd' }, h('span', { html: icon('part') }), h('b', {}, 'Part'), h('small', {}, 'Feature-based 3D part: sketches, extrudes, revolves, fillets…')),
-        h('div', { class: 'nd' }, h('span', { html: icon('plan') }), h('b', {}, 'Plan / Drawing'), h('small', {}, '2D drafting and architecture: walls, doors, windows, DXF/DWG')),
-        h('div', { class: 'nd' }, h('span', { html: icon('assembly') }), h('b', {}, 'Assembly'), h('small', {}, 'Insert parts and position them with mates'))),
-      buttons: [{ label: 'Cancel', value: null }, { label: 'Assembly', value: 'assembly' }, { label: 'Part', value: 'part' }, { label: 'Plan', value: 'plan', primary: true }],
+        h('div', { class: 'nd' }, h('span', { html: icon('plan') }), h('b', {}, 'Plan'), h('small', {}, '2D drafting and architecture: walls, doors, windows, DXF/DWG')),
+        h('div', { class: 'nd' }, h('span', { html: icon('drawing') }), h('b', {}, 'Drawing'), h('small', {}, 'Views of parts and assemblies on paper sheets, PDF export')),
+        h('div', { class: 'nd' }, h('span', { html: icon('assembly') }), h('b', {}, 'Assembly'), h('small', {}, 'Insert parts and position them with mates')),
+        h('div', { class: 'nd' }, h('span', { html: icon('cloud') }), h('b', {}, 'Point Cloud'), h('small', {}, 'View and edit laser scans (LAS, LAZ, PLY, XYZ)'))),
+      buttons: [{ label: 'Cancel', value: null }, { label: 'Drawing', value: 'drawing' }, { label: 'Point Cloud', value: 'cloud' }, { label: 'Assembly', value: 'assembly' }, { label: 'Part', value: 'part' }, { label: 'Plan', value: 'plan', primary: true }],
     });
     if (pick) this.newDoc(pick);
   }
@@ -55,7 +59,7 @@ export class AppFiles {
       const np = pathArg.replace(/\.ek(prt|asm|pln)$/i, '.lith$1');
       if (await api.fileExists(np).catch(() => false)) pathArg = np;
     }
-    let f = pathArg ? await api.readFile(pathArg) : await api.openFile({ filters: [{ name: 'MonoLith documents', extensions: ['lithprt', 'lithasm', 'lithpln', 'ekprt', 'ekasm', 'ekpln'] }, { name: 'CAD files', extensions: ['dxf', 'dwg', 'step', 'stp', 'igs', 'iges'] }, { name: 'Point clouds', extensions: PC_EXTS }, { name: 'All files', extensions: ['*'] }] });
+    let f = pathArg ? await api.readFile(pathArg) : await api.openFile({ filters: [{ name: 'MonoLith documents', extensions: ['lithprt', 'lithasm', 'lithpln', 'lithpcd', 'lithdrw', 'ekprt', 'ekasm', 'ekpln'] }, { name: 'CAD files', extensions: ['dxf', 'dwg', 'step', 'stp', 'igs', 'iges'] }, { name: 'Point clouds', extensions: PC_EXTS }, { name: 'All files', extensions: ['*'] }] });
     if (!f) return;
     if (!pathArg && /\.ek(prt|asm|pln)$/i.test(f.path)) {
       const np = f.path.replace(/\.ek(prt|asm|pln)$/i, '.lith$1');
@@ -63,9 +67,9 @@ export class AppFiles {
     }
     const ext = f.path.split('.').pop().toLowerCase();
     if (isPointCloud(f.path)) {
-      // a scan opened on its own starts a Plan (scan-to-plan); use Import to add it to a part
-      await this.loadDoc(newPlanDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
-      await this.importPointCloud(f.path);
+      // a scan opened on its own starts a Point Cloud document; Import adds it to a part or plan as reference
+      await this.loadDoc(newCloudDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
+      await this.doc.addCloud(f.path);
       return;
     }
     if (['dxf', 'dwg'].includes(ext)) {
@@ -94,7 +98,7 @@ export class AppFiles {
       const key = cacheKey(rest.features, rest.rollback ?? undefined);
       data = sm && sm.key === key ? { ...rest, cache: { key, mesh: packMesh(sm.mesh) } } : rest;
     }
-    const thumb = makeThumb(this.doc.vp);
+    const thumb = this.doc.makeThumb ? this.doc.makeThumb() : makeThumb(this.doc.vp, this.doc.thumbBox?.());
     if (thumb) data = { ...data, thumb }; // shown on the Home screen project cards
     const text = JSON.stringify(data);
     let path = this.path;
@@ -103,18 +107,20 @@ export class AppFiles {
       const pd = this.root.currentProject;
       const dir = as && path ? path.replace(/[\\/][^\\/]*$/, '') : pd;
       const def = (dir ? dir + (dir.includes('\\') ? '\\' : '/') : '') + `${this.doc.title}.${ext}`;
-      path = await api.saveFile({ defaultPath: def, filters: [{ name: { plan: 'MonoLith Plan', assembly: 'MonoLith Assembly' }[kind] || 'MonoLith Part', extensions: [ext] }], text });
+      path = await api.saveFile({ defaultPath: def, filters: [{ name: { drawing: 'MonoLith Drawing', plan: 'MonoLith Plan', assembly: 'MonoLith Assembly', cloud: 'MonoLith Point Cloud' }[kind] || 'MonoLith Part', extensions: [ext] }], text });
       if (!path) return false;
     } else await api.writeFile(path, text);
     this.path = path;
     if (kind === 'part' || kind === 'assembly') partSaved(path); // assemblies using it reload it
     this.setDirty(false);
+    this.doc.afterSave?.();
     toast(`Saved ${path.split(/[\\/]/).pop()}`, 'ok', 2000);
     return true;
   }
 
   async importFile() {
     if (!this.doc) return;
+    if (this.doc.doc.kind === 'cloud') { await this.doc.addCloudDialog(); return; }
     const filters = this.doc.doc.kind === 'plan'
       ? [{ name: 'Drawings & point clouds', extensions: ['dxf', 'dwg', ...PC_EXTS] }]
       : [{ name: 'CAD models, sketches & point clouds', extensions: ['step', 'stp', 'igs', 'iges', 'dxf', 'dwg', ...PC_EXTS] }];
@@ -124,6 +130,7 @@ export class AppFiles {
 
   async importPointCloud(path) {
     if (!this.doc) return;
+    if (this.doc.doc.kind === 'cloud') { if (path) await this.doc.addCloud(path); else await this.doc.addCloudDialog(); return; }
     if (!path) {
       const f = await api.openFile({ filters: [{ name: 'Point clouds', extensions: PC_EXTS }], noRead: true });
       if (!f) return;
@@ -165,12 +172,12 @@ export class AppFiles {
 }
 
 // small JPEG of the model (isometric, zoomed to fit) for the Home screen; the user's view is not changed
-export function makeThumb(vp) {
+export function makeThumb(vp, boxIn = null) {
   try {
     const r = vp?.renderer, src = r?.domElement;
     if (!src || !src.width || !vp.width || !vp.height) return null;
-    const box = new THREE.Box3();
-    vp.scene.traverse((o) => { if (o.isMesh && o.visible && !o.userData.isCap && !o.material?.transparent && o.geometry) { o.geometry.computeBoundingBox(); if (o.geometry.boundingBox) box.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld)); } });
+    const box = boxIn && !boxIn.isEmpty() ? boxIn.clone() : new THREE.Box3();
+    if (!boxIn) vp.scene.traverse((o) => { if (o.isMesh && o.visible && !o.userData.isCap && !o.material?.transparent && o.geometry) { o.geometry.computeBoundingBox(); if (o.geometry.boundingBox) box.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld)); } });
     if (box.isEmpty()) return null;
     const TW = 320, TH = 200, A = TW / TH;
     const center = box.getCenter(new THREE.Vector3());

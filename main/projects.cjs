@@ -10,7 +10,7 @@ function projectsRoot() {
   try { fs.mkdirSync(d, { recursive: true }); } catch { /* ignore */ }
   return d;
 }
-const KIND = { '.lithprt': 'part', '.lithasm': 'assembly', '.lithpln': 'plan' };
+const KIND = { '.lithprt': 'part', '.lithasm': 'assembly', '.lithpln': 'plan', '.lithpcd': 'cloud', '.lithdrw': 'drawing' };
 const norm = (p) => path.resolve(p).toLowerCase();
 
 function walk(dir, out = [], depth = 0) {
@@ -46,7 +46,7 @@ function scanProject(dir) {
   const subs = asms.filter((a) => a !== main).sort((a, b) => b.uses.length - a.uses.length);
   const parts = files.filter((f) => f.kind === 'part').sort((a, b) => b.mtime - a.mtime);
   const cover = (main && main.thumb ? main : null) || pick(subs) || pick(parts) || pick(files);
-  const order = { main: 0, sub: 1, part: 2, plan: 3 };
+  const order = { main: 0, sub: 1, part: 2, plan: 3, cloud: 4, drawing: 5 };
   files.sort((a, b) => order[a.role] - order[b.role] || a.name.localeCompare(b.name, undefined, { numeric: true }));
   const mtime = Math.max(0, ...files.map((f) => f.mtime));
   return { name: path.basename(dir), dir, main: main?.path || null, cover: cover ? { path: cover.path, thumb: cover.thumb, kind: cover.kind } : null, mtime,

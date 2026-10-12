@@ -15,6 +15,7 @@ const { listProjects, createProject, openFolder, projectsRoot } = require('./pro
 const { pcCall, startWorker, kernel, stopWorkers } = require('./kernel.cjs');
 const { logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
 const { dwgToDxf, dxfToDwg, listFonts } = require('./tools.cjs');
+const { setupCloudIPC, stopCloudWorkers } = require('./cloudio.cjs');
 protocol.registerSchemesAsPrivileged([{ scheme: 'monolith', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 
 // ---------------- windows ----------------
@@ -52,6 +53,8 @@ function buildMenu() {
       { label: 'New Part', accelerator: 'CmdOrCtrl+Shift+P', click: () => send('new-part') },
       { label: 'New Plan / Drawing', accelerator: 'CmdOrCtrl+Shift+D', click: () => send('new-plan') },
       { label: 'New Assembly', accelerator: 'CmdOrCtrl+Shift+A', click: () => send('new-assembly') },
+      { label: 'New Point Cloud', accelerator: 'CmdOrCtrl+Shift+L', click: () => send('new-cloud') },
+      { label: 'New Drawing', click: () => send('new-drawing') },
       { label: 'Open…', accelerator: 'CmdOrCtrl+O', click: () => send('open') },
       { label: 'Open Recent', submenu: recent.length ? recent.map((p) => ({ label: p, click: () => send('open', p) })) : [{ label: '(none)', enabled: false }] },
       { type: 'separator' },
@@ -124,6 +127,7 @@ function setupIPC() {
     return readDoc(p);
   });
   ipcMain.handle('file:read', (_e, p) => { addRecent(p); if (/\.(las|laz|ply|xyz|pts|txt|csv)$/i.test(p)) return { path: p, text: '' }; return readDoc(p); });
+  setupCloudIPC(ipcMain);
   ipcMain.handle('pc:info', (e, p) => pcCall('info', { path: p }, e.sender));
   ipcMain.handle('pc:load', (e, args) => pcCall('load', args, e.sender));
   ipcMain.handle('file:exists', (_e, p) => fs.existsSync(p));
@@ -131,11 +135,11 @@ function setupIPC() {
     const win = BrowserWindow.fromWebContents(e.sender);
     const r = await dialog.showSaveDialog(win, { defaultPath: opts.defaultPath, filters: opts.filters });
     if (r.canceled || !r.filePath) return null;
-    if (!opts.noWrite) fs.writeFileSync(r.filePath, opts.text ?? '', /\.dxf$/i.test(r.filePath) ? 'latin1' : 'utf8');
+    if (!opts.noWrite) fs.writeFileSync(r.filePath, opts.text ?? '', opts.latin1 || /\.(dxf|pdf)$/i.test(r.filePath) ? 'latin1' : 'utf8');
     addRecent(r.filePath); buildMenu();
     return r.filePath;
   });
-  ipcMain.handle('file:write', (_e, p, text) => { fs.writeFileSync(p, text, 'utf8'); addRecent(p); return true; });
+  ipcMain.handle('file:write', (_e, p, text) => { fs.writeFileSync(p, text, /\.pdf$/i.test(p) ? 'latin1' : 'utf8'); addRecent(p); return true; });
   ipcMain.handle('dwg:toDxf', async (_e, p) => { try { return { ok: true, text: await dwgToDxf(p) }; } catch (err) { return { ok: false, error: String(err.message || err) }; } });
   ipcMain.handle('dwg:fromDxf', async (_e, text, outPath) => { try { await dxfToDwg(text, outPath); return { ok: true }; } catch (err) { return { ok: false, error: String(err.message || err) }; } });
   ipcMain.handle('win:new', (_e, kind, p) => { createWindow(p ? { open: p } : { kind }); return true; });
@@ -157,12 +161,12 @@ function setupIPC() {
 }
 
 // ---------------- app lifecycle ----------------
-const fileArg = () => process.argv.slice(app.isPackaged ? 1 : 2).find((a) => /\.(lithprt|lithasm|lithpln|ekprt|ekasm|ekpln|dxf|dwg|step|stp|igs|iges|las|laz|ply|xyz|pts)$/i.test(a) && fs.existsSync(a));
+const fileArg = () => process.argv.slice(app.isPackaged ? 1 : 2).find((a) => /\.(lithprt|lithasm|lithpln|lithpcd|lithdrw|ekprt|ekasm|ekpln|dxf|dwg|step|stp|igs|iges|las|laz|ply|xyz|pts)$/i.test(a) && fs.existsSync(a));
 
 if (!app.requestSingleInstanceLock() && !isTest) app.quit();
 else {
   app.on('second-instance', (_e, argv) => {
-    const f = argv.find((a) => /\.(lithprt|lithasm|lithpln|ekprt|ekasm|ekpln|dxf|dwg|step|stp|igs|iges)$/i.test(a) && fs.existsSync(a));
+    const f = argv.find((a) => /\.(lithprt|lithasm|lithpln|lithpcd|lithdrw|ekprt|ekasm|ekpln|dxf|dwg|step|stp|igs|iges)$/i.test(a) && fs.existsSync(a));
     const w = [...windows][0];
     if (!w) { createWindow(f ? { open: f } : {}); return; }
     if (w.isMinimized()) w.restore();
@@ -184,7 +188,7 @@ else {
     const kind = process.env.MONOLITH_KIND;
     createWindow(f ? { open: f } : kind ? { kind } : {});
   });
-  app.on('window-all-closed', () => { stopWorkers(); app.quit(); });
+  app.on('window-all-closed', () => { stopWorkers(); stopCloudWorkers(); app.quit(); });
 }
 
 module.exports = { kernel };

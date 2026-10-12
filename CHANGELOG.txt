@@ -1,3 +1,81 @@
+0.1.45 (2026-10-12)
+- Drawing: Projected View now works by moving the mouse. Select a view, click Projected View and move the mouse right, left, up or down for a projected view (stays aligned), or diagonally for an isometric view, then click to place it. Place several in a row; Esc ends.
+- Section View: click two points across a view for the cutting line (snaps to horizontal / vertical and to model points), move the mouse to the side you look from and click to place SECTION A-A. Cut faces are hatched; the cutting line shows thick ends, arrows and letters. Rebuild Views also redoes sections.
+- New "Annotate" tab. Smart Dimension: click a line for its length, two points for the distance between them (horizontal, vertical or aligned, chosen by where you place it, or fixed in the panel), two lines for the angle, or a circle / arc for its diameter or radius. Area: click the corners of an outline (or a circle) and place the label (mm², and m² for large areas). Note: text, with an arrow when you start on the model.
+- Dimensions show the real model size in mm whatever the view scale, and move and scale with their view. Drag a dimension's text to move it; double-click to switch horizontal / vertical / aligned or radius / diameter, or to edit a note; Delete removes it. Dimension Style sets the number of decimals.
+- Everything is exported to the PDF as vector lines and text.
+- Fix: Model View with more than one orientation placed only the first view.
+
+0.1.44 (2026-10-12)
+- Drawing: when you change the scale of a view, its projected views get the same scale and stay neatly next to it.
+- Every view has a faint dotted frame (blue when selected). Drag the frame to move the view; clicking inside a view only selects it.
+- Warm, paper-coloured sheet that is easy on the eyes, with a dark surrounding in dark mode. The PDF stays white.
+- The title block is only as wide as its text needs (at least 110 mm).
+- Zone grid: numbers (1, 2, 3…) along the top and bottom and letters (A, B, C…) along the sides of the sheet, automatic (about 50 mm per zone) or with your own number of zones. Also in the PDF.
+- New "Sheet" tab with Sheet Format, Zone Grid, Title Block and Add/Delete Sheet.
+- The view switches in the side panel are now a tidy column.
+
+0.1.43 (2026-10-12)
+- New document type: Drawing (.lithdrw). Start it from Home (New Drawing), File > New Drawing or the New dialog.
+- Standard 3 Views: front, top and right view of a part or assembly in third angle projection (top view above, right view to the right), with a scale chosen to fit the sheet.
+- Model View: one view in any standard direction (front, back, top, bottom, left, right) or isometric. Projected View: a view above, below, left or right of a selected view.
+- Views are exact (hidden-line removal on the model). Hidden lines (dashed) can be switched on per view; tangent edges and the view label can be switched off. A view can have its own scale.
+- Drag views to move them: projected views stay in line with their parent, and moving a parent view moves its projected views along. Undo/Redo, Delete.
+- Sheets: A4, A3, A2, A1 or A0, landscape or portrait, with a scale per sheet; several sheets per drawing. Frame with centring marks and a third angle projection symbol.
+- Title block: company, title, drawing number, drawn by, date and revision are filled in by you; the model name, scale and sheet number (x / y) are filled in automatically.
+- Export PDF: all sheets in one PDF, true to scale (print at 100%), with vector lines and text.
+- Rebuild Views reads the part and assembly files again after they have changed (save the part first).
+
+0.1.42 (2026-10-12)
+- Point Cloud: new "Register" tab.
+- Align Clouds: align a moving cloud to a reference cloud. Click a point on the moving cloud (orange), then the same spot on the reference (blue); with 3 or more pairs the cloud moves right away. Every pair shows its error, and a pair that does not fit the others is pointed out. "Level only" turns the cloud only about Z (keeps it level; 2 pairs are enough).
+- Refine with ICP: fine alignment on the overlapping surfaces, starting from the point pairs or from a rough position. Shows the RMS error, overlap and number of iterations. Works on very large scans too (it uses an even sample of the points).
+- Align Part: put a part or assembly on a scan the same way (point pairs, then ICP). The part moves; the scan keeps its coordinates. Cloud to Part then uses this placement ("Move part" still nudges it on top).
+- The alignment is stored as the cloud's transformation (applied at the next edit or export), can be undone, and the result (matrix, RMS) can be saved as a text report.
+
+0.1.41 (2026-10-12)
+- Point Cloud: new "Analyse" tab.
+- Normals: the surface direction of every point (nx, ny, nz) plus curvature and verticality (0 = floor or ceiling, 1 = wall). New colour "Normals" shows the direction.
+- Density: points per m², per m³ or the number of neighbours within a radius, to see where a scan is thin.
+- Cloud to Cloud: the distance from every point to a reference cloud, to its local surface or to the nearest point, optionally split into X, Y and Z. Signed (+ / −) when the reference has normals.
+- Cloud to Part: the deviation of a scan from a part or assembly (as built vs. design), signed: + outside, − inside the part. The part is shown in the view while you place it; "Put part on the scan" places it quickly.
+- Each result is a new cloud with the values as fields (Undo, save and export work as for edits). Its panel shows min, max, mean, RMS, standard deviation and a histogram; a tolerance (± mm) shows the points green (within), red (above) or blue (below) with percentages. Points outside the colour range can be shown grey or hidden. Statistics can be saved as CSV.
+- Fix: a stray "null" line in the cloud information panel.
+
+0.1.40 (2026-10-12)
+- Point Cloud: new "Measure" tab.
+- Point Info: click a scan point to see its coordinates, colour, intensity, classification and all extra fields (for example room, plane_id, verticality).
+- Measure Distance (with horizontal distance and ΔX, ΔY, ΔZ), Height (vertical distance between two points), Angle (three points) and Polyline (length along several points plus the enclosed area in plan view; right click or Enter finishes).
+- The cursor snaps to the nearest scan point on the surface in front, so measurements are as accurate as the scan. The live value is shown at the cursor, the coordinates in the status bar. Zoom in for the most precise picks.
+- Measurements stay in the view as lines with a label and are listed under "Measurements" in the tree: show/hide, rename, zoom to, delete (right click). Clicking one shows all its values and point coordinates. They are saved in the point cloud document and can be undone.
+- Export CSV: all measurements in a file that opens directly in Excel (Dutch number format).
+
+0.1.39 (2026-10-12)
+- Very large scans now open (built for 600 million points and more). Before, a scan that did not fit in memory at once stopped with "Array buffer allocation failed". Scans larger than about 30% of the computer's memory are now prepared in parts: MonoLith first counts the points per area, then reads the file a few more times and each time processes one group of areas, so memory use stays limited whatever the size of the scan. The progress window shows "part 2 of 4" etc. Smaller scans are prepared in one go as before.
+- Before preparing a scan or an edit, MonoLith checks that the drive has enough free space for the display cache (about 26 bytes per point plus 4 per extra field: roughly 15 GB for a 600 million point scan) and tells you if it does not.
+- Segment, Crop Box, Filter by Value, random Subsample and Merge also work on these very large clouds (in parts). Subsample by spacing and the Noise Filters need all neighbouring points at once; on very large clouds they ask you to crop or segment the part you need first.
+
+0.1.38 (2026-10-12)
+- Point Cloud editing (new "Edit" tab). Edits never change your scan files: every edit makes new clouds from the full-resolution points, the original is hidden, and everything can be undone (Ctrl+Z / Ctrl+Y or the Undo/Redo buttons). Results are stored in a folder "<document> clouds" next to the point cloud document; the document must be saved once before the first edit.
+- Segment: draw a polygon over the view (left click per point, right click / double click / Enter to close, Backspace removes the last point). Default result is a split into "inside" and "outside"; you can also keep only the inside or only the outside. The cut goes through the whole scan along the viewing direction.
+- Crop Box: drag the coloured squares on the box in the view or type the limits; the view shows the result live before you press OK. Keep inside, keep outside or split.
+- Filter by Value: keep or remove points by height, intensity, classification or any field, for example room = 3 or a plane type.
+- Subsample: even density with a minimum spacing (for example 2 or 5 cm), or a random percentage.
+- Noise Filter: statistical outlier removal (neighbours k and deviation σ) or a radius filter (minimum number of neighbours within a radius). The typical point spacing of the cloud is shown as a guide.
+- Merge: select two or more clouds with Ctrl+click in the tree and combine them into one (different extra fields are combined).
+- Transform: move a cloud in X/Y/Z, rotate it around Z (around its centre) or enter a 4x4 matrix. The cloud moves right away; the points themselves are changed at the next edit or export. "Reset to original position" undoes it.
+- Clouds can be renamed (right click), and several clouds can be removed at once. Unused result files are deleted from the results folder when you save.
+
+0.1.37 (2026-10-12)
+- New document type: Point Cloud (.lithpcd). Start it from Home ("New Point Cloud"), File > New Point Cloud (Ctrl+Shift+L), or by opening a LAS, LAZ, PLY, XYZ, PTS or CSV file directly. Several scans can go into one document; each can be shown or hidden.
+- Built for very large scans: the first time a scan is opened, MonoLith reads it with several processor cores at once and prepares a display cache file next to it (<scan>.lithcache). Opening the scan again only takes a moment. A progress window shows the step, the percentage, the time left and the memory used.
+- Only the points that matter for the current view are drawn (up to the point budget, 10 million by default, adjustable). Zooming in loads more detail; while turning the view, fewer points are drawn so it stays smooth.
+- Colour by scan colours (RGB), height, intensity, classification, or any extra field in the file (for example room, plane_id, verticality from the converters), with an adjustable range and an option for a different colour per value.
+- Depth shading makes walls, edges and objects stand out (can be switched off; strength adjustable). Point size and round points can be set.
+- Height section: show only the points between two heights, with a one-click floor plan slice.
+- Export a scan as LAS (with all extra fields), PLY or XYZ. LAZ export is not available yet.
+- Note: opening a point cloud file now starts a Point Cloud document. To use a scan as a reference in a Plan or Part, use Import Point Cloud there (unchanged).
+
 0.1.36 (2026-10-12)
 - Projects on the Home screen: every folder in "CAD Program\Projects" is a project, shown as a card with a picture and its name. The picture is the main assembly, or a subassembly when there is no main assembly, or a part when there are no assemblies.
 - Click a project to see its files (main assembly, subassemblies, parts, plans) with pictures; "Open main assembly", "Show folder", and New Part/Assembly/Plan straight into the project folder.

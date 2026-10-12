@@ -144,7 +144,7 @@ export class Viewport {
       o.add(cap);
     });
     r.clippingPlanes = sec ? [new THREE.Plane(new THREE.Vector3(...sec.n), sec.c)] : [];
-    r.render(this.scene, this.camera);
+    if (this.renderScene) this.renderScene(r); else r.render(this.scene, this.camera);
     r.clippingPlanes = [];
     if (sec) this._renderSecAxes(sec);
     if (this.mode === '3d') {

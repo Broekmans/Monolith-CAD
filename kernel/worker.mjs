@@ -3,6 +3,7 @@
 import { parentPort } from 'node:worker_threads';
 import initOpenCascade from 'opencascade.js/dist/node.js';
 import * as K from './occ.mjs';
+import { hlrView, sectionView } from './drawing.mjs';
 
 const quiet = { print: () => {}, printErr: () => {} };
 const ready = K.initKernel(() => initOpenCascade({ module: quiet }));
@@ -13,6 +14,7 @@ function meshTransfer(m) {
   return transfer;
 }
 
+const isIdent = (m) => !m || m.every((v, i) => Math.abs(v - (i % 5 === 0 ? 1 : 0)) < 1e-12);
 const ops = {
   regen({ features, upTo }) {
     const r = K.regenerate(features, { upTo });
@@ -36,6 +38,12 @@ const ops = {
   exportAssembly({ parts, format }) {
     const shape = K.assemblyShape(parts.map((p) => ({ body: K.regenerate(p.features, { upTo: p.upTo }).body, m: p.m })));
     return { result: format === 'iges' ? K.writeIges(shape) : K.writeStep(shape) };
+  },
+  drawView({ parts, views }) {
+    const bodies = parts.map((p) => ({ body: K.regenerate(p.features, { upTo: p.upTo }).body, m: p.m })).filter((b) => b.body);
+    if (!bodies.length) throw new Error('Nothing to draw');
+    const shape = bodies.length === 1 && isIdent(bodies[0].m) ? bodies[0].body : K.assemblyShape(bodies);
+    return { result: views.map((v) => (v.plane ? sectionView(shape, v.plane, v.dir, v.xDir, !!v.hidden) : hlrView(shape, v.dir, v.xDir, !!v.hidden))) };
   },
   ping() { return { result: 'pong' }; },
 };

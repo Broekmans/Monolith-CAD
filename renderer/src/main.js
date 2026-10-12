@@ -13,7 +13,7 @@ import { AssemblyDoc, newAssemblyDoc, partSaved, partCache } from './assembly/as
 import { PC_EXTS, isPointCloud, askImportOptions } from './pointcloud.js';
 import { AppFiles } from './app/files.js';
 import { AppSettings } from './app/settings.js';
-export const EXT = { part: 'lithprt', plan: 'lithpln', assembly: 'lithasm' };
+export const EXT = { part: 'lithprt', plan: 'lithpln', assembly: 'lithasm', cloud: 'lithpcd', drawing: 'lithdrw' };
 export const extOf = (k) => EXT[k] || 'lithprt';
 
 export const APP_NAME = 'MonoLith';
@@ -136,7 +136,7 @@ export class App {
   renderLeftTabs() {
     if (!this.isActive()) return;
     const kind = this.doc?.doc.kind;
-    const tabs = kind === 'plan' ? [['tree', 'layers', 'Layers & Properties']] : kind === 'assembly' ? [['tree', 'assembly', 'Assembly'], ['pm', 'check', 'PropertyManager']] : [['tree', 'part', 'FeatureManager'], ['props', 'relation', 'Sketch'], ['pm', 'check', 'PropertyManager']];
+    const tabs = kind === 'drawing' ? [['tree', 'drawing', 'Sheets & Views'], ['pm', 'check', 'PropertyManager']] : kind === 'cloud' ? [['tree', 'cloud', 'Point Clouds'], ['pm', 'check', 'PropertyManager']] : kind === 'plan' ? [['tree', 'layers', 'Layers & Properties']] : kind === 'assembly' ? [['tree', 'assembly', 'Assembly'], ['pm', 'check', 'PropertyManager']] : [['tree', 'part', 'FeatureManager'], ['props', 'relation', 'Sketch'], ['pm', 'check', 'PropertyManager']];
     this.el.leftTabs.innerHTML = '';
     for (const [id, ic, tip] of tabs) {
       if (id === 'pm' && !this.pm.open) continue;
@@ -241,7 +241,7 @@ export class App {
     for (const t of app.tabs) {
       const kind = t.doc?.doc.kind;
       const name = t.path ? t.path.split(/[\\/]/).pop() : (t.doc?.title || 'Document') + '.' + extOf(kind);
-      mk(t, name + (t.dirty ? ' *' : ''), kind === 'plan' ? 'plan' : kind === 'assembly' ? 'assembly' : 'part');
+      mk(t, name + (t.dirty ? ' *' : ''), kind === 'drawing' ? 'drawing' : kind === 'cloud' ? 'cloud' : kind === 'plan' ? 'plan' : kind === 'assembly' ? 'assembly' : 'part');
     }
   }
   closeDoc() { this.root.closeTab(this); }
@@ -256,16 +256,16 @@ export class App {
     try { pj = (await api.projects()) || pj; } catch { /* ignore */ }
     const info = await api.info().catch(() => ({}));
     const logc = (await api.logCfg?.().catch(() => null)) || { enabled: true };
-    const kindIco = (p) => icon(/\.(lith|ek)pln$/i.test(p) ? 'plan' : /\.(lith|ek)asm$/i.test(p) ? 'assembly' : 'part');
+    const kindIco = (p) => icon(/\.lithdrw$/i.test(p) ? 'drawing' : /\.lithpcd$/i.test(p) ? 'cloud' : /\.(lith|ek)pln$/i.test(p) ? 'plan' : /\.(lith|ek)asm$/i.test(p) ? 'assembly' : 'part');
     const base = (p) => p.split(/[\\/]/).pop();
     const dirOf = (p) => p.replace(/[\\/][^\\/]*$/, '');
-    const thumbEl = (f, cls = 'pj-thumb') => h('div', { class: cls }, f?.thumb ? h('img', { src: f.thumb, alt: '' }) : h('span', { class: 'pj-noimg', html: icon(f?.kind === 'assembly' ? 'assembly' : f?.kind === 'plan' ? 'plan' : 'part') }));
+    const thumbEl = (f, cls = 'pj-thumb') => h('div', { class: cls }, f?.thumb ? h('img', { src: f.thumb, alt: '' }) : h('span', { class: 'pj-noimg', html: icon(f?.kind === 'drawing' ? 'drawing' : f?.kind === 'assembly' ? 'assembly' : f?.kind === 'plan' ? 'plan' : f?.kind === 'cloud' ? 'cloud' : 'part') }));
     const cur = pj.projects.find((x) => x.dir === this.root.currentProject);
 
     // ----- main column: projects grid, or the files of the selected project -----
     let mainCol;
     if (cur) {
-      const ROLE = { main: 'Main assembly', sub: 'Subassembly', part: 'Part', plan: 'Plan' };
+      const ROLE = { main: 'Main assembly', sub: 'Subassembly', part: 'Part', plan: 'Plan', cloud: 'Point cloud', drawing: 'Drawing' };
       mainCol = h('div', { class: 'wl-main' },
         h('div', { class: 'pj-bar' },
           h('button', { class: 'pj-btn', onclick: () => { this.root.setProject(null); } }, '← All projects'),
@@ -276,7 +276,9 @@ export class App {
         h('div', { class: 'pj-new' }, 'New in this project: ',
           h('button', { class: 'pj-btn', onclick: () => this.newDoc('part') }, 'Part'),
           h('button', { class: 'pj-btn', onclick: () => this.newDoc('assembly') }, 'Assembly'),
-          h('button', { class: 'pj-btn', onclick: () => this.newDoc('plan') }, 'Plan')),
+          h('button', { class: 'pj-btn', onclick: () => this.newDoc('drawing') }, 'Drawing'),
+          h('button', { class: 'pj-btn', onclick: () => this.newDoc('plan') }, 'Plan'),
+          h('button', { class: 'pj-btn', onclick: () => this.newDoc('cloud') }, 'Point Cloud')),
         cur.files.length ? h('div', { class: 'pj-grid' }, cur.files.map((f) => h('button', { class: 'pj-card file ' + f.role, title: f.path, onclick: () => this.open(f.path) },
           thumbEl(f), h('div', { class: 'pj-name' }, h('span', { class: 'ico sm', html: kindIco(f.path) }), f.name), h('small', { class: 'pj-role' }, ROLE[f.role] || f.kind))))
           : h('p', { class: 'pj-empty' }, 'No MonoLith files in this project yet. Files you save while this project is open go into its folder.'));
@@ -284,9 +286,11 @@ export class App {
       mainCol = h('div', { class: 'wl-main' },
         h('div', { class: 'wl-cards' },
           h('button', { class: 'wl-card', onclick: () => this.newDoc('part') }, h('span', { class: 'big', html: icon('part') }), h('b', {}, 'New Part'), h('small', {}, 'Sketch, extrude, revolve, fillet — with a full feature history.')),
-          h('button', { class: 'wl-card', onclick: () => this.newDoc('plan') }, h('span', { class: 'big', html: icon('plan') }), h('b', {}, 'New Plan / Drawing'), h('small', {}, '2D drafting with a command line, walls, doors and windows.')),
+          h('button', { class: 'wl-card', onclick: () => this.newDoc('plan') }, h('span', { class: 'big', html: icon('plan') }), h('b', {}, 'New Plan'), h('small', {}, '2D drafting with a command line, walls, doors and windows.')),
+          h('button', { class: 'wl-card', onclick: () => this.newDoc('drawing') }, h('span', { class: 'big', html: icon('drawing') }), h('b', {}, 'New Drawing'), h('small', {}, 'Views of parts and assemblies on paper sheets (A4–A0), exported as PDF.')),
           h('button', { class: 'wl-card', onclick: () => this.newDoc('assembly') }, h('span', { class: 'big', html: icon('assembly') }), h('b', {}, 'New Assembly'), h('small', {}, 'Insert parts and subassemblies, position them with mates.')),
-          h('button', { class: 'wl-card', onclick: () => this.open() }, h('span', { class: 'big', html: icon('open') }), h('b', {}, 'Open…'), h('small', {}, 'MonoLith documents, or import STEP, IGES, DXF and DWG.'))),
+          h('button', { class: 'wl-card', onclick: () => this.newDoc('cloud') }, h('span', { class: 'big', html: icon('cloud') }), h('b', {}, 'New Point Cloud'), h('small', {}, 'Open laser scans (LAS, LAZ, PLY, XYZ) — also very large ones.')),
+          h('button', { class: 'wl-card', onclick: () => this.open() }, h('span', { class: 'big', html: icon('open') }), h('b', {}, 'Open…'), h('small', {}, 'MonoLith documents, scans, or import STEP, IGES, DXF and DWG.'))),
         h('div', { class: 'pj-bar' }, h('h2', {}, 'Projects'), h('span', { class: 'pj-spacer' }),
           h('button', { class: 'pj-btn primary', onclick: () => this.newProject() }, '+ New project'),
           h('button', { class: 'pj-btn', onclick: () => api.openProjectFolder(), title: pj.root }, 'Projects folder')),
@@ -351,6 +355,8 @@ export class App {
       case 'new-part': this.newDoc('part'); break;
       case 'new-plan': this.newDoc('plan'); break;
       case 'new-assembly': this.newDoc('assembly'); break;
+      case 'new-cloud': this.newDoc('cloud'); break;
+      case 'new-drawing': this.newDoc('drawing'); break;
       case 'open': this.open(arg); break;
       case 'save': this.save(); break;
       case 'save-as': this.save(true); break;
@@ -379,6 +385,7 @@ export class App {
       ['Mouse', ''], ['Middle drag', 'Rotate (part) / Pan (plan)'], ['Ctrl + middle drag / right drag', 'Pan'], ['Wheel', 'Zoom at cursor'], ['Alt + left drag', 'Rotate (no middle button)'],
       ['Part', ''], ['Ctrl+1 … Ctrl+7', 'Front, Back, Left, Right, Top, Bottom, Isometric'], ['Ctrl+8', 'Normal To'], ['F', 'Zoom to fit'], ['Arrow keys', 'Rotate view 15°'],
       ['Sketch', ''], ['L / R / C / A', 'Line / Rectangle / Circle / Arc'], ['D', 'Smart Dimension'], ['T', 'Trim'], ['Esc', 'End tool / clear selection'], ['Del', 'Delete selection'],
+      ['Point Cloud', ''], ['F', 'Zoom to fit'], ['Ctrl+1 … Ctrl+7', 'Standard views'], ['Del', 'Remove the selected scan from the document'],
       ['Plan', ''], ['Type a command', 'LINE (L), PLINE, REC, CIRCLE (C), ARC, TEXT, DLI, WALL (W), DOOR, WINDOW, MOVE (M), COPY (CO), RO, SC, MI, O, TR, F, X, E'], ['Coordinates', 'x,y   @dx,dy   @dist<angle   or a distance along the cursor'],
       ['F3 / F7 / F8 / F9', 'Object snap / Grid / Ortho / Snap'], ['Space or Enter', 'Repeat last command / finish'],
     ];
@@ -406,6 +413,6 @@ export async function boot() {
   await askLogConsentOnce(dialog, h);
   if (!open && !kind) await app.showWelcome(); // refresh the toggle
   if (open) await app.open(open);
-  else if (kind === 'part' || kind === 'plan' || kind === 'assembly') await app.newDoc(kind);
+  else if (kind === 'part' || kind === 'plan' || kind === 'assembly' || kind === 'cloud' || kind === 'drawing') await app.newDoc(kind);
 }
 boot();
