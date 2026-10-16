@@ -48,7 +48,8 @@ export class EDLPass {
   }
   // vp: Viewport (orthographic camera; depth is linear between near and far)
   render(r, scene, vp, strength = 1) {
-    const size = r.getDrawingBufferSize(new THREE.Vector2());
+    // pane size in device pixels (an extra pane draws into a corner of a bigger shared canvas)
+    const pr = r.getPixelRatio(), size = new THREE.Vector2(Math.floor(vp.width * pr), Math.floor(vp.height * pr));
     this.ensure(size.x, size.y);
     const cam = vp.camera, dpr = size.x / Math.max(1, vp.width);
     r.setRenderTarget(this.rt);

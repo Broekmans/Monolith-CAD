@@ -1,3 +1,141 @@
+0.1.69 (2026-10-16)
+- DWG files now open without installing anything: MonoLith includes a built-in DWG converter (LibreDWG, free software under the GNU GPL, see MonoLith\resources\libredwg). It reads all DWG versions. When the ODA File Converter is installed it is still used first (best results); the built-in converter takes over when it is missing or fails.
+- DWG export: with the ODA File Converter as before (DWG 2018); without it the built-in converter saves DWG 2000.
+- The status bar says which converter was used.
+- New DWG converter window (File > Export > DWG Converter…, and shown when a conversion fails): shows which converters were found, "Browse for ODA File Converter…" for an installation in another folder (remembered), and a link to the download page.
+- The update file is about 9 MB bigger because it includes the converter.
+
+0.1.68 (2026-10-16)
+- Several views (Viewport menu) now also in Point Cloud and Drawing documents.
+- Point Cloud: every view loads its own level of detail, so zooming in on a corner in one view makes that view sharp without the others losing points. Depth shading, measuring, picking and the editing tools work in every view. The point budget is shared between the views.
+- Drawing: the same sheet in several views, each with its own zoom, e.g. a detail zoomed in next to the whole sheet. The settings boxes and the Room List stay with the active view.
+- Changing the layout zooms every view to fit its new size (the views keep their direction).
+
+0.1.67 (2026-10-16)
+- New "Viewport" menu next to File, Edit and View: Single View, Two Views Side by Side, Two Views Stacked and Four Views (Front, Isometric, Top, Right), Reset Views, Show Grid in This Document and Grid On by Default (moved here from the Interface menu and the Display Style button).
+- Several views in Part and Assembly documents. Each view has its own view cube, axis triad, rotation and zoom. The view under the mouse is the active one (blue border): Zoom to Fit, the standard views and Normal To act on it. Selecting, sketching, dimensions and feature dialogs work in every view; the value box of a feature follows the active view.
+- Drag the line between views to make one bigger; double-click it to centre it again.
+- The layout, the divider positions and the view in each window are saved with the document.
+
+0.1.66 (2026-10-16)
+- Browser tree in a new look: thin chevrons to open and close folders, item counts, rounded rows, and the item you are editing (sketch or feature) shown in green.
+- Part tree: new "Solid Bodies" folder with an eye to hide or show the body (a hidden body cannot be picked; saved in the file, undo works), an "Origin" folder with Front/Top/Right Plane (eye = keep that plane shown, saved in the file) and the Origin Point, and a "Point Clouds" folder. Sketches stay under their feature and now have an eye to show or hide them.
+- Assembly tree: "Components" folder with an eye per component, "Mates" folder with count. Saved Views use the same rows.
+- Folders remember whether they are open or closed.
+- The rollback bar drop position no longer depends on the number of rows above the history.
+- View cube: arrows around the cube turn the view 90 degrees (up, down, left, right), two curved arrows roll the view 90 degrees clockwise or counter-clockwise.
+- Dark mode panels in a calmer blue-grey palette.
+
+0.1.65 (2026-10-15)
+- Feature dialogs (Extruded Boss/Cut, Revolve, Fillet, Chamfer, Shell, Linear and Circular Pattern) now float as a compact box top-left over the 3D view, so the FeatureManager tree stays visible next to it.
+- While the dialog is open, the sketch of the feature stays visible with a light orange fill of its profile, and its dimensions are shown on the model. Double-click a dimension to change it; the preview follows straight away.
+- The main value (Depth, Angle, Radius, Distance, Thickness or Spacing) has its own edit box on the model. Type a value and press Enter = OK, Tab = apply, Esc = Cancel.
+- Extrude: a blue arrow shows the direction. Drag its round handle to change the depth with the mouse (steps follow the zoom; hold Shift for finer steps).
+
+0.1.64 (2026-10-15)
+- Part and Assembly: a grid in the 3D view, on the Top plane (the floor). Its spacing follows the zoom in 1-2-5 steps (every 5th line heavier), so it always reads at a useful size. The X axis runs through it in red and the Z axis in blue. Faces lying on the plane stay on top of it.
+- While sketching, the grid lies on the sketch plane. In Front and Right views (where the floor is seen edge-on) it shows on the plane facing you.
+- Interface menu: "Show Grid" switches the grid on or off for all documents (remembered). Display Style button (in the view toolbar): "Hide Grid" / "Show Grid" for this document only.
+- New 3D view colours: a light blue-grey gradient in light mode and an even dark slate in dark mode.
+
+0.1.63 (2026-10-15)
+- Room Outline, Shift+click: a space on the other side of a wall can now be added to the room. The two spaces are joined through the doorway found in the wall between them (the status bar shows its width). Without a doorway (a cabinet row or a closed door between), they are joined over the full width. New setting "Join across walls up to" (default 400 mm; thicker walls are not crossed), in the room box and in Drafting Standard.
+- Room Outline: clicking in a side view or elevation now says why no room is found (walls behind fill the openings) and what to do: use a floor plan, or set View depth to 0 on a section.
+- Left panel: new "Selection" section with the facts of the selected item. Room / area: name, area, perimeter, width × length, corners, detection method, height slices, number of joined spaces, offset, edited by hand, and every wall length (fold-out). Dimension: value, direction, start and end point, and what it is attached to (scan wall with its fitted ± scatter, or points/edges). Note and scale bar too. It updates while you drag or change settings.
+
+0.1.62 (2026-10-15)
+- Room outline: when you drag a corner or a wall it now only snaps to other rooms and areas (their corners, walls and in-line positions), no longer to the point cloud. Shift still places freely.
+
+0.1.61 (2026-10-15)
+- Room outline: right-click a wall → "Make horizontal" or "Make vertical". The wall turns around its middle; its corners slide along the walls next to it, so those keep their direction.
+- Room outline: corners snap while you drag them, to the corners and walls of other rooms, to scan wall corners and scan walls, and in line (horizontal / vertical) with other corners (dotted guide). A magenta marker shows the snap and the status bar says what it snapped to.
+- Room outline: dragging a wall snaps to a parallel wall of another room or to the scan wall.
+- Snapping is on by default when dragging corners and walls; hold Shift to place freely (the same as Smart Dimension). Before, Shift switched snapping on for walls.
+- Rooms and areas have a light see-through infill. Set its colour and opacity (%) in the room box or in Drafting Standard; 0 % = no infill. "Save as my standard" includes it. The infill is also in the PDF.
+
+0.1.60 (2026-10-15)
+- Room List (Annotate tab): all rooms of the drawing with area, perimeter, width and length, plus the total. Click a column head to sort (names in natural order: Room 2 before Room 10; click again to reverse). Type in a name to rename the room; renaming on the sheet shows in the list straight away. Click a row to select that room. CSV button saves the list for Excel. The list can be dragged by its title and remembers its spot.
+- Double-click a room or area name on the sheet to rename it right there (Enter or click away = done, Esc = cancel).
+- The dot at the end of a room / area label line can be dragged: select the room and drag the dot to where you want it.
+- Room Outline: walls are now put on the room side of the scan scatter (rooms came out a few cm too big; checked against your hand-drawn Kuider room: within 1 to 4 mm). New setting "Wall face at" (default 70 %, 0 = old middle of the scatter).
+- Room Outline: desks and low cabinets that only show in the low slice are skipped when a full-height wall follows within "Skip furniture up to" (default 2000 mm).
+- Room Outline: Shift+click adds another space to the last (or selected) room, for L-shapes like a corridor with a room. Both spaces are recalculated together when you change a setting. Works for rooms with square walls.
+- New room numbers continue from the highest "Room n", so renamed or deleted rooms do not give double numbers.
+- Action log: a held key (Ctrl, Shift) is no longer written hundreds of times.
+
+0.1.59 (2026-10-15)
+- Line weights: type any value yourself (down to 0.01 mm) or pick one from the list, which now starts at 0.05 mm. In the settings box and in Drafting Standard.
+- Room outline: hold Ctrl while dragging a corner to move only that corner, freely (the walls at it may turn).
+
+0.1.58 (2026-10-15)
+- The settings box can be dragged by its title bar. It opens where you left it last time (also after a restart), and the spot is saved again every time you move it.
+- Room and area outlines can be edited by hand. Select the room: corners get small squares and walls get a bar in the middle. Drag a wall to move it in or out (the walls next to it stretch along, corners stay square), or drag a corner. Hold Shift to snap the wall onto the nearest scan wall. Right click on a wall: "Split wall here" adds a step you can pull out to add a space; right click on a corner: "Remove corner". The area updates while you drag; every drag is one undo step.
+- A room edited by hand shows "Edited by hand" with a "Back to detected" button; changing a detection setting asks before your edits are replaced.
+
+0.1.57 (2026-10-14)
+- Room Outline has a new default method, "Walls from the click (rectangle)": from where you click, the program looks left, right, up and down for the first straight wall. Furniture is skipped because it does not run along the room. Settings: wall straightness, wall coverage (%), look past furniture, max. room size, offset. The old method stays available as "Follow the walls (any shape)".
+- Walls are now searched in two height slices together: low (floor + 1.0 to 1.3 m) and high (floor + 1.9 to 2.2 m, above desks, window sills and doors). Both slices can be set per room and in Drafting Standard.
+- Room test files now contain both slices.
+
+0.1.56 (2026-10-14)
+- Room Outline: click a room and its detection settings come first: wall straightness, min. wall length, max. step in a wall, square within, close openings up to (doors and gaps narrower than this are closed; raise it when a room leaks into the next one) and offset (moves the whole outline out + or in −, corners stay square). Every change recalculates the outline. Line style follows; text, leader and position are folded under "Text & label".
+- "Save as my standard" in the room box: the room line style and detection values become the default for new rooms, in this drawing and in new drawings (saved in drafting-standard.json). The new values are also in Drafting Standard.
+- Every room click saves a small test file in Logs\rooms (last 20 kept), so room detection can be rerun and tuned on exactly your scan. Room outlines are no longer cut off in the action log.
+
+0.1.55 (2026-10-14)
+- Room outlines are straight: small steps along the walls from scan noise are removed, walls close to horizontal/vertical are made square. Three values per room (min. wall length 250 mm, max. step in a wall 100 mm, square within 5°); changing them recalculates the outline.
+- Click an annotation (dimension, note, room/area, scale bar) and a settings box opens next to it: name, prefix / value override / suffix, text height and colour, line weight and colour, arrow type and size, extension line gap and overshoot, room outline weight / colour / line type, text position, dimension line offset and direction. Every change can be undone. The box closes when you click empty paper or press Esc; click another annotation to switch. Rooms can also be selected by clicking their outline.
+- Drafting Standard (was Dimension Style): the defaults of the drawing for all of the above, plus units and snapping. Save as company standard (drafting-standard.json in the CAD Program folder; new drawings start from it), load it, or import / export a standard file. "Set as default" in the settings box copies one annotation's look to the drawing.
+- Annotate tab: own icons and clearer names (Polygon Area, Room Outline, Scale Bar, Note / Leader, Drafting Standard).
+- Action log: room results with area and settings, and every annotation setting change.
+
+0.1.54 (2026-10-14)
+- Room tool: room corners are square again (outlines were cut off at the corners, so small rooms came out far too small).
+
+0.1.53 (2026-10-14)
+- Room tool rebuilt: the room is now grown from where you click instead of measured with rays. Door and window openings up to about 1.2 m wide are closed, so the room no longer leaks into the next room, the corridor or outside. Furniture and columns inside the room no longer cut pieces out of it. Small niches narrower than about 1.2 m may be left out.
+
+0.1.52 (2026-10-14)
+- Room tool: no more long spikes or huge areas. Walls that are almost parallel (a jog or niche) no longer make far-away corners; then the traced outline is kept. Outlines that leak out of the building, or rooms with a big gap in the walls, are refused with a message.
+- Room results are written to the action log (for troubleshooting).
+
+0.1.51 (2026-10-14)
+- Room tool works on full-depth (x-ray) top views: the walls are found in a floor plan slice (floor + 1.0 to 1.3 m, the chosen floor level) made in the background, so rooms get their real outline and area. Very small areas (furniture) are refused with a message.
+- "Floor level" for floor plan slices is now really used (it always took the lowest floor).
+- Messages shown at the bottom right are also written to the action log.
+
+0.1.50 (2026-10-14)
+- Snapping on point clouds is calmer: it prefers walls along the horizontal and vertical directions of the view, stays on the wall you are on while you move along it, and ignores weak or wide bands of points (furniture, noise). Lines within 3 degrees of horizontal/vertical are snapped exactly straight.
+- Dimension Style: new settings "Area units" (m² default, cm², mm²) and "Snapping on point clouds" (horizontal/vertical first, only horizontal/vertical, any direction).
+- Smaller snap marker: a short line along the wall and a small circle instead of long crossing lines.
+- Chain dimensions: texts of short neighbouring segments no longer overlap (every second one goes to the other side of the line).
+- The update window now shows every step while installing (file sizes, files copied, time).
+
+0.1.49 (2026-10-14)
+- Smart Dimension on scans measures door and window openings: move the mouse into the gap in a wall and the opening between the two wall ends is shown with its width; click and place the dimension.
+- Chain dimensions: tick "Chain" in Smart Dimension, click points, walls and openings in a row, press Enter (or right click) and place the row. All dimensions sit at the same distance; "Overall dimension" adds the total.
+- Part overlay on point cloud views: a part aligned with the scan in the point cloud document (Register → Align Part) can be shown on top of the scan (view panel → Overlay part), in plans, elevations, projected views and sections, in blue; its edges can be dimensioned like part views.
+
+0.1.48 (2026-10-13)
+- Point cloud views always show the whole scan. Views no longer leave out stray points far from the building; only a depth range, floor slice or section you set yourself limits a view. Use Rebuild Views to get the full scan back in older drawings.
+- Annotating scans: walls, floors and ceilings are planes in the scan, never exact lines, so Smart Dimension now snaps to a straight line fitted through the band of scan points under the cursor (shown with its scatter, e.g. ±4 mm). Two walls give their distance square across (or their angle when not parallel), a wall and a corner the distance to the wall. Where two walls meet, the corner is the intersection of the two fitted walls. Hold Shift for a free point.
+- New Room tool (Annotate tab): click inside a room on a floor plan; its outline follows the fitted walls (door openings are closed) and it is labelled "Room n" with its area.
+- Dimension Style: units mm or m (areas in m²).
+- Section views can be edited after placing them: click the cutting line A–A to select the section and drag it to move the cut, or set its offset in metres, flip the direction of sight and change the letter in the panel. Point cloud sections also have a view depth: 0 shows only the slice, more shows what lies behind the cut.
+
+0.1.47 (2026-10-13)
+- Point cloud views in drawings now have the scan look by default: grey by point density, so walls (many points on top of each other) come out dark and floors and furniture light, like a floor slice or an x-ray elevation. Darkness per view (very light … very dark). The single-dots style is still available (Colour: Points).
+- Model View for point clouds: choose the top view as full depth, floor plan slice (floor + 1.0 … 1.3 m) or floor slab (floor + 0.2 … 1.7 m). Floor levels are found automatically; pick the level (Level 0, 1, 2 … with its height) in the view panel.
+- Section View works on point cloud views: a slice of the scan at the cutting line (thickness 0.05 … 2 m, default 0.3 m). Cut on a floor plan and the section keeps the height upright.
+- New Scale Bar (Annotate tab): a checkered 0 … x m bar, true to the view scale; double-click it to change its length.
+- Views are stored and printed as a sharp grey image (about 250 dpi on paper), so drawings and PDFs stay small. Zoomed out on screen, thin walls stay visible.
+
+0.1.46 (2026-10-12)
+- Drawings: point clouds as views. Model View and Standard 3 Views accept a point cloud document (.lithpcd, all visible scans with their registration) or a scan file (LAS/LAZ/PLY/XYZ). The scan is drawn as dots, thinned on the paper so the view stays readable and the PDF small; finer views read more of the scan automatically.
+- Per point cloud view: colour (black, grey by intensity, or the scan's colours), point size (0.1–0.5 mm), density (fine / normal / light) and a depth range or slice, measured from the far side, the near side or the floor (found automatically), e.g. 1.0–1.3 m above the floor for a floor plan.
+- Projected views (incl. isometric) of point cloud views; changing the scale redraws the dots for the new scale. Title block shows the point cloud name. Part views and scans can share a sheet.
+- PDF export is compressed now (smaller files), still true to scale.
+
 0.1.45 (2026-10-12)
 - Drawing: Projected View now works by moving the mouse. Select a view, click Projected View and move the mouse right, left, up or down for a projected view (stays aligned), or diagonally for an isometric view, then click to place it. Place several in a row; Esc ends.
 - Section View: click two points across a view for the cutting line (snaps to horizontal / vertical and to model points), move the mouse to the side you look from and click to place SECTION A-A. Cut faces are hatched; the cutting line shows thick ends, arrows and letters. Rebuild Views also redoes sections.

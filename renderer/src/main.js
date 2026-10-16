@@ -127,11 +127,20 @@ export class App {
     api.setTitle(this.doc ? `${file}${this.dirty ? ' *' : ''} - ${APP_NAME}` : APP_NAME);
   }
   showPanel(which) {
+    // a floating PropertyManager (feature dialogs) sits over the 3D view: the tree stays in the left panel
+    const fl = this.el.pm.classList.contains('pm-float');
+    if (fl && which === 'pm') which = this.doc?.sketcher ? 'props' : 'tree';
     this.panel = which;
     this.el.tree.style.display = which === 'tree' ? '' : 'none';
     this.el.props.style.display = which === 'props' ? '' : 'none';
-    this.el.pm.style.display = which === 'pm' ? '' : 'none';
+    this.el.pm.style.display = (fl ? this.pm.open : which === 'pm') ? '' : 'none';
     this.renderLeftTabs();
+  }
+  floatPM(on) {
+    const pm = this.el.pm;
+    pm.classList.toggle('pm-float', !!on);
+    if (on) { const r = this.el.views.getBoundingClientRect(); Object.assign(pm.style, { left: r.left + 8 + 'px', top: r.top + 8 + 'px', maxHeight: Math.max(200, r.height - 16) + 'px' }); }
+    else Object.assign(pm.style, { left: '', top: '', maxHeight: '' });
   }
   renderLeftTabs() {
     if (!this.isActive()) return;
@@ -139,7 +148,7 @@ export class App {
     const tabs = kind === 'drawing' ? [['tree', 'drawing', 'Sheets & Views'], ['pm', 'check', 'PropertyManager']] : kind === 'cloud' ? [['tree', 'cloud', 'Point Clouds'], ['pm', 'check', 'PropertyManager']] : kind === 'plan' ? [['tree', 'layers', 'Layers & Properties']] : kind === 'assembly' ? [['tree', 'assembly', 'Assembly'], ['pm', 'check', 'PropertyManager']] : [['tree', 'part', 'FeatureManager'], ['props', 'relation', 'Sketch'], ['pm', 'check', 'PropertyManager']];
     this.el.leftTabs.innerHTML = '';
     for (const [id, ic, tip] of tabs) {
-      if (id === 'pm' && !this.pm.open) continue;
+      if (id === 'pm' && (!this.pm.open || this.el.pm.classList.contains('pm-float'))) continue;
       if (id === 'props' && !this.doc?.sketcher) continue;
       this.el.leftTabs.appendChild(h('button', { class: 'lt' + (this.panel === id ? ' on' : ''), title: tip, onclick: () => this.showPanel(id) }, h('span', { class: 'ico sm', html: icon(ic) }), h('span', {}, tip)));
     }
@@ -172,7 +181,7 @@ export class App {
   wrapPM(t) {
     const pm = t.pm, pmShow = pm.show.bind(pm), pmClose = pm.close.bind(pm);
     pm.show = (...a) => { const r = pmShow(...a); t.showPanel('pm'); return r; };
-    pm.close = (...a) => { const r = pmClose(...a); if (t.panel === 'pm') t.showPanel(t.doc?.sketcher ? 'props' : 'tree'); else t.renderLeftTabs(); return r; };
+    pm.close = (...a) => { const r = pmClose(...a); t.floatPM(false); if (t.panel === 'pm') t.showPanel(t.doc?.sketcher ? 'props' : 'tree'); else t.showPanel(t.panel); return r; };
   }
   newTab() {
     const app = this.root;
@@ -206,6 +215,12 @@ export class App {
     t.updateTitle();
     t.doc?.vp?.requestRender?.(); t.doc?.vp3?.requestRender?.();
     t.doc?.onActivate?.();
+    t.syncViewportMenu();
+  }
+  // Viewport menu (main process) shows the active document's layout + grid
+  syncViewportMenu() {
+    const d = this.root.active?.doc;
+    api.setViewportMenu(d?.viewSet ? { layout: d.viewSet.layout, grid: d.toggleGrid ? !!d.gridOn : null } : null);
   }
   cycleTab(dir) {
     const app = this.root, list = [app, ...app.tabs];
@@ -350,6 +365,10 @@ export class App {
     const d = this.doc;
     switch (cmd) {
       case 'theme': this.setTheme(!!arg); break;
+      case 'grid': this.setGrid(!!arg); break;
+      case 'layout': d?.setViewLayout?.(arg); this.syncViewportMenu(); break;
+      case 'reset-views': d?.resetViews?.(); break;
+      case 'doc-grid': if (d?.toggleGrid && d.gridOn !== !!arg) d.toggleGrid(); this.syncViewportMenu(); break;
       case 'ui-scale': this.uiScaleDialog(); break;
       case 'ui-scale-reset': this.setUiScale(1); break;
       case 'new-part': this.newDoc('part'); break;
@@ -366,6 +385,7 @@ export class App {
       case 'export-iges': if (d?.exportCAD) d.exportCAD('iges'); else toast('IGES export is available for parts'); break;
       case 'export-dxf': if (d?.doc.kind === 'plan') d.exportDxf('dxf'); else if (d?.sketcher) d.exportSketchDxf(d.sketcher.sk); else toast('Select or edit a sketch, or use a Plan document, to export DXF'); break;
       case 'export-dwg': if (d?.doc.kind === 'plan') d.exportDxf('dwg'); else toast('DWG export is available for Plan documents'); break;
+      case 'dwg-converter': this.dwgHelp(); break;
       case 'undo': d?.undo(); break;
       case 'redo': d?.redo(); break;
       case 'zoom-fit': d?.zoomFit ? d.zoomFit() : d?.zoomExtents(); break;

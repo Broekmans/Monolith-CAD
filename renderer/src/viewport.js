@@ -2,30 +2,41 @@
 // a 2D overlay canvas for annotations, and a corner view triad.
 import { ViewCube } from './viewcube.js';
 import * as THREE from 'three';
+import { Grid } from './grid.js';
 
 const tmpV = new THREE.Vector3();
 
 export class Viewport {
-  constructor(container, { mode = '3d' } = {}) {
+  // shared / renderer: extra pane of a ViewSet (same scene, lights and grid as `shared`; draws with the
+  // ViewSet's offscreen renderer and copies the picture into its own canvas)
+  constructor(container, { mode = '3d', shared = null, renderer = null } = {}) {
     this.container = container;
     this.mode = mode; // '3d' or 'plan' (no rotation, top-down)
     this.el = document.createElement('div');
     this.el.className = 'viewport';
     container.appendChild(this.el);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio || 1);
-    this.renderer.setClearColor(0x000000, 0);
-    this.renderer.autoClear = false;
-    this.el.appendChild(this.renderer.domElement);
-    this.renderer.domElement.className = 'gl';
+    if (renderer) {
+      this.renderer = renderer;
+      this.out = document.createElement('canvas'); // what this pane shows (copied from the offscreen renderer)
+      this.out.className = 'gl';
+      this.outCtx = this.out.getContext('2d');
+      this.el.appendChild(this.out);
+    } else {
+      this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+      this.renderer.setPixelRatio(window.devicePixelRatio || 1);
+      this.renderer.setClearColor(0x000000, 0);
+      this.renderer.autoClear = false;
+      this.el.appendChild(this.renderer.domElement);
+      this.renderer.domElement.className = 'gl';
+    }
 
     this.overlay = document.createElement('canvas');
     this.overlay.className = 'overlay';
     this.el.appendChild(this.overlay);
     this.ctx = this.overlay.getContext('2d');
 
-    this.scene = new THREE.Scene();
+    this.scene = shared ? shared.scene : new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1e6, 1e6);
     this.target = new THREE.Vector3(0, 0, 0);
     this.scale = 0.5; // world units per pixel
@@ -33,11 +44,14 @@ export class Viewport {
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(this.target);
 
-    // lighting that follows the camera
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x9098a8, 1.7));
-    this.keyLight = new THREE.DirectionalLight(0xffffff, 1.7);
-    this.scene.add(this.keyLight);
-    this.scene.add(this.keyLight.target);
+    // lighting that follows the camera (one key light per scene; each pane moves it before it renders)
+    if (shared) this.keyLight = shared.keyLight;
+    else {
+      this.scene.add(new THREE.HemisphereLight(0xffffff, 0x9098a8, 1.7));
+      this.keyLight = new THREE.DirectionalLight(0xffffff, 1.7);
+      this.scene.add(this.keyLight);
+      this.scene.add(this.keyLight.target);
+    }
 
     // corner triad
     this.triadScene = new THREE.Scene();
@@ -49,6 +63,7 @@ export class Viewport {
     this.triadScene.add(axis([1, 0, 0], 0xd03030), axis([0, 1, 0], 0x30a030), axis([0, 0, 1], 0x3050d0));
 
     this.overlayDrawers = [];
+    this.grid = shared ? shared.grid : new Grid(); // on/off + frame set by the document (Part, Assembly)
     if (mode === '3d') this.viewCube = new ViewCube(this);
     this.needsRender = true;
     this.anim = null;
@@ -58,6 +73,7 @@ export class Viewport {
     this.resize();
     if (mode === 'plan') this.setView('top', false);
     const loop = () => {
+      if (this.disposed) return;
       requestAnimationFrame(loop);
       if (this.anim) this._stepAnim();
       if (this.needsRender) { this.needsRender = false; this._render(); }
@@ -72,14 +88,23 @@ export class Viewport {
     this.width = w; this.height = h;
     const dpr = window.devicePixelRatio || 1;
     if (this.renderer.getPixelRatio() !== dpr) this.renderer.setPixelRatio(dpr); // UI scale / monitor change
-    this.renderer.setSize(w, h, false);
+    if (this.out) {
+      this.out.width = Math.floor(w * dpr); this.out.height = Math.floor(h * dpr);
+      this.out.style.width = w + 'px'; this.out.style.height = h + 'px';
+      this._fitOffscreen(w, h);
+    } else this.renderer.setSize(w, h, false);
     this.overlay.width = w * dpr; this.overlay.height = h * dpr;
     this.overlay.style.width = w + 'px'; this.overlay.style.height = h + 'px';
-    this.renderer.domElement.style.width = w + 'px'; this.renderer.domElement.style.height = h + 'px';
+    if (!this.out) { this.renderer.domElement.style.width = w + 'px'; this.renderer.domElement.style.height = h + 'px'; }
     this._updateCamera();
     this.requestRender();
   }
 
+  // the shared offscreen canvas must be at least as big as this pane (it only grows)
+  _fitOffscreen(w, h) {
+    const sz = this.renderer.getSize(new THREE.Vector2());
+    if (sz.x < w || sz.y < h) this.renderer.setSize(Math.max(sz.x, w), Math.max(sz.y, h), false);
+  }
   _updateCamera() {
     const w = this.width / 2 * this.scale, h = this.height / 2 * this.scale;
     const c = this.camera;
@@ -130,6 +155,7 @@ export class Viewport {
   _render() {
     this._updateCamera();
     const r = this.renderer;
+    if (this.out) this._fitOffscreen(this.width, this.height);
     r.setViewport(0, 0, this.width, this.height);
     r.clear();
     // section view: clip everything; back faces of solids show as the cut face colour
@@ -146,6 +172,7 @@ export class Viewport {
     r.clippingPlanes = sec ? [new THREE.Plane(new THREE.Vector3(...sec.n), sec.c)] : [];
     if (this.renderScene) this.renderScene(r); else r.render(this.scene, this.camera);
     r.clippingPlanes = [];
+    if (this.mode === '3d') this.grid.render(r, this);
     if (sec) this._renderSecAxes(sec);
     if (this.mode === '3d') {
       const s = 90;
@@ -156,6 +183,11 @@ export class Viewport {
       this.triadCam.updateMatrixWorld();
       r.render(this.triadScene, this.triadCam);
       this.viewCube?.render(r);
+    }
+    if (this.out) { // copy the bottom-left w×h of the offscreen canvas (GL origin is bottom-left)
+      const src = r.domElement, o = this.out, g = this.outCtx;
+      g.clearRect(0, 0, o.width, o.height);
+      g.drawImage(src, 0, src.height - o.height, o.width, o.height, 0, 0, o.width, o.height);
     }
     this._drawOverlay();
   }
@@ -335,6 +367,22 @@ export class Viewport {
     if (name === 'iso') up = [-0.4082, 0.8165, -0.4082];
     this.orient(dir, up, animate);
   }
+  // View cube arrows: turn the view 90° — 'up'/'down' tilt about the screen X axis, 'left'/'right' about the
+  // screen Y axis (look at the face that was on that side), 'cw'/'ccw' roll about the view direction.
+  stepView(kind, animate = true) {
+    if (this.mode === 'plan' && kind !== 'cw' && kind !== 'ccw') return;
+    const q = this.anim ? this.anim.to : this.camera.quaternion;
+    const d = new THREE.Vector3(0, 0, -1).applyQuaternion(q), u = new THREE.Vector3(0, 1, 0).applyQuaternion(q), r = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    let nd = d, nu = u;
+    if (kind === 'up') { nd = u.clone().negate(); nu = d; }
+    else if (kind === 'down') { nd = u; nu = d.clone().negate(); }
+    else if (kind === 'left') { nd = r; nu = u; }
+    else if (kind === 'right') { nd = r.clone().negate(); nu = u; }
+    else if (kind === 'cw') { nu = r.clone().negate(); }
+    else if (kind === 'ccw') { nu = r; }
+    else return;
+    this.orient(nd.toArray(), nu.toArray(), animate);
+  }
   // Look straight at a plane frame (Normal To).
   normalTo(fr, animate = true) {
     this.orient([-fr.n[0], -fr.n[1], -fr.n[2]], fr.y, animate);
@@ -368,15 +416,16 @@ export class Viewport {
     const c = document.createElement('canvas');
     c.width = this.overlay.width; c.height = this.overlay.height;
     const g = c.getContext('2d');
-    g.drawImage(this.renderer.domElement, 0, 0, c.width, c.height);
+    g.drawImage(this.out || this.renderer.domElement, 0, 0, c.width, c.height);
     g.drawImage(this.overlay, 0, 0);
     return c.toDataURL('image/png');
   }
 
   dispose() {
+    this.disposed = true;
     this.resizeObserver.disconnect();
     this.viewCube?.dispose();
-    this.renderer.dispose();
+    if (!this.out) this.renderer.dispose();
     this.el.remove();
   }
 }

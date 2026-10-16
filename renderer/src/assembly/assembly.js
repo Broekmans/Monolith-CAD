@@ -5,6 +5,7 @@
 import { cachedMesh } from '../meshcache.js';
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
+import { ViewSet } from '../viewset.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
@@ -176,11 +177,12 @@ export class AssemblyDoc {
   // ======================= setup =======================
   init() {
     const app = this.app;
-    this.viewport = new Viewport(app.el.views, { mode: '3d' });
-    this.vp = this.viewport;
+    this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
+    this.viewport = this.vp = this.viewSet.proxy;
     this.vp.onContextMenu = (e) => this.viewContextMenu(e);
     this.scene = this.vp.scene;
     this.compGroup = new THREE.Group(); this.scene.add(this.compGroup);
+    this.syncGrid();
     this.buildCommands();
     this.buildHeadsUp();
     this.bindViewport();
@@ -188,7 +190,7 @@ export class AssemblyDoc {
     this.vp.fit({ min: [-60, -60, -60], max: [60, 60, 60] }, false);
     app.setStatusRight('MMGS');
     this.renderTree();
-    this.reloadAll(false).then(() => this.zoomFit());
+    this.reloadAll(false).then(() => { if (!(this.doc.viewLayout && this.viewSet.restore(this.doc.viewLayout))) this.zoomFit(); });
   }
 
   buildCommands() {
@@ -229,6 +231,14 @@ export class AssemblyDoc {
     };
     bar.append(B('zoomFit', 'Zoom to Fit (F)', () => this.zoomFit()), B('views', 'View Orientation', viewsMenu), B('shaded', 'Display Style', dispMenu), B('section', 'Section View', () => toggleSection(this)));
   }
+  get gridOn() { return this.doc.grid ?? this.app.gridDefault?.() ?? true; }
+  syncGrid() { const g = this.vp.grid; g.on = this.gridOn; g.frame = null; this.vp.requestRender(); }
+  toggleGrid() { this.doc.grid = !this.gridOn; this.syncGrid(); this.app.setStatus(`Grid ${this.doc.grid ? 'on' : 'off'} in this document (Viewport menu: default for all)`); this.app.syncViewportMenu?.(); }
+
+  // Viewport menu: layout of 1, 2 or 4 panes (saved in the file with each pane's view)
+  setViewLayout(name) { this.viewSet.setLayout(name, { fit: () => this.zoomFit() }); this.app.setStatus(name === 'single' ? 'Single view' : 'Click in a view to make it the active one (blue border); commands like Zoom to Fit and the standard views act on it'); }
+  resetViews() { this.viewSet.resetViews(() => this.zoomFit()); }
+  beforeSave() { const s = this.viewSet.toJSON(); if (s.layout === 'single') delete this.doc.viewLayout; else this.doc.viewLayout = s; }
   setDisplay(m) { this.displayMode = m; for (const v of this.views.values()) v.group.parent?.remove(v.group); this.views.clear(); this.syncScene(); }
 
   // ======================= loading & scene =======================

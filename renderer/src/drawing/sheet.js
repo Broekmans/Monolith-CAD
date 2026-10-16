@@ -51,6 +51,9 @@ export function viewRect(v, sheet) {
 
 import { textWidth, EM } from './pdf.js';
 import { annPrims, hatchPrims, DIM } from './dims.js';
+import { styleOf } from './styles.js';
+import { dotsPrim } from './dots.js';
+import { rasterPrim } from './raster.js';
 
 // line weights (mm) and dash patterns
 export const LW = { thick: 0.5, thin: 0.25, hidden: 0.35, frame: 0.7, tb: 0.35 };
@@ -107,23 +110,26 @@ export function sheetPrims(doc, sheet, { selected = null, selAnn = null, preview
   L([sx, sy + 2.5, sx, sy + 5.5, sx + 7, sy + 7, sx + 7, sy + 1, sx, sy + 2.5], LW.thin);
   L([sx, sy + 4, sx + 7, sy + 4], LW.thin, { dash: [1, 0.6] });
   out.push({ t: 'circle', c: [sx + 13, sy + 4], r: 3, w: LW.thin }, { t: 'circle', c: [sx + 13, sy + 4], r: 1.5, w: LW.thin });
-  T(x0 - 13, y0 + 11, 1.8, 'THIRD ANGLE · mm', 'c');
+  T(x0 - 13, y0 + 11, 1.8, `THIRD ANGLE · ${doc.dimUnits || 'mm'}`, 'c');
   // views
   for (const v of doc.views.filter((q) => q.sheet === sheet.id)) {
     if (!v.geom) continue;
-    const { f } = viewXf(v, sheet);
+    const xf = viewXf(v, sheet), { f } = xf;
+    if (v.geom.dots) { const dp = dotsPrim(v, xf); if (dp) out.push(dp); }
+    if (v.geom.raster) { const rp = rasterPrim(v, xf); if (rp) out.push(rp); }
     for (const e of v.geom.edges) {
       if (e.cls === 'h' && !v.hidden) continue;
       if (e.cls === 't' && v.tangent === false) continue;
       const pts = [];
       for (let i = 0; i < e.pts.length; i += 2) pts.push(...f(e.pts[i], e.pts[i + 1]));
+      if (e.ov) { if (v.cloud?.overlayOn === false) continue; L(pts, e.cls === 'v' ? LW.thin * 1.4 : LW.thin, { color: v.cloud?.ovColor || '#1f5fbf' }); continue; } // part overlay on a scan
       L(pts, e.cls === 'v' ? LW.thick : e.cls === 'h' ? LW.hidden : LW.thin, e.cls === 'h' ? { dash: DASH.hidden } : e.cls === 't' ? { color: '#555555' } : {});
     }
     // section faces: 45° hatch, about 2.5 mm apart on paper
     const s = viewScale(v, sheet);
     for (const face of v.geom.hatch || []) hatchPrims(face, f, 2.5 / s, out);
     // cutting lines of the section views made from this view
-    for (const c of doc.views.filter((q) => q.parent === v.id && q.cut)) cutPrims(c, f, out, L, T);
+    for (const c of doc.views.filter((q) => q.parent === v.id && q.cut)) cutPrims(c, f, out, L, T, selected === c.id);
     if (v.label !== false) {
       const r = viewRect(v, sheet);
       const own = v.scale && (v.scale[0] !== sheet.scale[0] || v.scale[1] !== sheet.scale[1]);
@@ -131,13 +137,13 @@ export function sheetPrims(doc, sheet, { selected = null, selAnn = null, preview
       if (own) T((r[0] + r[2]) / 2, r[1] - 11.5, 2.5, `SCALE ${scaleText(v.scale)}`, 'c');
     }
     // annotations
-    for (const a of v.anns || []) { const r = annPrims(a, f, s, out, { dec: doc.dimDec ?? 2, color: selAnn === a.id ? '#2a6fd6' : undefined }); if (r?.box) out.push({ t: 'annbox', ann: a.id, view: v.id, box: r.box }); }
+    for (const a of v.anns || []) { const n0 = out.length; const r = annPrims(a, f, s, out, { dec: doc.dimDec ?? 2, units: doc.dimUnits || 'mm', areaUnits: doc.areaUnits || 'm2', color: selAnn === a.id ? '#2a6fd6' : undefined, st: styleOf(doc, a) }); for (let i = n0; i < out.length; i++) if (out[i].t === 'annpath') out[i].view = v.id; if (r?.box) out.push({ t: 'annbox', ann: a.id, view: v.id, box: r.box }); }
     { const r = frameRect(v, sheet); out.push({ t: 'sel', on: selected === v.id, pts: [r[0], r[1], r[2], r[1], r[2], r[3], r[0], r[3], r[0], r[1]] }); } // screen only
   }
   if (preview) for (const p of preview) {
     if (p.t !== 'annprev') { out.push(p); continue; }
     const v = doc.views.find((q) => q.id === p.view); if (!v) continue;
-    annPrims(p.ann, viewXf(v, sheet).f, viewScale(v, sheet), out, { dec: doc.dimDec ?? 2, color: '#2a6fd6' });
+    annPrims(p.ann, viewXf(v, sheet).f, viewScale(v, sheet), out, { dec: doc.dimDec ?? 2, units: doc.dimUnits || 'mm', areaUnits: doc.areaUnits || 'm2', color: '#2a6fd6', st: styleOf(doc, p.ann) });
   }
   return out;
 }
@@ -168,7 +174,11 @@ export function zoneGrid(sheet) {
 }
 
 // cutting line A–A on the parent view: thin chain line, thick ends, arrows in the viewing direction, letters
-function cutPrims(c, f, out, L, T) {
+function cutPrims(c, f, out, L0, T0, sel = false) {
+  // selected section: its cutting line in blue (screen and PDF alike are drawn from the same prims; PDF has no selection)
+  const col = sel ? { color: '#2a6fd6' } : {};
+  const L = (pts, w, extra = {}) => L0(pts, w, { ...extra, ...col }), T = (x, y, size, text, align, bold, extra = {}) => T0(x, y, size, text, align, bold, { ...extra, ...col });
+  const n0 = out.length;
   const A = f(...c.cut.a), B = f(...c.cut.b);
   const d = [B[0] - A[0], B[1] - A[1]], l = Math.hypot(...d) || 1, u = [d[0] / l, d[1] / l];
   const e = 6, A0 = [A[0] - u[0] * 4, A[1] - u[1] * 4], B0 = [B[0] + u[0] * 4, B[1] + u[1] * 4];
@@ -181,7 +191,8 @@ function cutPrims(c, f, out, L, T) {
     const tail = [P[0] - sight[0] * al, P[1] - sight[1] * al];
     L([...tail, ...P], LW.thin);
     const p = [-sight[1], sight[0]], b = [P[0] - sight[0] * DIM.arrow * 1.3, P[1] - sight[1] * DIM.arrow * 1.3];
-    out.push({ t: 'fill', pts: [...P, b[0] + p[0] * 0.8, b[1] + p[1] * 0.8, b[0] - p[0] * 0.8, b[1] - p[1] * 0.8] });
+    out.push({ t: 'fill', pts: [...P, b[0] + p[0] * 0.8, b[1] + p[1] * 0.8, b[0] - p[0] * 0.8, b[1] - p[1] * 0.8], ...col });
     T(tail[0] - sight[0] * 1.5 - 1.2, tail[1] - sight[1] * 1.5 - 1.8, 5, c.cut.letter, 'l', true);
   }
+  void n0;
 }

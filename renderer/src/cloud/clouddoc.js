@@ -2,6 +2,7 @@
 // The scans stay where they are on disk; the document stores their paths and display settings.
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
+import { ViewSet } from '../viewset.js';
 import { h, fmt, contextMenu, toast, dialog, evalNumber, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { api } from '../api.js';
@@ -40,12 +41,18 @@ export class CloudDoc {
   // ======================= setup =======================
   init() {
     const app = this.app;
-    this.viewport = this.vp = new Viewport(app.el.views, { mode: '3d' });
+    this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
+    this.viewport = this.vp = this.viewSet.proxy;
+    this.viewSet.onActive = () => this.scheduleLOD();
     this.scene = this.vp.scene;
-    this.edl = new EDLPass();
+    this.edls = new Map(); // one depth-shading pass per pane (own render targets / size)
     this.overlay = new THREE.Scene();
     this.vp.renderScene = (r) => {
-      if (this.doc.view.edl && this.layers.size) this.edl.render(r, this.scene, this.vp, this.doc.view.edlStrength);
+      const pane = this.vp.pane;
+      for (const l of this.layers.values()) l.showFor(pane); // each pane shows its own level of detail
+      let edl = this.edls.get(pane); if (!edl) this.edls.set(pane, (edl = new EDLPass()));
+      for (const [p, e] of this.edls) if (p.disposed) { e.dispose(); this.edls.delete(p); } // panes closed by the Viewport menu
+      if (this.doc.view.edl && this.layers.size) edl.render(r, this.scene, this.vp, this.doc.view.edlStrength);
       else r.render(this.scene, this.vp.camera);
       if (this.overlay.children.length) { const ac = r.autoClear; r.autoClear = false; r.clearDepth(); r.render(this.overlay, this.vp.camera); r.autoClear = ac; } // part preview etc. (not depth shaded)
     };
@@ -63,7 +70,7 @@ export class CloudDoc {
     this.vp.setView('iso', false);
     app.setStatusRight('Meters');
     this.renderTree();
-    this.loadAll().then(() => this.zoomFit());
+    this.loadAll().then(() => { if (!(this.doc.viewLayout && this.viewSet.restore(this.doc.viewLayout))) this.zoomFit(); });
   }
 
   buildCommands() {
@@ -190,7 +197,9 @@ export class CloudDoc {
     const vis = [...this.layers.values()].filter((l) => l.rec.visible !== false);
     const total = vis.reduce((a, l) => a + l.meta.count, 0) || 1;
     let shown = 0;
-    for (const l of vis) shown += l.update(this.vp, Math.max(2e5, (budget * l.meta.count) / total));
+    // several panes: every pane gets its own node selection; the GPU budget is shared (a bit more in total)
+    const panes = this.viewSet.panes, k = panes.length > 1 ? 1.5 / panes.length : 1;
+    for (const l of vis) shown += l.update(panes, Math.max(2e5, (budget * k * l.meta.count) / total));
     this.shown = shown;
     const all = vis.reduce((a, l) => a + l.meta.count, 0);
     this.app.setCoords(all ? `${mpts(shown)} of ${mpts(all)} points shown` : '');
@@ -205,6 +214,12 @@ export class CloudDoc {
     this.vp.fit(b);
     this.scheduleLOD();
   }
+
+  // Viewport menu: layout of 1, 2 or 4 panes (saved in the file with each pane's view)
+  setViewLayout(name) { this.viewSet.setLayout(name, { fit: () => this.zoomFit() }); this.scheduleLOD(); this.app.setStatus(name === 'single' ? 'Single view' : 'Click in a view to make it the active one (blue border); commands like Zoom to Fit act on it'); }
+  resetViews() { this.viewSet.resetViews(() => this.zoomFit()); this.scheduleLOD(); }
+  beforeSave() { const s = this.viewSet.toJSON(); if (s.layout === 'single') delete this.doc.viewLayout; else this.doc.viewLayout = s; }
+
   // bounding box for the Home screen picture
   thumbBox() { const b = new THREE.Box3(); for (const l of this.layers.values()) if (l.rec.visible !== false) b.union(l.worldBox()); return b; }
 
@@ -382,7 +397,7 @@ export class CloudDoc {
     this.tool?.dispose();
     for (const l of this.layers.values()) l.dispose();
     this.layers.clear();
-    this.edl.dispose();
+    for (const e of this.edls.values()) e.dispose();
     this.vp.dispose();
   }
 }

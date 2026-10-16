@@ -165,13 +165,13 @@ export class PartFeatures {
           for (const o of opts) sel.appendChild(h('option', { value: o.value }, o.label));
           v.axisSel = opts[0]?.value; sel.value = v.axisSel;
         }
-        this.updateHighlights();
+        this.updateHighlights(); this.featUISync(v);
         clearTimeout(debounce); debounce = setTimeout(() => preview(v), 60);
       },
       onOk: (v) => {
         const f = build(v);
         if (!f) { this.app.pm.current.setMessage('Complete the required selections first.', 'error'); return false; }
-        alive = false; clearTimeout(debounce); this.clearPickBase();
+        alive = false; clearTimeout(debounce); this.clearPickBase(); this.featUIEnd();
         this.beginChange();
         if (edit) {
           const i = this.doc.features.findIndex((x) => x.id === edit.editId);
@@ -189,11 +189,14 @@ export class PartFeatures {
         this.regen();
         return true;
       },
-      onCancel: () => { alive = false; clearTimeout(debounce); this.clearPickBase(); this.pmState = null; this.app.setConfirmCorner(null); this.sel = []; this.updateHighlights(); this.updateSketchDisplay(); this.regen(); },
+      onCancel: () => { alive = false; clearTimeout(debounce); this.clearPickBase(); this.featUIEnd(); this.pmState = null; this.app.setConfirmCorner(null); this.sel = []; this.updateHighlights(); this.updateSketchDisplay(); this.regen(); },
     });
+    this.app.floatPM?.(true); // compact box over the 3D view, tree stays visible
     this.app.showPanel('pm');
     this.app.setConfirmCorner({ ok: () => this.app.pm.ok(), cancel: () => this.app.pm.cancel() });
     this.sel = [];
+    this.featUIStart(draft, this.app.pm.current.values, preview, base);
+    this.editingId = edit?.editId || null; this.renderTree(); // tree row green while its dialog is open
     this.updateHighlights();
     preview(values);
     this.app.cm.refresh();

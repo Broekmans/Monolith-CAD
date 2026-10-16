@@ -92,7 +92,7 @@ export class PartPicking {
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
     const rc = this.vp.ray(sx, sy);
     let faceHit = null;
-    const pk = this.pick;
+    const pk = this.doc.bodyHidden && !this.pickOverride ? null : this.pick; // hidden body (tree eye) is not pickable
     if (pk) {
       const hits = rc.intersectObject(pk.obj, false);
       if (hits.length) faceHit = hits[0];
@@ -189,6 +189,7 @@ export class PartPicking {
       ctx.stroke();
     }
     this.drawFeatureDims(ctx);
+    this.drawFeatUI(ctx);
     // origin glyph
     if (!this.sketcher) {
       const o = this.vp.toScreen([0, 0, 0]);
@@ -292,7 +293,8 @@ export class PartPicking {
       if (r && r.ok === false) { c.value = old; solveSketch(sk); toast('The sketch cannot be solved with this value', 'error'); }
     }
     this.commit();
-    this.renderTree(); this.updateSketchDisplay(); this.regen();
+    this.renderTree(); this.updateSketchDisplay();
+    if (this.featUI) this.featUI.preview(); else this.regen(); // feature dialog open: keep its preview
   }
 
   showSelectionInfo() {

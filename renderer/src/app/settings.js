@@ -22,6 +22,15 @@ export class AppSettings {
     if (!init) { try { this.doc?.vp?.requestRender?.(); } catch {} }
   }
 
+  // viewport grid: program default (Interface menu, remembered); a document can override it (doc.grid)
+  gridDefault() { try { return localStorage.getItem('monolith.grid') !== 'off'; } catch { return true; } }
+  setGrid(on) {
+    try { localStorage.setItem('monolith.grid', on ? 'on' : 'off'); } catch {}
+    api.setGridMenu?.(on);
+    for (const t of this.root?.tabs || this.tabs || []) { if (t.doc?.doc && 'grid' in t.doc.doc) delete t.doc.doc.grid; t.doc?.syncGrid?.(); }
+    this.syncViewportMenu?.();
+  }
+
   setUiScale(f, save = true) {
     f = Math.min(2, Math.max(0.6, Math.round(f * 20) / 20));
     this.uiScale = f; api.setZoom(f);

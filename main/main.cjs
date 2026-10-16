@@ -13,8 +13,8 @@ const RENDERER = path.join(ROOT, 'renderer');
 const isTest = !!process.env.MONOLITH_TEST;
 const { listProjects, createProject, openFolder, projectsRoot } = require('./projects.cjs');
 const { pcCall, startWorker, kernel, stopWorkers } = require('./kernel.cjs');
-const { logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
-const { dwgToDxf, dxfToDwg, listFonts } = require('./tools.cjs');
+const { writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
+const { dwgToDxf, dxfToDwg, converterStatus, setODAPath, listFonts } = require('./tools.cjs');
 const { setupCloudIPC, stopCloudWorkers } = require('./cloudio.cjs');
 protocol.registerSchemesAsPrivileged([{ scheme: 'monolith', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 
@@ -45,7 +45,9 @@ function send(cmd, arg) {
   w?.webContents.send('menu', cmd, arg);
 }
 
-let uiDark = false;
+let uiDark = false, uiGrid = true;
+// Viewport menu state of the active document (null = no 3D document: items disabled)
+let uiVp = null; // { layout, grid, multi }
 function buildMenu() {
   const recent = getRecent();
   const tpl = [
@@ -68,6 +70,8 @@ function buildMenu() {
         { label: 'IGES (.igs)…', click: () => send('export-iges') },
         { label: 'DXF (.dxf)…', click: () => send('export-dxf') },
         { label: 'DWG (.dwg)…', click: () => send('export-dwg') },
+        { type: 'separator' },
+        { label: 'DWG Converter…', click: () => send('dwg-converter') },
       ] },
       { type: 'separator' },
       { label: 'New Window', click: () => createWindow() },
@@ -84,6 +88,15 @@ function buildMenu() {
       ...['front', 'back', 'left', 'right', 'top', 'bottom', 'iso'].map((v) => ({ label: v === 'iso' ? 'Isometric' : v[0].toUpperCase() + v.slice(1), click: () => send('view', v) })),
       { type: 'separator' },
       { role: 'togglefullscreen' }, { role: 'toggleDevTools', label: 'Developer Tools' },
+    ] },
+    { label: 'View&port', submenu: [
+      ...[['single', 'Single View'], ['two-v', 'Two Views Side by Side'], ['two-h', 'Two Views Stacked'], ['four', 'Four Views']].map(([id, label]) => (
+        { label, type: 'radio', checked: (uiVp?.layout || 'single') === id, enabled: !!uiVp, click: () => send('layout', id) })),
+      { type: 'separator' },
+      { label: 'Reset Views', enabled: !!uiVp, click: () => send('reset-views') },
+      { type: 'separator' },
+      { label: 'Show Grid in This Document', type: 'checkbox', checked: !!uiVp?.grid, enabled: !!uiVp && uiVp.grid !== null, click: (mi) => send('doc-grid', mi.checked) },
+      { label: 'Grid On by Default', type: 'checkbox', checked: uiGrid, click: (mi) => send('grid', mi.checked) },
     ] },
     { label: '&Interface', submenu: [
       { label: 'Dark Mode', type: 'checkbox', checked: uiDark, click: (mi) => send('theme', mi.checked) },
@@ -113,7 +126,11 @@ function setupIPC() {
   writeLog([`${new Date().toTimeString().slice(0, 8)} ===== MonoLith ${app.getVersion()} started =====`]);
   ipcMain.on('log', (_e, lines) => writeLog(lines));
   ipcMain.handle('log:dir', () => logDir());
+  ipcMain.handle('log:dump', (_e, n, t) => writeDump(n, t));
+  ipcMain.handle('std:cfg', (_e, s) => draftStd(s));
   ipcMain.handle('log:cfg', (_e, c) => (c ? setLogCfg(c) : getLogCfg()));
+  ipcMain.on('ui:grid', (_e, g) => { if (uiGrid !== !!g) { uiGrid = !!g; buildMenu(); } });
+  ipcMain.on('ui:viewport', (_e, v) => { const j = JSON.stringify(v ?? null); if (j !== JSON.stringify(uiVp)) { uiVp = v ?? null; buildMenu(); } });
   ipcMain.on('ui:dark', (_e, d) => { if (uiDark !== !!d) { uiDark = !!d; buildMenu(); } });
   ipcMain.on('ui:zoom', (e, f) => { const z = Math.min(2, Math.max(0.6, +f || 1)); e.sender.setZoomFactor(z); });
   ipcMain.handle('kernel', (_e, op, args) => kernel(op, args));
@@ -140,8 +157,10 @@ function setupIPC() {
     return r.filePath;
   });
   ipcMain.handle('file:write', (_e, p, text) => { fs.writeFileSync(p, text, /\.pdf$/i.test(p) ? 'latin1' : 'utf8'); addRecent(p); return true; });
-  ipcMain.handle('dwg:toDxf', async (_e, p) => { try { return { ok: true, text: await dwgToDxf(p) }; } catch (err) { return { ok: false, error: String(err.message || err) }; } });
-  ipcMain.handle('dwg:fromDxf', async (_e, text, outPath) => { try { await dxfToDwg(text, outPath); return { ok: true }; } catch (err) { return { ok: false, error: String(err.message || err) }; } });
+  ipcMain.handle('dwg:toDxf', async (_e, p) => { try { const r = await dwgToDxf(p); return { ok: true, text: r.text, via: r.via }; } catch (err) { return { ok: false, error: String(err.message || err), status: converterStatus() }; } });
+  ipcMain.handle('dwg:fromDxf', async (_e, text, outPath) => { try { return { ok: true, ...(await dxfToDwg(text, outPath)) }; } catch (err) { return { ok: false, error: String(err.message || err), status: converterStatus() }; } });
+  ipcMain.handle('dwg:status', () => converterStatus());
+  ipcMain.handle('dwg:setOda', (_e, p) => { try { return { ok: true, ...setODAPath(p) }; } catch (err) { return { ok: false, error: String(err.message || err) }; } });
   ipcMain.handle('win:new', (_e, kind, p) => { createWindow(p ? { open: p } : { kind }); return true; });
   ipcMain.on('win:title', (e, t) => { BrowserWindow.fromWebContents(e.sender)?.setTitle(t); });
   ipcMain.on('win:dirty', (e, d) => { BrowserWindow.fromWebContents(e.sender)?.setDocumentEdited?.(!!d); });

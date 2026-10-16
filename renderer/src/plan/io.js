@@ -63,7 +63,7 @@ export class PlanIO {
       const path = await api.saveFile({ defaultPath: `${this.doc.name}.dwg`, filters: [{ name: 'AutoCAD Drawing', extensions: ['dwg'] }], noWrite: true });
       if (!path) return;
       const r = await api.dxfToDwg(text, path);
-      if (r?.ok) toast(`Exported ${path}`, 'ok'); else this.app.dwgHelp(r?.error);
+      if (r?.ok) toast(`Exported ${path.split(/[\\/]/).pop()} (${r.version}, ${r.via})${/LibreDWG/.test(r.via || '') ? ' · for newer DWG versions install the ODA File Converter (File → DWG Converter…)' : ''}`, 'ok', 6000); else this.app.dwgHelp(r?.error, () => this.exportDxf('dwg'));
       return;
     }
     const path = await api.saveFile({ defaultPath: `${this.doc.name}.dxf`, filters: [{ name: 'DXF', extensions: ['dxf'] }], text });

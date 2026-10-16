@@ -183,14 +183,45 @@ export class CloudLayer {
   }
 
   // ---------- level of detail ----------
-  // Picks the nodes to show for the current view; returns the number of points shown.
-  update(vp, budget) {
+  // Picks the nodes to show for each pane (Viewport menu: 1–4 panes); returns the number of points shown
+  // (the biggest pane). One load queue for all panes; nodes used by no pane are evicted first.
+  update(panes, budget) {
     if (!this.root) return 0;
+    if (!Array.isArray(panes)) panes = [panes];
     this.group.updateMatrixWorld(true);
+    const now = performance.now();
+    this.visBy = new Map();
+    const union = new Set(), wants = [];
+    let shownMax = 0;
+    for (const vp of panes) {
+      const { vis, want, pts } = this.select(vp, budget, now);
+      this.visBy.set(vp, vis);
+      for (const nd of vis) union.add(nd);
+      wants.push(want);
+      shownMax = Math.max(shownMax, pts);
+    }
+    // interleave the panes' wishes so every pane fills up evenly
+    const queue = [], seen = new Set();
+    for (let i = 0, more = true; more; i++) { more = false; for (const w of wants) if (i < w.length) { more = true; if (!seen.has(w[i])) { seen.add(w[i]); queue.push(w[i]); } } }
+    this.showFor(panes.length === 1 ? panes[0] : this.lastPane || panes[0]);
+    this.queue = queue;
+    this.pump();
+    this.evict(budget * 1.6 * Math.max(1, panes.length * 0.75), union);
+    let shown = 0;
+    for (const nd of this.visBy.get(panes[0]) || []) if (nd.obj) shown += nd.n;
+    return shown || shownMax;
+  }
+  // make the nodes of pane vp visible (called before each pane renders)
+  showFor(vp) {
+    this.lastPane = vp;
+    const vis = this.visBy?.get(vp);
+    if (!vis) return;
+    for (const nd of this.nodes.values()) if (nd.obj) nd.obj.visible = vis.has(nd);
+  }
+  select(vp, budget, now) {
     const cam = vp.camera;
     const frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
     const mw = this.group.matrixWorld;
-    const now = performance.now();
     const pxPerMm = 1 / vp.scale;
     const ctr = vp.target;
     const heap = [];
@@ -227,12 +258,7 @@ export class CloudLayer {
       const spacingPx = (nd.size / this.meta.grid) * 1000 * pxPerMm;
       if (spacingPx > 0.8) for (const ch of nd.children) push(ch);
     }
-    let shown = 0;
-    for (const nd of this.nodes.values()) if (nd.obj) { nd.obj.visible = vis.has(nd); if (nd.obj.visible) shown += nd.n; }
-    this.queue = want;
-    this.pump();
-    this.evict(budget * 1.6, vis);
-    return shown;
+    return { vis, want, pts };
   }
   // world boxes depend on the placement: clear them when it changes
   resetBoxes() { for (const nd of this.nodes.values()) nd.wbox = null; }
@@ -298,6 +324,7 @@ export class CloudLayer {
   // Nearest visible point around screen position (sx, sy) in px. Prefers the front-most point within
   // `front` px, else the nearest within `r` px. Returns {node, i, doc: [x, y, z] (doc frame), px, depth} or null.
   pickNear(vp, sx, sy, r = 8, front = 3) {
+    const pane = vp.pane || vp; if (this.visBy?.has(pane) && this.lastPane !== pane) this.showFor(pane); // picking in another pane
     if (this.rec.visible === false) return null;
     this.group.updateMatrixWorld(true);
     const cam = vp.camera;

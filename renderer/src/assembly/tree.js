@@ -5,6 +5,7 @@ import { Viewport } from '../viewport.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
+import { treeRow, folderOpen, toggleFolder } from '../treeui.js';
 import { api } from '../api.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
 import * as M from '../../../shared/mates.mjs';
@@ -17,29 +18,21 @@ export class AsmTree {
     const tree = this.app.el.tree;
     tree.innerHTML = '';
     const selKeys = new Set(this.sel.map((s) => s.key));
-    const row = (o) => {
-      const r = h('div', { class: 'tr-row' + (o.sel ? ' sel' : '') + (o.dim ? ' dim' : '') + (o.err ? ' err' : ''), style: { paddingLeft: 6 + (o.depth || 0) * 16 + 'px' }, title: o.tip || '' },
-        o.twisty !== undefined ? h('span', { class: 'twisty', onclick: (e) => { e.stopPropagation(); o.onTwisty(); } }, o.twisty ? '▾' : '▸') : h('span', { class: 'twisty' }),
-        h('span', { class: 'ico sm', html: icon(o.icon) }), h('span', { class: 'tr-label' }, o.label), o.err ? h('span', { class: 'tr-err', title: o.err }, '⚠') : null);
-      r.addEventListener('click', (e) => o.onClick?.(e));
-      r.addEventListener('dblclick', (e) => o.onDbl?.(e));
-      r.addEventListener('contextmenu', (e) => { e.preventDefault(); o.onMenu?.(e); });
-      r.addEventListener('mouseenter', () => o.onEnter?.());
-      r.addEventListener('mouseleave', () => o.onLeave?.());
-      return r;
-    };
+    const row = (o) => treeRow(o);
     const hoverOn = (it) => () => { this.hover = it; this.updateHighlights(); };
     const hoverOff = () => { this.hover = null; this.updateHighlights(); };
     tree.appendChild(row({ icon: 'assembly', label: `${this.doc.name}  (Default)`, onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Rename…', run: () => this.renameAsm() }]) }));
     tree.appendChild(row({ icon: 'origin', label: 'Origin', depth: 1 }));
     tree.appendChild(sectionTreeRows(this));
-    for (const c of this.doc.components) {
+    if (this.doc.components.length) tree.appendChild(row({ icon: 'folder', label: 'Components', count: this.doc.components.length, depth: 1, twisty: folderOpen(this, 'comps', true), onTwisty: () => toggleFolder(this, 'comps'), data: { folder: 'comps' } }));
+    if (folderOpen(this, 'comps', true)) for (const c of this.doc.components) {
       const st = this.dof.get(c.id);
       const pre = c.fixed ? '(f) ' : st?.state === 'under' ? '(-) ' : '';
       const it = { kind: 'comp', comp: c.id, key: 'comp:' + c.id };
       const err = c._part?.err;
       tree.appendChild(row({
-        icon: 'part', label: pre + c.name, depth: 1, sel: selKeys.has(it.key), dim: c.hidden, err: err ? `Cannot load ${c.path || c.name}: ${err}` : null,
+        icon: c._part?.flat?.length > 1 || /\.lithasm$/i.test(c.path || '') ? 'assembly' : 'part', label: pre + c.name, depth: 2, sel: selKeys.has(it.key), dim: c.hidden,
+        eye: !c.hidden, onEye: () => { this.beginChange(); c.hidden = !c.hidden; this.commit(); this.syncScene(); this.renderTree(); }, data: { item: it.key }, err: err ? `Cannot load ${c.path || c.name}: ${err}` : null,
         tip: err ? '' : `${c.lib ? 'Toolbox: ' + fastenerDef(c.lib.std)?.label : c.path}\n${c.fixed ? 'Fixed' : st?.state === 'under' ? `Under defined (${st.dof} DOF free)` : 'Fully defined'}`,
         onClick: (e) => { this.clickItem(it, e.ctrlKey || e.shiftKey); },
         onDbl: () => this.openComp(c),
@@ -47,8 +40,8 @@ export class AsmTree {
         onMenu: (e) => { if (!selKeys.has(it.key)) this.sel = [it]; contextMenu(e.clientX, e.clientY, this.compMenu(c)); },
       }));
     }
-    const open = this.expanded.has('mates');
-    tree.appendChild(row({ icon: 'mate', label: 'Mates', depth: 1, twisty: open, onTwisty: () => { if (open) this.expanded.delete('mates'); else this.expanded.add('mates'); this.renderTree(); } }));
+    const open = folderOpen(this, 'mates', true);
+    tree.appendChild(row({ icon: 'mate', label: 'Mates', count: this.doc.mates.length, depth: 1, twisty: open, onTwisty: () => toggleFolder(this, 'mates'), data: { folder: 'mates' } }));
     if (open) for (const m of this.doc.mates) {
       const it = { kind: 'mate', id: m.id, key: 'mate:' + m.id };
       const t = M.MATE_TYPES.find((x) => x.id === m.type);

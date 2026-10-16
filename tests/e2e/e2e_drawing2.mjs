@@ -81,7 +81,7 @@ await win.evaluate(() => { const d = lithApp.doc, v = d.doc.views.find((q) => q.
 // ---- values in the PDF text ----
 await win.evaluate((p) => lithApp.doc.exportPdf(p), PDF); await W(400);
 const txt = execFileSync('pdftotext', ['-layout', PDF, '-'], { encoding: 'utf8' });
-for (const want of ['100', '40', 'Ø30', '90°', 'A = 6000 mm²', 'SECTION A-A', 'ALL EDGES']) console.log(`pdf has "${want}":`, txt.includes(want));
+for (const want of ['100', '40', 'Ø30', '90°', 'A = 0.006 m²', 'SECTION A-A', 'ALL EDGES']) console.log(`pdf has "${want}":`, txt.includes(want));
 await T.shot('dr4_annotations');
 // ---- move an annotation by its text, delete one, undo ----
 const n0 = await win.evaluate(() => lithApp.doc.doc.views.reduce((a, v) => a + (v.anns || []).length, 0));

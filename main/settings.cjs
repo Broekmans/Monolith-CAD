@@ -52,4 +52,23 @@ function addRecent(p) {
   app.addRecentDocument?.(p);
 }
 
-module.exports = { logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent };
+// ---------- drafting standard (company / user): <CAD Program>\drafting-standard.json ----------
+const stdFile = () => process.env.MONOLITH_STD || path.join(path.dirname(logDir()), 'drafting-standard.json');
+function draftStd(s) {
+  if (s && typeof s === 'object') { try { fs.writeFileSync(stdFile(), JSON.stringify(s, null, 2)); } catch (e) { return { __error: e.message }; } return { ...s, __path: stdFile() }; }
+  try { return { ...JSON.parse(fs.readFileSync(stdFile(), 'utf8')), __path: stdFile() }; } catch { return { __path: stdFile() }; }
+}
+
+// test dumps (room detection input + result) in Logs\rooms, last 20 kept; only when the action log is on
+function writeDump(name, text) {
+  if (!getLogCfg().enabled || (isTest && !process.env.MONOLITH_LOGTEST && !process.env.MONOLITH_DUMPTEST)) return null;
+  try {
+    const d = path.join(logDir(), 'rooms'); fs.mkdirSync(d, { recursive: true });
+    const f = path.join(d, String(name).replace(/[^\w.-]+/g, '_')); fs.writeFileSync(f, text);
+    const all = fs.readdirSync(d).filter((x) => x.endsWith('.json')).map((x) => ({ x, t: fs.statSync(path.join(d, x)).mtimeMs })).sort((a, b) => b.t - a.t);
+    for (const o of all.slice(20)) fs.unlinkSync(path.join(d, o.x));
+    return f;
+  } catch { return null; }
+}
+
+module.exports = { writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent };

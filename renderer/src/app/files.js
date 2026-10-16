@@ -29,6 +29,7 @@ export class AppFiles {
     document.body.dataset.kind = docData.kind;
     t.showPanel('tree');
     t.doc.init();
+    t.syncViewportMenu?.();
     t.updateTitle();
     t.renderLeftTabs();
   }
@@ -91,6 +92,7 @@ export class AppFiles {
     if (!this.doc) return false;
     const kind = this.doc.doc.kind;
     const ext = extOf(kind);
+    this.doc.beforeSave?.(); // e.g. store the viewport layout + views
     let data = this.doc.toJSON ? this.doc.toJSON() : this.doc.doc;
     if (kind === 'part') {
       // embed the finished mesh so assemblies load this part without rebuilding it
@@ -147,9 +149,13 @@ export class AppFiles {
     const ext = name.split('.').pop().toLowerCase();
     let text = f.text;
     if (ext === 'dwg') {
-      const r = await api.dwgToDxf(f.path);
-      if (!r?.ok) { this.dwgHelp(r?.error); return; }
+      this.setStatus(`Converting ${name}…`); this.setBusy?.(true);
+      let r;
+      try { r = await api.dwgToDxf(f.path); } finally { this.setBusy?.(false); }
+      if (!r?.ok) { this.dwgHelp(r?.error, () => this.importPath(f)); return; }
       text = r.text;
+      this.setStatus(`${name} converted with ${r.via}`);
+      window.__lithLog?.(`MESSAGE info DWG ${name} converted with ${r.via}`);
     }
     if (ext === 'dxf' || ext === 'dwg') {
       if (this.doc.doc.kind === 'plan') this.doc.importDxfText(text, name);
@@ -160,20 +166,37 @@ export class AppFiles {
     await this.doc.importCAD(text, ext.startsWith('ig') ? 'iges' : 'step', name);
   }
 
-  async dwgHelp(err) {
-    await dialog({
-      title: 'DWG conversion',
-      body: h('div', {}, h('p', {}, 'DWG files are converted through the free ODA File Converter, which was not found or failed on this computer.'),
-        err ? h('p', { class: 'muted' }, String(err)) : null,
-        h('p', {}, 'Install it from opendesign.com (ODA File Converter, free) and try again. MonoLith looks for it in C:\\Program Files\\ODA\\. DXF import/export works without it.')),
-      buttons: [{ label: 'Open download page', value: 'dl' }, { label: 'OK', primary: true }],
-    }).then((v) => { if (v === 'dl') api.openExternal('https://www.opendesign.com/guestfiles/oda_file_converter'); });
+  // DWG converters: which one is used, own ODA path ("Browse"), download page. retry() runs the import/export again.
+  async dwgHelp(err, retry = null) {
+    const st = (await api.dwgStatus?.().catch(() => null)) || {};
+    const line = (label, v) => h('div', { class: 'dwg-row' }, h('b', {}, label), h('span', { class: v ? '' : 'muted' }, v || 'not found'));
+    const body = h('div', { class: 'dwg-help' },
+      err ? h('p', {}, 'The DWG file could not be converted.') : h('p', {}, 'MonoLith converts DWG files to DXF and back with one of these converters:'),
+      err ? h('p', { class: 'muted' }, String(err)) : null,
+      line('ODA File Converter', st.oda), line('Built-in (LibreDWG)', st.libredwg ? 'ready — opens all DWG versions, saves DWG 2000' : null),
+      h('p', { class: 'muted' }, 'The ODA File Converter (free, opendesign.com) gives the best results and saves DWG 2018. If you installed it somewhere else than C:\\Program Files\\ODA\\, use "Browse for ODA File Converter…". DXF import/export works without any converter.'));
+    const v = await dialog({
+      title: 'DWG converter', body,
+      buttons: [{ label: 'Open download page', value: 'dl' }, { label: 'Browse for ODA File Converter…', value: 'browse' }, ...(st.own ? [{ label: 'Forget own path', value: 'forget' }] : []), { label: 'OK', primary: true }],
+    });
+    if (v === 'dl') api.openExternal('https://www.opendesign.com/guestfiles/oda_file_converter');
+    if (v === 'forget') { await api.dwgSetOda(null); toast('Own ODA File Converter path removed'); }
+    if (v === 'browse') {
+      const f = await api.openFile({ filters: [{ name: 'ODA File Converter', extensions: ['exe'] }], noRead: true });
+      if (!f) return;
+      const r = await api.dwgSetOda(f.path);
+      if (!r?.ok) { toast(r?.error || 'Not the ODA File Converter', 'error'); return; }
+      toast('ODA File Converter set: ' + r.oda, 'ok');
+      if (retry) retry();
+    }
   }
+
 }
 
 // small JPEG of the model (isometric, zoomed to fit) for the Home screen; the user's view is not changed
 export function makeThumb(vp, boxIn = null) {
   try {
+    vp = vp?.viewset?.primary || vp; // several panes: render with pane 0's own renderer
     const r = vp?.renderer, src = r?.domElement;
     if (!src || !src.width || !vp.width || !vp.height) return null;
     const box = boxIn && !boxIn.isEmpty() ? boxIn.clone() : new THREE.Box3();

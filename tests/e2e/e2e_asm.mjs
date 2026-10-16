@@ -55,4 +55,9 @@ console.log('undo', JSON.stringify((await state()).comps[1]));
 const json = await win.evaluate(() => JSON.stringify(lithApp.doc.toJSON()));
 console.log('saved size', json.length, json.includes('_part') ? 'LEAK' : 'clean');
 await T.shot('asm2');
+// 0.1.67: four viewports in the assembly; pick a component in the Top pane
+await win.evaluate(() => lithApp.onMenu('layout', 'four')); await W(600);
+const four = await win.evaluate(() => { const s = lithApp.doc.viewSet; const p = s.panes[2], r = p.el.getBoundingClientRect(); s.setActive(p); const c = p.toScreen([20, 20, 0]); const hit = lithApp.doc.pickAt({ clientX: r.left + c[0], clientY: r.top + c[1] }); return { n: s.panes.length, dirs: s.panes.map((q) => q.viewDir().toArray().map((v) => Math.round(v * 100) / 100).join()), hit: hit?.kind, comp: hit && lithApp.doc.C(hit.comp)?.name }; });
+console.log('four views', JSON.stringify(four));
+await T.shot('asm-four');
 await T.app.close();

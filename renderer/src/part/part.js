@@ -4,6 +4,7 @@
 import { cacheKey } from '../meshcache.js';
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
+import { ViewSet } from '../viewset.js';
 import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
@@ -20,6 +21,7 @@ import { PartSketching } from './sketching.js';
 import { PartFeatures } from './features.js';
 import { PartExchange } from './exchange.js';
 import { PartCommands } from './commands.js';
+import { PartFeatureUI } from './featureui.js';
 
 export const STD_PLANES = {
   Front: { origin: [0, 0, 0], normal: [0, 0, 1], xDir: [1, 0, 0] },
@@ -81,8 +83,8 @@ export class PartDoc {
   // ======================= setup =======================
   init() {
     const app = this.app;
-    this.viewport = new Viewport(app.el.views, { mode: '3d' });
-    this.vp = this.viewport;
+    this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
+    this.viewport = this.vp = this.viewSet.proxy;
     this.vp.onContextMenu = (e) => this.viewContextMenu(e);
     this.scene = this.vp.scene;
     this.bodyGroup = new THREE.Group(); this.scene.add(this.bodyGroup);
@@ -90,6 +92,7 @@ export class PartDoc {
     this.planeGroup = new THREE.Group(); this.scene.add(this.planeGroup);
     this.hlGroup = new THREE.Group(); this.scene.add(this.hlGroup);
     this.vp.overlayDrawers.push((ctx) => this.drawOverlay(ctx));
+    this.syncGrid();
     this.sketchPanel = app.el.props;
     this.buildCommands();
     this.buildHeadsUp();
@@ -102,13 +105,22 @@ export class PartDoc {
     this.doc.pointClouds ||= [];
     this.clouds = new CloudManager(app, () => this.doc.pointClouds, () => [this.scene], () => { this.renderTree(); this.vp.requestRender(); });
     this.regen().then(async () => {
-      if (this.mesh?.bbox) this.vp.fit(this.mesh.bbox);
+      if (this.doc.viewLayout && this.viewSet.restore(this.doc.viewLayout)) { /* saved panes + views */ } else if (this.mesh?.bbox) this.vp.fit(this.mesh.bbox);
       if (this.doc.pointClouds.length) { await this.clouds.loadAll(); if (!this.mesh?.bbox) this.zoomFit(); }
     });
     app.setStatusRight('MMGS');
   }
 
   get title() { return this.doc.name; }
+  // grid on the Top plane, or on the sketch plane while sketching; doc.grid overrides the program default
+  get gridOn() { return this.doc.grid ?? this.app.gridDefault?.() ?? true; }
+  syncGrid() { const g = this.vp.grid; g.on = this.gridOn; g.frame = this.sketcher?.fr || null; this.vp.requestRender(); }
+  toggleGrid() { this.doc.grid = !this.gridOn; this.syncGrid(); this.app.setStatus(`Grid ${this.doc.grid ? 'on' : 'off'} in this document (Viewport menu: default for all)`); this.app.syncViewportMenu?.(); }
+
+  // Viewport menu: layout of 1, 2 or 4 panes (saved in the file with each pane's view)
+  setViewLayout(name) { this.viewSet.setLayout(name, { fit: () => this.zoomFit() }); this.app.setStatus(name === 'single' ? 'Single view' : 'Click in a view to make it the active one (blue border); commands like Zoom to Fit and the standard views act on it'); }
+  resetViews() { this.viewSet.resetViews(() => this.zoomFit()); }
+  beforeSave() { const s = this.viewSet.toJSON(); if (s.layout === 'single') delete this.doc.viewLayout; else this.doc.viewLayout = s; }
   // Geometry used for picking: while a feature PropertyManager shows a live
   // preview, selections are made on the model as it was before the feature.
   get pick() { return this.pickOverride !== undefined ? this.pickOverride : this.pickDefault; }
@@ -219,6 +231,7 @@ export class PartDoc {
   afterDocChange() {
     this.syncClouds();
     this.sel = [];
+    this.bodyGroup.visible = !this.doc.bodyHidden; this.updatePlanes();
     this.renderTree();
     this.updateSketchDisplay();
     this.regen();
@@ -299,6 +312,7 @@ export class PartDoc {
     mesh.name = 'body';
     g.add(mesh);
     this.bodyMesh = mesh;
+    g.visible = !this.doc.bodyHidden;
     this.pickDefault = makePickData(m, mesh);
     if (this.displayMode !== 'shaded') {
       const segs = [];
@@ -324,6 +338,7 @@ export class PartDoc {
     for (const o of [...g.children]) { g.remove(o); o.geometry?.dispose(); }
     const visible = new Set();
     if (this.showPlanes) Object.keys(STD_PLANES).forEach((k) => visible.add(k));
+    for (const k of this.doc.planesShown || []) visible.add(k); // tree eye
     for (const s of this.sel) if (s.kind === 'plane') visible.add(s.name);
     if (this.hover?.kind === 'plane') visible.add(this.hover.name);
     if (this.hoverTreePlane) visible.add(this.hoverTreePlane);
@@ -376,6 +391,7 @@ export class PartDoc {
         const ls = new THREE.LineSegments(geom, new THREE.LineDashedMaterial({ color, dashSize: 3 * this.vp.scale, gapSize: 2 * this.vp.scale }));
         ls.computeLineDistances(); g.add(ls);
       }
+      if (this.featUI?.sketch === f.id) { const fill = this.featFill(f); if (fill) g.add(fill); }
     });
     this.vp.requestRender();
   }
@@ -444,4 +460,4 @@ export function edgeAxis(ed) {
 }
 
 // mix in methods split off into separate files
-for (const M of [PartPicking, PartTree, PartSketching, PartFeatures, PartExchange, PartCommands]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(PartDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));
+for (const M of [PartPicking, PartTree, PartSketching, PartFeatures, PartExchange, PartCommands, PartFeatureUI]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(PartDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));

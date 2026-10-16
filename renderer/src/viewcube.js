@@ -2,7 +2,7 @@
 // Click a face, edge or corner to look at it; drag on the cube to orbit.
 import * as THREE from 'three';
 
-const S = 104, M = 10; // size in px, margin
+const S = 104, M = 20; // size in px, margin (room for the arrows around the cube)
 const FACES = [ // BoxGeometry material order: +X, -X, +Y, -Y, +Z, -Z
   'RIGHT', 'LEFT', 'TOP', 'BOTTOM', 'FRONT', 'BACK',
 ];
@@ -24,6 +24,7 @@ export class ViewCube {
     el.className = 'viewcube';
     Object.assign(el.style, { position: 'absolute', top: M + 'px', right: M + 'px', width: S + 'px', height: S + 'px', cursor: 'pointer', zIndex: 4 });
     vp.el.appendChild(el);
+    this.addArrows();
     let drag = null;
     el.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); el.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, moved: false }; });
     el.addEventListener('pointermove', (e) => {
@@ -44,6 +45,33 @@ export class ViewCube {
     el.addEventListener('dblclick', (e) => e.stopPropagation());
     this.applyTheme();
     window.addEventListener('monolith-theme', () => { this.applyTheme(); vp.requestRender(); });
+  }
+
+  // 90° arrows: triangles on the four sides (tilt / turn) + two curved arrows top-right (roll)
+  addArrows() {
+    const vp = this.vp;
+    const box = this.arrows = document.createElement('div');
+    box.className = 'vc-arrows';
+    Object.assign(box.style, { position: 'absolute', top: '0px', right: '0px', width: S + 2 * M + 'px', height: S + 2 * M + 'px', pointerEvents: 'none', zIndex: 4 });
+    const tri = '<svg viewBox="0 0 12 12"><path d="M6 2L11 9H1z"/></svg>';
+    const roll = (flip) => `<svg viewBox="0 0 16 16"${flip ? ' style="transform:scaleX(-1)"' : ''}><path d="M3 9a5 5 0 1 0 2-6" fill="none" stroke-width="1.8"/><path d="M2.2 0.8L6.4 3 3 6.2z" stroke="none"/></svg>`;
+    const c = M + S / 2;
+    const items = [
+      ['up', tri, c, M - 8, 0, 'Rotate 90° up'], ['down', tri, c, M + S + 8, 180, 'Rotate 90° down'],
+      ['left', tri, M - 8, c, -90, 'Rotate 90° left'], ['right', tri, M + S + 8, c, 90, 'Rotate 90° right'],
+      ['ccw', roll(false), M + S - 6, M - 8, 0, 'Roll 90° counter-clockwise'], ['cw', roll(true), M + S + 8, M + 6, 0, 'Roll 90° clockwise'],
+    ];
+    for (const [kind, svg, x, y, rot, tip] of items) {
+      const b = document.createElement('button');
+      b.className = 'vc-arrow vc-' + kind; b.title = tip; b.innerHTML = svg; b.dataset.kind = kind;
+      Object.assign(b.style, { left: x - 8 + 'px', top: y - 8 + 'px', transform: rot ? `rotate(${rot}deg)` : '' });
+      b.addEventListener('pointerdown', (e) => { e.stopPropagation(); e.preventDefault(); });
+      b.addEventListener('click', (e) => { e.stopPropagation(); vp.stepView(kind); });
+      b.addEventListener('dblclick', (e) => e.stopPropagation());
+      b.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
+      box.appendChild(b);
+    }
+    vp.el.appendChild(box);
   }
 
   applyTheme() {
@@ -110,5 +138,5 @@ export class ViewCube {
     r.render(this.scene, this.cam);
   }
 
-  dispose() { this.el.remove(); }
+  dispose() { this.el.remove(); this.arrows?.remove(); }
 }

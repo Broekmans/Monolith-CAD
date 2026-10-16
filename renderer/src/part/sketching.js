@@ -60,6 +60,7 @@ export class PartSketching {
     this.app.cm.selectTab('Sketch');
     this.updatePlanes(); this.updateSketchDisplay(); this.updateHighlights();
     this.vp.normalTo(this.sketcher.fr);
+    this.syncGrid();
     this.app.setConfirmCorner({ ok: () => this.exitSketch(true), cancel: () => this.exitSketch(false), okTip: 'Exit Sketch', cancelTip: 'Discard changes' });
     this.app.cm.refresh();
     this.renderTree();
@@ -69,6 +70,7 @@ export class PartSketching {
     if (!sk) return;
     sk.dispose();
     this.sketcher = null;
+    this.syncGrid();
     document.querySelector('.modify-box')?.remove();
     this.app.setConfirmCorner(null);
     this.app.setSketchStatus(null);

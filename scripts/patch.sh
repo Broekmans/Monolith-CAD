@@ -9,7 +9,7 @@ npx electron-builder --win --x64 --dir >/dev/null 2>&1
 V=$(node -p "require('./package.json').version")
 cd release/win-unpacked
 rm -f ../MonoLith-patch.zip
-zip -qr -9 ../MonoLith-patch.zip resources/app.asar resources/app.asar.unpacked/kernel resources/app.asar.unpacked/shared
+zip -qr -9 ../MonoLith-patch.zip resources/app.asar resources/app.asar.unpacked/kernel resources/app.asar.unpacked/shared resources/libredwg
 cd ..
 sed "s/%V%/$V/g" ../scripts/update-template.bat | sed 's/$/\r/' > UPDATE-MONOLITH.bat
 ls -la MonoLith-patch.zip

@@ -9,7 +9,7 @@ const short = (v) => { const s = typeof v === 'string' ? v : (() => { try { retu
 
 export function log(...parts) {
   let doc = ''; try { doc = window.lithApp?.path?.split(/[\\/]/).pop() || ''; } catch {}
-  buf.push(`${ts()} ${doc ? '[' + doc + '] ' : ''}${parts.map(short).join(' ')}`);
+  buf.push(`${ts()} ${doc ? '[' + doc + '] ' : ''}${(parts[0] === 'ROOMPTS' ? parts.map((v) => (typeof v === 'string' ? v : JSON.stringify(v)).slice(0, 20000)) : parts.map(short)).join(' ')}`);
   if (buf.length > 50) flush();
 }
 function flush() { if (buf.length) { api.log(buf); buf = []; } }
@@ -28,6 +28,7 @@ const fieldLabel = (el) => {
 const mods = (e) => (e.ctrlKey ? 'Ctrl+' : '') + (e.shiftKey ? 'Shift+' : '') + (e.altKey ? 'Alt+' : '');
 
 export function initActionLog() {
+  window.__lithLog = log; // toasts (ui.js) go into the log too
   globalThis.lithLog = log;
   setInterval(flush, 2000);
   window.addEventListener('beforeunload', flush);
@@ -53,6 +54,8 @@ export function initActionLog() {
   }, true);
   document.addEventListener('keydown', (e) => {
     const k = e.key;
+    // a held key repeats ~30×/s: log it once; a lone modifier (Ctrl, Shift, Alt) is not an action
+    if (e.repeat || /^(Control|Shift|Alt|Meta)$/.test(k)) return;
     const inField = e.target.matches?.('input, textarea');
     if (e.ctrlKey || e.altKey || /^(Escape|Enter|Delete|Backspace|Tab|F\d+)$/.test(k) || (!inField && k.length === 1 && k !== ' '))
       if (!(inField && !e.ctrlKey && !e.altKey && !/^(Escape|Enter)$/.test(k))) log('key', mods(e) + k);

@@ -14,9 +14,10 @@
   --err: #c62828;
   --warn: #b26a00;
   --hover: #e8eef7;
+  --edit: #1f8a3a; --edit-soft: #dff3e4;
   --field: #c4ccd8;
   --hu-bg: rgba(255,255,255,.85);
-  --vp-top: #d5dfeb; --vp-mid: #f4f6f9; --vp-bot: #ffffff;
+  --vp-top: #f0f3f7; --vp-mid: #e1e5eb; --vp-bot: #cbd2dd;
   color-scheme: light;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
   font-size: 12.5px;
@@ -91,17 +92,31 @@ body[data-kind=plan] .views { background: #fbfbfc; }
 .cc:hover { background: var(--panel2); border-color: #9fb8dc; }
 .cc svg { width: 26px; height: 26px; }
 
-/* tree */
-.tr-row { display: flex; align-items: center; gap: 5px; height: 24px; padding-right: 6px; cursor: default; white-space: nowrap; user-select: none; border: 1px solid transparent; }
+/* tree (browser, SolidCraft-style) */
+.tr-row { display: flex; align-items: center; gap: 5px; height: 22px; padding-right: 4px; cursor: default; white-space: nowrap; user-select: none; border: 1px solid transparent; border-radius: 3px; margin: 0 3px; }
 .tr-row:hover { background: var(--hover); }
 .tr-row.sel { background: var(--accent-soft); border-color: #a9c6ee; }
 body.dark .tr-row.sel, body.dark .sp-rel:hover, body.dark .tog.on { border-color: #3d6aa8; }
 body.dark .tog.on { color: #8fb8f5; }
 .tr-row.dim { opacity: .45; }
 .tr-row.err .tr-label { color: var(--err); }
+.tr-row.editing { background: var(--edit-soft); border-color: var(--edit); }
+.tr-row.editing .tr-label { color: var(--edit); font-weight: 600; }
+.tr-row.folder .tr-label { font-weight: 500; }
 .tr-err { color: var(--err); font-weight: 700; margin-left: auto; }
-.twisty { width: 12px; font-size: 10px; color: var(--muted); cursor: pointer; text-align: center; flex: none; }
+.twisty { width: 12px; height: 12px; color: var(--muted); cursor: pointer; flex: none; display: inline-flex; align-items: center; justify-content: center; }
+.twisty svg { transition: transform .12s; }
+.twisty.open svg { transform: rotate(90deg); }
+.twisty:hover { color: var(--text); }
 .tr-label { overflow: hidden; text-overflow: ellipsis; }
+.tr-count { color: var(--muted); font-size: 11px; }
+.tr-eye { margin-left: auto; flex: none; width: 20px; height: 18px; padding: 1px 2px; border: 0; background: none; border-radius: 3px; cursor: pointer; color: var(--muted); opacity: 0; display: inline-flex; align-items: center; justify-content: center; }
+.tr-eye svg { width: 14px; height: 14px; }
+.tr-err + .tr-eye { margin-left: 4px; }
+.tr-row:hover .tr-eye, .tr-eye.off { opacity: 1; }
+.tr-eye:hover { background: var(--line2); color: var(--accent); }
+.tr-eye.off { color: var(--muted); }
+.tr-row.hidden-item .tr-label { color: var(--muted); }
 .rollback { height: 6px; margin: 2px 8px; background: #2f6fd0; border-radius: 3px; cursor: ns-resize; box-shadow: 0 0 0 1px #fff inset; }
 .rollback:hover { background: #1854b0; }
 
@@ -274,9 +289,9 @@ table.keys th { text-align: left; padding: 10px 8px 4px; font-size: 12px; color:
 
 /* dark theme */
 body.dark {
-  --bg: #1b1f26; --panel: #232831; --panel2: #2b313c; --line: #3a414e; --line2: #323844;
-  --text: #dde3ec; --muted: #8e98a9; --accent: #4c94f0; --accent-soft: #23395a; --hover: #313a48;
-  --field: #4a5262; --hu-bg: rgba(35,40,49,.88); --vp-top: #2a3240; --vp-mid: #353d4b; --vp-bot: #3c4453; color-scheme: dark;
+  --bg: #1f232b; --panel: #272b34; --panel2: #2f343e; --line: #3f4552; --line2: #353a45;
+  --text: #dee2e8; --muted: #8e98a9; --accent: #3a88ee; --accent-soft: #23395a; --hover: #313a48; --edit: #5fd37a; --edit-soft: #1f3a29;
+  --field: #4a5262; --hu-bg: rgba(35,40,49,.88); --vp-top: #2e3440; --vp-mid: #2e3440; --vp-bot: #2e3440; color-scheme: dark;
 }
 body.dark .cm-btn:hover:not(:disabled) { border-color: #4a5a72; }
 body.dark .cm-btn.on { border-color: #3d6aa8; }
@@ -345,3 +360,68 @@ body.dark .headsup, body.dark .cc { box-shadow: 0 1px 6px rgba(0,0,0,.4); }
 /* drawing: neutral surround (dark in dark mode), the paper itself is painted warm */
 .viewport.paper.drawing { background: #d5d8dd; cursor: default; }
 body.dark .viewport.paper.drawing { background: #2a2d32; }
+
+/* drawing: selection popup (props.js) */
+.ann-props { position: absolute; z-index: 30; width: 268px; max-height: calc(100% - 16px); overflow: auto; background: var(--panel); color: var(--text); border: 1px solid var(--field); border-radius: 6px; box-shadow: 0 6px 22px rgba(0,0,0,.28); font-size: 12px; padding-bottom: 6px; }
+.ann-props .ap-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--field); position: sticky; top: 0; background: var(--panel); }
+.ann-props .ap-val { color: var(--muted); font-variant-numeric: tabular-nums; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ann-props .ap-x { border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 2px; }
+.ann-props .ap-sec { margin: 8px 8px 2px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.ann-props .ap-row { display: grid; grid-template-columns: 112px 1fr; align-items: center; gap: 6px; margin: 3px 8px; }
+.ann-props .ap-row label { color: var(--muted); font-size: 11.5px; }
+.ann-props .ap-row.own label { color: var(--text); font-weight: 600; }
+.ann-props input[type=text], .ann-props input[type=number], .ann-props select, .ann-props textarea { height: 24px; border: 1px solid var(--field); border-radius: 3px; padding: 0 5px; min-width: 0; width: 100%; background: var(--panel2); color: var(--text); box-sizing: border-box; }
+.ann-props textarea { height: auto; padding: 3px 5px; resize: vertical; font: inherit; }
+.ann-props input[type=color] { height: 24px; width: 48px; border: 1px solid var(--field); padding: 0 2px; background: var(--panel2); }
+.ann-props .ap-two { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.ann-props .ap-info { margin: 4px 8px; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.ann-props .ap-btns { display: flex; gap: 6px; margin: 8px 8px 0; }
+.pm-color input[type=color] { height: 24px; width: 56px; border: 1px solid var(--field); padding: 0 2px; background: var(--panel2); }
+.ann-props details.ap-more { margin: 8px 0 0; border-top: 1px solid var(--field); }
+.ann-props details.ap-more > summary { cursor: pointer; padding: 6px 8px 2px; color: var(--muted); font-size: 11.5px; }
+.ann-props.room-list { width: auto; min-width: 380px; max-width: 640px; max-height: 60%; }
+.room-list .rl-table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.room-list th { position: sticky; top: 33px; background: var(--panel); text-align: left; font-weight: 600; font-size: 11px; color: var(--muted); padding: 5px 6px; cursor: pointer; white-space: nowrap; user-select: none; border-bottom: 1px solid var(--field); }
+.room-list th.on { color: var(--text); }
+.room-list th.num, .room-list td.num { text-align: right; }
+.room-list td { padding: 2px 6px; white-space: nowrap; border-bottom: 1px solid color-mix(in srgb, var(--field) 50%, transparent); }
+.room-list td.where { color: var(--muted); font-size: 11px; }
+.room-list tbody tr { cursor: pointer; }
+.room-list tbody tr:hover { background: color-mix(in srgb, var(--field) 40%, transparent); }
+.room-list tbody tr.sel { background: color-mix(in srgb, #2a6fd6 18%, transparent); }
+.room-list td input[type=text] { height: 22px; width: 150px; border: 1px solid transparent; background: transparent; color: var(--text); padding: 0 4px; border-radius: 3px; }
+.room-list td input[type=text]:hover, .room-list td input[type=text]:focus { border-color: var(--field); background: var(--panel2); }
+.room-list tfoot td { font-weight: 600; border-bottom: 0; padding-top: 5px; }
+.viewport input.inline-name { position: absolute; z-index: 31; border: 1.5px solid #2a6fd6; border-radius: 3px; background: #fffef8; color: #000; padding: 0 4px; box-sizing: border-box; font-family: Helvetica, Arial, sans-serif; outline: none; }
+/* 0.1.65 feature dialog floating over the 3D view + value box on the model */
+.panel.pmroot.pm-float { position: fixed; width: 268px; flex: none; z-index: 30; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.18); overflow: auto; }
+.feat-val { position: absolute; z-index: 25; transform: translateY(-50%); display: flex; align-items: center; gap: 5px; padding: 3px 6px; background: var(--hu-bg); border: 1px solid #286edc; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,.15); font-size: 12px; white-space: nowrap; }
+.feat-val.free { transform: translateX(-50%); }
+.feat-val label { color: var(--muted, #667); }
+.feat-val input { width: 64px; border: 1px solid var(--line); border-radius: 3px; padding: 1px 4px; background: var(--field, #fff); color: inherit; font: inherit; }
+.feat-val input.bad { border-color: #d33; background: #fde8e8; }
+.feat-grip { position: absolute; z-index: 24; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; cursor: grab; background: rgba(40,110,220,.18); border: 1px solid rgba(40,110,220,.6); }
+.feat-grip:hover { background: rgba(40,110,220,.4); }
+
+/* view cube 90° arrows */
+.vc-arrow { position: absolute; width: 16px; height: 16px; padding: 1px; border: 0; background: none; cursor: pointer; pointer-events: auto; color: #7d8aa0; fill: currentColor; stroke: currentColor; opacity: .55; transition: opacity .12s, color .12s; }
+.vc-arrow svg { width: 14px; height: 14px; display: block; }
+.viewport:hover .vc-arrow { opacity: .9; }
+.vc-arrow:hover { color: #3a88ee; opacity: 1; }
+body.dark .vc-arrow { color: #9aa6b8; }
+body.dark .vc-arrow:hover { color: #5fa2f5; }
+
+/* several viewports (Viewport menu) */
+.viewset { position: absolute; inset: 0; }
+.viewset > .viewport { position: absolute; }
+.viewset.multi > .viewport::after { content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 3; box-shadow: inset 0 0 0 1px var(--line); }
+.viewset.multi > .viewport.active::after { box-shadow: inset 0 0 0 2px var(--accent); }
+.vs-split { position: absolute; z-index: 6; background: var(--line); }
+.vs-split.v { top: 0; bottom: 0; width: 4px; cursor: col-resize; }
+.vs-split.h { left: 0; right: 0; height: 4px; cursor: row-resize; }
+.vs-split:hover { background: var(--accent); }
+
+/* DWG converter dialog */
+.dwg-help .dwg-row { display: flex; gap: 12px; padding: 3px 0; }
+.dwg-help .dwg-row b { width: 170px; flex: none; font-weight: 600; }
+.dwg-help .dwg-row span { word-break: break-all; }

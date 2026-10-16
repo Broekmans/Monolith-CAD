@@ -3,6 +3,7 @@
 // 'drawView') and is stored in the document, so a drawing opens without the kernel; "Rebuild Views"
 // recomputes it from the model files. Third angle projection.
 import { Viewport } from '../viewport.js';
+import { ViewSet } from '../viewset.js';
 import { h, fmt, contextMenu, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { api } from '../api.js';
@@ -10,8 +11,18 @@ import { loadPart } from '../assembly/assembly.js';
 import { SIZES, SCALES, STD, scaleText, scaleVal, projected, isOrtho, viewRect, frameRect, sheetPrims, sheetSize, drawArea, TB_FIELDS, zoneGrid } from './sheet.js';
 
 export const PAPER = '#f3e9cf'; // warm paper colour on screen (the PDF stays white)
-import { makePdf, EM } from './pdf.js';
+import { makePdf, makePdfCompressed, EM } from './pdf.js';
+import { paintDots } from './dots.js';
+import { paintRaster, loadRaster, onRasterReady } from './raster.js';
+import { DrawingClouds, isCloudSrc, CLOUD_EXTS, cloudDefaults, PRESETS } from './cloudview.js';
 import { DrawingTools } from './tools.js';
+import { DrawingSections } from './sections.js';
+import { DrawingOverlay } from './overlay.js';
+import { DrawingProps } from './props.js';
+import { DrawingOutline } from './outline.js';
+import { DrawingRooms } from './rooms.js';
+import { DrawingInfo } from './info.js';
+import { setCompanyStd, companyStd, clean } from './styles.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const fileName = (p) => p.split(/[\\/]/).pop();
@@ -47,18 +58,24 @@ export class DrawingDoc {
   // ======================= setup =======================
   init() {
     const app = this.app;
-    this.vp = this.viewport = new Viewport(app.el.views, { mode: 'plan' });
-    this.vp.el.classList.add('paper', 'drawing');
+    this.viewSet = new ViewSet(app.el.views, { mode: 'plan', cls: ['paper', 'drawing'] }); // Viewport menu: 1, 2 or 4 panes of the sheet
+    this.vp = this.viewport = this.viewSet.proxy;
     this.vp.overlayDrawers.push((ctx) => this.draw(ctx));
+    onRasterReady(() => this.vp.requestRender());
     this.vp.onContextMenu = (e) => this.contextMenu(e);
     this.bind();
+    api.draftStd?.().then((r) => { setCompanyStd(clean(r || {})); if (!this.doc.style && !this.doc.views.length) this.doc.style = companyStd(); this.vp.requestRender(); }).catch(() => {});
     this.buildCommands();
     this.buildHeadsUp();
     app.showPanel('tree');
     this.renderTree();
     app.setStatusRight('mm');
-    requestAnimationFrame(() => this.zoomFit(false));
+    requestAnimationFrame(() => { this.zoomFit(false); if (this.doc.viewLayout) this.viewSet.restore(this.doc.viewLayout); });
   }
+  // Viewport menu: layout of 1, 2 or 4 panes (saved in the file with each pane's view)
+  setViewLayout(name) { this.viewSet.setLayout(name, { fit: () => this.zoomFit(false) }); this.app.setStatus(name === 'single' ? 'Single view' : 'Click in a view to make it the active one (blue border); commands like Zoom to Fit act on it'); }
+  resetViews() { this.viewSet.resetViews(() => this.zoomFit(false)); }
+  beforeSave() { const s = this.viewSet.toJSON(); if (s.layout === 'single') delete this.doc.viewLayout; else this.doc.viewLayout = s; }
   buildCommands() {
     const C = (id, label, ic, run, extra = {}) => ({ id, label, icon: ic, run, ...extra });
     const idle = () => !this.app.pm.open && !this.busy;
@@ -77,14 +94,17 @@ export class DrawingDoc {
       format: [C('sheetFmt', 'Sheet Format', 'grid', () => this.cmdSheet(), { enabled: idle, tip: 'Paper size, orientation and scale of this sheet' }),
         C('zones', 'Zone Grid', 'layers', () => this.cmdZones(), { enabled: idle, active: () => !!this.sheet.zones?.on, tip: 'Letters (A, B, C…) and numbers (1, 2, 3…) along the sheet edge' })],
       annotate: [C('smartDim', 'Smart Dimension', 'dimension', () => this.cmdDimension(), { enabled: () => idle() && this.doc.views.length > 0, active: () => this.tool && this.app.pm.current?.title === 'Smart Dimension', tip: 'Length of a line or between two points, angle between two lines, diameter or radius of a circle / arc' }),
-        C('area', 'Area', 'polyline', () => this.cmdArea(), { enabled: () => idle() && this.doc.views.length > 0, tip: 'Area of a closed outline (click its corners) or of a circle' }),
-        C('note', 'Note', 'text', () => this.cmdNote(), { enabled: () => idle() && this.doc.views.length > 0, tip: 'Text, with an arrow when you start on the model' })],
-      dimStyle: [C('dimStyle', 'Dimension Style', 'dimAligned', () => this.cmdDimStyle(), { enabled: idle, tip: 'Number of decimals' })],
+        C('area', 'Polygon Area', 'areaPoly', () => this.cmdArea(), { enabled: () => idle() && this.doc.views.length > 0, tip: 'Area of a closed outline (click its corners) or of a circle' }),
+        C('room', 'Room Outline', 'room', () => this.cmdRoom(), { enabled: () => idle() && this.doc.views.some((v) => v.geom?.fit), tip: 'Click inside a room on a point cloud plan: outline from the walls, name and area. Click the room afterwards to change its outline settings.' }),
+        C('scaleBar', 'Scale Bar', 'scaleBar', () => this.cmdScaleBar(), { enabled: () => idle() && this.doc.views.length > 0, tip: 'Checkered scale bar (0 … 1 m style), true to the view scale' }),
+        C('note', 'Note / Leader', 'leader', () => this.cmdNote(), { enabled: () => idle() && this.doc.views.length > 0, tip: 'Text, with an arrow when you start on the model' })],
+      rooms: [C('roomList', 'Room List', 'layers', () => this.cmdRoomList(), { active: () => !!this._rl, tip: 'List of all rooms with area, perimeter and size. Click a column head to sort, type in a name to rename, CSV for Excel.' })],
+      dimStyle: [C('dimStyle', 'Drafting Standard', 'gear', () => this.cmdDraftStd(), { enabled: idle, tip: 'Units, text, dimension lines, arrows, room outlines and straightening for this drawing; save / load / import / export the company standard' })],
       title: [C('titleBlock', 'Title Block', 'text', () => this.cmdTitleBlock(), { enabled: idle, tip: 'Company, title, drawing number, drawn by, date, revision' })],
       sheets: [C('addSheet', 'Add Sheet', 'plus', () => this.addSheet(), { enabled: idle }),
         C('delSheet', 'Delete Sheet', 'delete', () => this.deleteSheet(), { enabled: () => idle() && this.doc.sheets.length > 1 })],
     };
-    const TABS = [['Drawing', ['views', 'rebuild', 'output', 'edit']], ['Annotate', ['annotate', 'dimStyle', 'edit']], ['Sheet', ['format', 'title', 'sheets', 'output']]];
+    const TABS = [['Drawing', ['views', 'rebuild', 'output', 'edit']], ['Annotate', ['annotate', 'rooms', 'dimStyle', 'edit']], ['Sheet', ['format', 'title', 'sheets', 'output']]];
     this.app.cm.setTabs(TABS.map(([name, gs]) => ({ name, groups: gs.map((g) => G[g]) })), 'Drawing');
   }
   buildHeadsUp() {
@@ -113,13 +133,20 @@ export class DrawingDoc {
     ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(a[0] + 4, b[1] + 4, b[0] - a[0], a[1] - b[1]);
     ctx.fillStyle = PAPER; ctx.fillRect(a[0], b[1], b[0] - a[0], a[1] - b[1]);
     const prims = sheetPrims(this.doc, this.sheet, { selected: this.sel, selAnn: this.selAnn?.id, preview: this.preview });
-    this._annBoxes = prims.filter((q) => q.t === 'annbox');
+    this._annBoxes = prims.filter((q) => q.t === 'annbox' || q.t === 'annpath');
     this.paint(ctx, prims, (p) => this.S2(p, A), k);
+    this.drawOutlineGrips(ctx);
+    this.drawDotGrip(ctx);
+    const set = this.viewSet; if (set.panes.length > 1 && this.vp.pane !== set.active) return; // popups / panels follow the active pane
+    this.syncProps(); this.syncInfo();
+    this.syncRoomList();
   }
   // draw primitives with a sheet->pixel mapping S (k = pixels per mm)
   paint(ctx, prims, S, k) {
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     for (const p of prims) {
+      if (p.t === 'dots') { paintDots(ctx, p, S, k); continue; }
+      if (p.t === 'raster') { paintRaster(ctx, p, S); continue; }
       if (p.t === 'line' || p.t === 'sel') {
         const q = p.pts; if (q.length < 4) continue;
         ctx.beginPath();
@@ -131,7 +158,7 @@ export class DrawingDoc {
       } else if (p.t === 'fill') {
         const q = p.pts; ctx.beginPath(); let s0 = S([q[0], q[1]]); ctx.moveTo(s0[0], s0[1]);
         for (let i = 2; i < q.length; i += 2) { s0 = S([q[i], q[i + 1]]); ctx.lineTo(s0[0], s0[1]); }
-        ctx.closePath(); ctx.fillStyle = p.color || '#000'; ctx.fill();
+        ctx.closePath(); ctx.fillStyle = p.color || '#000'; if (p.alpha != null) { ctx.globalAlpha = p.alpha; ctx.fill(); ctx.globalAlpha = 1; } else ctx.fill();
       } else if (p.t === 'circle') {
         const c = S(p.c); ctx.setLineDash([]); ctx.strokeStyle = p.color || '#000'; ctx.lineWidth = Math.max(0.6, p.w * k);
         ctx.beginPath(); ctx.arc(c[0], c[1], p.r * k, 0, Math.PI * 2); ctx.stroke();
@@ -170,16 +197,25 @@ export class DrawingDoc {
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || e.altKey) return;
       const { p } = at(e);
+      this._free = e.shiftKey;
       if (this.tool) { this.tool.click?.(p, e); this.vp.requestRender(); return; }
+      // the dot of a selected room / area label, then the grips of its outline
+      const dg = !this.app.pm.open && this.dotGripAt(p);
+      if (dg) { drag = this.dotDragStart(dg, p); el.setPointerCapture(e.pointerId); return; }
+      const og = !this.app.pm.open && this.outlineGripAt(p);
+      if (og) { drag = this.outlineDragStart(og, p); el.setPointerCapture(e.pointerId); return; }
       // annotations first (their text), then view frames, then views
       const an = this.annAt(p);
       if (an) {
         this.selAnn = an; this.sel = an.view; this.renderTree(); this.app.cm.refresh(); this.vp.requestRender();
         const a = this.ann(an.view, an.id), v = this.V(an.view);
-        if (a && !this.app.pm.open) { drag = { ann: a, v, p0: p, at0: a.at.slice(), snap: this.snapshot(), moved: false }; el.setPointerCapture(e.pointerId); }
+        if (a && !an.path && !this.app.pm.open) { drag = { ann: a, v, p0: p, at0: a.at.slice(), snap: this.snapshot(), moved: false }; el.setPointerCapture(e.pointerId); }
         return;
       }
       this.selAnn = null;
+      // cutting line of a section: selects the section, drag moves the cut
+      const cv = this.cutAt(p);
+      if (cv) { this.select(cv.id); if (!this.app.pm.open) { drag = { cut: cv, p0: p, snap: this.snapshot(), moved: false, last: 0 }; el.setPointerCapture(e.pointerId); } return; }
       const fv = this.frameAt(p), v = fv || this.viewAt(p);
       this.select(v?.id || null);
       // only the dotted frame grabs a view (inside it stays free for picking model edges)
@@ -187,17 +223,20 @@ export class DrawingDoc {
     });
     el.addEventListener('pointermove', (e) => {
       const { p } = at(e);
-      this.lastMouse = p;
+      this.lastMouse = p; this._free = e.shiftKey;
       this.app.setCoords(`X ${fmt(p[0], 1)}  Y ${fmt(p[1], 1)} mm`);
       if (this.tool) { if (!e.buttons) this.tool.move?.(p, e); return; }
-      if (!drag) { el.style.cursor = !e.buttons && (this.frameAt(p) || this.annAt(p)) ? 'move' : ''; return; }
+      if (!drag) { const g = !e.buttons && (this.dotGripAt(p) ? { kind: 'corner' } : this.outlineGripAt(p)); el.style.cursor = g ? (g.kind === 'corner' ? 'crosshair' : 'move') : !e.buttons && (this.frameAt(p) || this.annAt(p) || this.cutAt(p)) ? 'move' : ''; return; }
       const d = [p[0] - drag.p0[0], p[1] - drag.p0[1]];
-      if (Math.abs(d[0]) + Math.abs(d[1]) > 0.5) drag.moved = true;
+      if (Math.abs(d[0]) + Math.abs(d[1]) > (drag.outline ? 2 / Math.max(1e-6, Math.abs(this.affine().ex[0])) : 0.5)) drag.moved = true;
+      if (drag.dot) { if (drag.moved) { this.dotDragMove(drag, p); this.vp.requestRender(); } return; }
+      if (drag.outline) { if (drag.moved) { this.outlineDragMove(drag, p, e.shiftKey, e.ctrlKey); this.vp.requestRender(); } return; }
+      if (drag.cut) { const sh = this.dragCutShift(drag.cut, d); this.shiftCut(drag.cut, sh - drag.last); drag.last = sh; this.vp.requestRender(); return; }
       if (drag.ann) { const s = viewScaleOf(this, drag.v); drag.ann.at = [drag.at0[0] + d[0] / s, drag.at0[1] + d[1] / s]; }
       else this.moveView(drag.v, [drag.pos0[0] + d[0], drag.pos0[1] + d[1]]);
       this.vp.requestRender();
     });
-    const end = () => { if (drag?.moved) { this.pushUndo(drag.snap); this.app.setDirty(true); } drag = null; };
+    const end = () => { if (drag?.dot) { if (drag.moved) this.dotDragEnd(drag); drag = null; this.vp.requestRender(); return; } if (drag?.outline) { if (drag.moved) this.outlineDragEnd(drag); drag = null; this.vp.requestRender(); return; } if (drag?.moved) { this.pushUndo(drag.snap); this.app.setDirty(true); if (drag.cut) { this.renderTree(); this.recomputeViews([drag.cut]); } } drag = null; };
     el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
     el.addEventListener('dblclick', (e) => { if (this.tool) return; const r = el.getBoundingClientRect(), p = this.toSheet(e.clientX - r.left, e.clientY - r.top), an = this.annAt(p); if (an) { this.editAnn(an); return; } const v = this.viewAt(p); if (v) this.zoomTo(v); });
   }
@@ -228,25 +267,28 @@ export class DrawingDoc {
   contextMenu(e) {
     if (this.tool) { this.tool.context?.(); return; }
     const v = this.V(this.sel);
+    const r = this.vp.el.getBoundingClientRect(), om = this.outlineMenu(this.toSheet(e.clientX - r.left, e.clientY - r.top));
     contextMenu(e.clientX, e.clientY, [
+      ...om,
       { label: 'Zoom to Sheet', key: 'F', run: () => this.zoomFit() },
-      ...(v ? [{ label: 'Projected View…', run: () => this.cmdProjected() }, { label: v.hidden ? 'Hide hidden lines' : 'Show hidden lines', run: () => this.setViewProp(v, { hidden: !v.hidden }) }, { label: 'Delete view', run: () => this.deleteView() }] : []),
+      ...(v ? [{ label: 'Projected View…', run: () => this.cmdProjected() }, ...(isCloudSrc(v.src) ? [] : [{ label: v.hidden ? 'Hide hidden lines' : 'Show hidden lines', run: () => this.setViewProp(v, { hidden: !v.hidden }) }]), { label: 'Delete view', run: () => this.deleteView() }] : []),
       { label: 'Model View…', run: () => this.cmdModelView(false) },
     ]);
   }
 
   // ======================= undo =======================
-  snapshot() { return JSON.stringify({ sheets: this.doc.sheets, views: this.doc.views, titleBlock: this.doc.titleBlock, dimDec: this.doc.dimDec ?? 2 }); }
+  snapshot() { return JSON.stringify({ sheets: this.doc.sheets, views: this.doc.views, titleBlock: this.doc.titleBlock, dimDec: this.doc.dimDec ?? 2, dimUnits: this.doc.dimUnits || 'mm', areaUnits: this.doc.areaUnits || 'm2', snapMode: this.doc.snapMode || 'first', style: this.doc.style || null }); }
   pushUndo(s = this.snapshot()) { this.undoStack.push(s); if (this.undoStack.length > 50) this.undoStack.shift(); this.redoStack = []; this.app.cm.refresh(); }
-  restore(s) { Object.assign(this.doc, JSON.parse(s)); if (!this.doc.sheets.some((x) => x.id === this.sheetId)) this.sheetId = this.doc.sheets[0].id; if (!this.V(this.sel)) this.sel = null; this.selAnn = null; this.app.setDirty(true); this.renderTree(); this.app.cm.refresh(); this.vp.requestRender(); }
+  restore(s) { this.closeProps?.(); Object.assign(this.doc, JSON.parse(s)); if (!this.doc.sheets.some((x) => x.id === this.sheetId)) this.sheetId = this.doc.sheets[0].id; if (!this.V(this.sel)) this.sel = null; this.selAnn = null; this.app.setDirty(true); this.renderTree(); this.app.cm.refresh(); this.vp.requestRender(); }
   undo() { if (!this.undoStack.length) return; this.redoStack.push(this.snapshot()); this.restore(this.undoStack.pop()); }
   redo() { if (!this.redoStack.length) return; this.undoStack.push(this.snapshot()); this.restore(this.redoStack.pop()); }
   change(fn) { this.pushUndo(); fn(); this.app.setDirty(true); this.renderTree(); this.app.cm.refresh(); this.vp.requestRender(); }
 
   // ======================= views =======================
-  sources() { return (this.app.root?.tabs || this.app.tabs || []).filter((t) => t.path && /\.lith(prt|asm)$/i.test(t.path)).map((t) => t.path); }
+  sources() { return (this.app.root?.tabs || this.app.tabs || []).filter((t) => t.path && /\.lith(prt|asm|pcd)$/i.test(t.path)).map((t) => t.path); }
   // compute view geometry: views [{dir, x, hidden}] of one model file
-  async computeViews(src, list) {
+  async computeViews(src, list, ctx = null, opts = {}) {
+    if (isCloudSrc(src)) return this.computeCloudViews(src, list, ctx, opts);
     const r = await loadPart(src);
     if (r.err) throw new Error(`${fileName(src)}: ${r.err}`);
     const parts = (r.flat || []).map((fp) => ({ features: fp.features, upTo: fp.upTo, m: fp.m }));
@@ -261,27 +303,33 @@ export class DrawingDoc {
     let file = srcs[0] || null;
     const pm = this.app.pm.show({
       title: three ? 'Standard 3 Views' : 'Model View', iconName: three ? 'section' : 'views',
-      values: { file: file || '', orient: 'front', hidden: false, scale: this.doc.views.some((v) => v.sheet === this.sheetId) ? 'sheet' : 'auto' },
+      values: { file: file || '', orient: 'front', hidden: false, color: 'density', density: 'normal', preset: 'full', scale: this.doc.views.some((v) => v.sheet === this.sheetId) ? 'sheet' : 'auto' },
       fields: [
-        ...(srcs.length ? [{ key: 'file', type: 'select', label: 'Part / assembly (open documents)', options: srcs.map((p) => ({ value: p, label: fileName(p) })) }] : []),
-        { type: 'buttons', buttons: [{ label: 'Choose file…', icon: 'open', run: async () => { const f = await api.openFile({ filters: [{ name: 'Parts and assemblies', extensions: ['lithprt', 'lithasm', 'ekprt', 'ekasm'] }], noRead: true }); if (f) { file = f.path; pm.inputs.src.textContent = 'Model: ' + fileName(file); } } }] },
-        { type: 'info', key: 'src', text: file ? 'Model: ' + fileName(file) : 'Open a saved part or assembly, or choose a file.' },
+        ...(srcs.length ? [{ key: 'file', type: 'select', label: 'Part / assembly / point cloud (open documents)', options: srcs.map((p) => ({ value: p, label: fileName(p) })) }] : []),
+        { type: 'buttons', buttons: [{ label: 'Choose file…', icon: 'open', run: async () => { const f = await api.openFile({ filters: [{ name: 'Parts, assemblies and point clouds', extensions: ['lithprt', 'lithasm', 'ekprt', 'ekasm', ...CLOUD_EXTS] }], noRead: true }); if (f) { file = f.path; pm.inputs.src.textContent = 'Model: ' + fileName(file); } } }] },
+        { type: 'info', key: 'src', text: file ? 'Model: ' + fileName(file) : 'Open a saved part, assembly or point cloud, or choose a file.' },
         ...(three ? [] : [{ key: 'orient', type: 'select', label: 'Orientation', options: Object.entries(STD).map(([k, v]) => ({ value: k, label: v.label[0] + v.label.slice(1).toLowerCase() })) }]),
         { key: 'scale', type: 'select', label: 'Sheet scale', options: [{ value: 'auto', label: 'Fit to sheet (choose scale)' }, { value: 'sheet', label: `Keep ${scaleText(this.sheet.scale)}` }] },
-        { key: 'hidden', type: 'check', label: 'Show hidden lines' },
+        { key: 'hidden', type: 'check', label: 'Show hidden lines (parts)' },
+        { key: 'color', type: 'select', label: 'Point cloud colour', options: [{ value: 'density', label: 'Density (scan look)' }, { value: 'black', label: 'Points, black' }, { value: 'grey', label: 'Points, grey (intensity)' }, { value: 'rgb', label: 'Points, scan colours (RGB)' }] },
+        { key: 'preset', type: 'select', label: 'Point cloud top view', options: [{ value: 'full', label: 'Full depth (x-ray)' }, { value: 'plan', label: 'Floor plan slice (floor + 1.0 … 1.3 m)' }, { value: 'slab', label: 'Floor slab (floor + 0.2 … 1.7 m)' }] },
+        { key: 'density', type: 'select', label: 'Point cloud density', options: [{ value: 'fine', label: 'Fine' }, { value: 'normal', label: 'Normal' }, { value: 'light', label: 'Light' }] },
         { type: 'info', text: 'Third angle projection: the top view goes above the front view, the right view to the right. Drag views to move them.' }],
       onChange: (v, key) => { if (key === 'file') { file = v.file; pm.inputs.src.textContent = 'Model: ' + fileName(file); } },
       onOk: (v) => {
         if (!file) { pm.setMessage('Choose a part or assembly first', 'error'); return false; }
         const list = three ? ['front', 'top', 'right'] : [v.orient];
-        setTimeout(() => this.addViews(file, list, { hidden: !!v.hidden, auto: v.scale === 'auto' }));
+        setTimeout(() => this.addViews(file, list, { hidden: !!v.hidden, auto: v.scale === 'auto', cloud: { ...cloudDefaults(), color: v.color, density: v.density }, preset: v.preset }));
         return true;
       },
     });
   }
-  async addViews(file, names, { hidden = false, auto = true } = {}) {
-    const list = names.map((n) => ({ name: n, dir: STD[n].dir, x: STD[n].x }));
-    const geoms = await this.run('Creating views', () => this.computeViews(file, list));
+  async addViews(file, names, { hidden = false, auto = true, cloud = null, preset = 'full' } = {}) {
+    const isCloud = isCloudSrc(file);
+    const clipFor = (n) => (n === 'top' && PRESETS[preset] ? { on: true, ref: 'floor', ...PRESETS[preset] } : { on: false, ref: 'back', from: 0, to: 1 });
+    const list = names.map((n) => ({ name: n, dir: STD[n].dir, x: STD[n].x, ...(isCloud ? { cloud: { ...(cloud || cloudDefaults()), clip: clipFor(n) } } : {}) }));
+    // point clouds: the box first (to choose the scale), then the dots at that scale
+    let geoms = await this.run('Creating views', () => this.computeViews(file, list, null, { probe: isCloud && auto }));
     if (!geoms) return null;
     const snap = this.snapshot();
     const sh = this.sheet, A = drawArea(sh), gap = 25;
@@ -296,8 +344,9 @@ export class DrawingDoc {
       const fit = SCALES.find((s) => needW * scaleVal(s) <= avail[0] && needH * scaleVal(s) <= avail[1]) || SCALES[SCALES.length - 1];
       sh.scale = fit.slice();
     }
+    if (isCloud && auto) { geoms = await this.run('Drawing the point cloud', () => this.computeViews(file, list)); if (!geoms) return null; }
     const s = scaleVal(sh.scale), made = [];
-    const mk = (i, pos, extra = {}) => { const n = names[i]; const v = { id: uid('v'), sheet: sh.id, name: STD[n].label[0] + STD[n].label.slice(1).toLowerCase(), src: file, srcName: baseName(file), dir: list[i].dir, x: list[i].x, pos, hidden, scale: null, geom: geoms[i], ...extra }; this.doc.views.push(v); made.push(v); return v; };
+    const mk = (i, pos, extra = {}) => { const n = names[i]; const v = { id: uid('v'), sheet: sh.id, name: STD[n].label[0] + STD[n].label.slice(1).toLowerCase(), src: file, srcName: baseName(file), dir: list[i].dir, x: list[i].x, pos, hidden, scale: null, geom: geoms[i], ...(list[i].cloud ? { cloud: list[i].cloud } : {}), ...extra }; this.doc.views.push(v); made.push(v); return v; };
     if (three) {
       const wTot = (S[iF][0] + S[iR][0]) * s + gap, hTot = (S[iF][1] + S[iT][1]) * s + gap;
       const left = (A.x0 + A.x1) / 2 - wTot / 2, bottom = (A.y0 + A.y1) / 2 - hTot / 2 + 5;
@@ -326,13 +375,13 @@ export class DrawingDoc {
   }
   async addProjected(par, side) {
     const d = projected(par, side);
-    const geoms = await this.run('Creating view', () => this.computeViews(par.src, [d]));
+    const geoms = await this.run('Creating view', () => this.computeViews(par.src, [d], par));
     if (!geoms) return null;
     const snap = this.snapshot(), sh = this.doc.sheets.find((x) => x.id === par.sheet), g = geoms[0], s = scaleVal(par.scale || sh.scale);
     const pr = viewRect(par, sh), gap = 25, w = (g.box[2] - g.box[0]) * s, hh = (g.box[3] - g.box[1]) * s;
     const pos = side === 'right' ? [pr[2] + gap + w / 2, par.pos[1]] : side === 'left' ? [pr[0] - gap - w / 2, par.pos[1]] : side === 'above' ? [par.pos[0], pr[3] + gap + hh / 2] : [par.pos[0], pr[1] - gap - hh / 2];
     const nm = Object.entries(STD).find(([k, q]) => k !== 'iso' && q.dir.every((c, i) => Math.abs(c - d.dir[i]) < 1e-9) && q.x.every((c, i) => Math.abs(c - d.x[i]) < 1e-9));
-    const v = { id: uid('v'), sheet: sh.id, name: nm ? nm[1].label[0] + nm[1].label.slice(1).toLowerCase() : `Projected ${this.doc.views.length + 1}`, src: par.src, srcName: par.srcName, dir: d.dir, x: d.x, pos, hidden: par.hidden, scale: par.scale ? par.scale.slice() : null, geom: g, parent: par.id, side };
+    const v = { id: uid('v'), sheet: sh.id, name: nm ? nm[1].label[0] + nm[1].label.slice(1).toLowerCase() : `Projected ${this.doc.views.length + 1}`, src: par.src, srcName: par.srcName, dir: d.dir, x: d.x, pos, hidden: par.hidden, scale: par.scale ? par.scale.slice() : null, geom: g, parent: par.id, side, ...(par.cloud ? { cloud: { ...par.cloud, clip: { ...par.cloud.clip, on: false } } } : {}) };
     this.doc.views.push(v);
     this.pushUndo(snap); this.sel = v.id;
     this.app.setDirty(true); this.renderTree(); this.app.cm.refresh(); this.vp.requestRender();
@@ -374,6 +423,7 @@ export class DrawingDoc {
   }
   setViewScale(v, scale) {
     this.change(() => this.withRealign([v], () => { for (const q of [v, ...this.descendants(v)]) q.scale = scale ? scale.slice() : null; }));
+    this.refreshCloudViews();
   }
 
   // ======================= sheets & title block =======================
@@ -385,7 +435,7 @@ export class DrawingDoc {
         { key: 'size', type: 'select', label: 'Paper size', options: Object.keys(SIZES).map((k) => ({ value: k, label: `${k} (${SIZES[k][0]} × ${SIZES[k][1]} mm)` })) },
         { key: 'orient', type: 'select', label: 'Orientation', options: [{ value: 'landscape', label: 'Landscape' }, { value: 'portrait', label: 'Portrait' }] },
         { key: 'scale', type: 'select', label: 'Scale', options: SCALES.map((s) => ({ value: scaleText(s), label: scaleText(s) })) }],
-      onOk: (v) => { this.change(() => this.withRealign(this.doc.views.filter((q) => q.sheet === sh.id && !q.parent), () => { sh.name = v.name || sh.name; sh.size = v.size; sh.orient = v.orient; sh.scale = SCALES.find((s) => scaleText(s) === v.scale).slice(); })); this.zoomFit(); return true; },
+      onOk: (v) => { this.change(() => this.withRealign(this.doc.views.filter((q) => q.sheet === sh.id && !q.parent), () => { sh.name = v.name || sh.name; sh.size = v.size; sh.orient = v.orient; sh.scale = SCALES.find((s) => scaleText(s) === v.scale).slice(); })); this.zoomFit(); this.refreshCloudViews(); return true; },
     });
   }
   cmdZones() {
@@ -426,7 +476,8 @@ export class DrawingDoc {
     return makePdf(this.doc.sheets.map((sh) => { const [w, hh] = sheetSize(sh); return { w, h: hh, prims: sheetPrims(this.doc, sh) }; }), { title: this.doc.titleBlock?.title || this.doc.name });
   }
   async exportPdf(path = null) {
-    const text = this.pdfText();
+    for (const v of this.doc.views) if (v.geom?.raster) await loadRaster(v.geom.raster);
+    const text = await makePdfCompressed(this.doc.sheets.map((sh) => { const [w, hh] = sheetSize(sh); return { w, h: hh, prims: sheetPrims(this.doc, sh) }; }), { title: this.doc.titleBlock?.title || this.doc.name });
     if (path) { await api.writeFile(path, text); return path; }
     const dir = this.app.path ? this.app.path.replace(/[^\\/]*$/, '') : '';
     const p = await api.saveFile({ defaultPath: dir + `${this.doc.name}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }], text, latin1: true });
@@ -455,6 +506,7 @@ export class DrawingDoc {
       for (const v of kids(null)) add(v, 2);
     }
     const v = this.V(this.sel);
+    tree.appendChild(this.infoPanel());
     tree.appendChild(v ? this.viewPanel(v) : this.sheetPanel());
   }
   viewPanel(v) {
@@ -467,11 +519,13 @@ export class DrawingDoc {
     const sc = h('select', {}, h('option', { value: '', selected: !v.scale }, `Sheet scale (${scaleText(sh.scale)})`), ...SCALES.map((s) => h('option', { value: scaleText(s), selected: v.scale && scaleText(v.scale) === scaleText(s) }, scaleText(s))));
     sc.addEventListener('change', () => this.setViewScale(v, sc.value ? SCALES.find((s) => scaleText(s) === sc.value) : null));
     const chk = (label, key, def) => { const c = h('input', { type: 'checkbox', checked: v[key] ?? def }); c.addEventListener('change', () => this.setViewProp(v, { [key]: c.checked })); return h('label', { class: 'pp-check', style: { display: 'flex', alignItems: 'center', gap: '6px', margin: '3px 8px' } }, c, label); };
-    const r = v.geom?.box;
-    wrap.append(...[field('Name', name), field('Scale', sc), h('div', { style: { display: 'flex', flexDirection: 'column' } }, chk('Hidden lines (dashed)', 'hidden', false), chk('Tangent edges', 'tangent', true), chk('Label under the view', 'label', true)),
+    const r = v.geom?.box, cl = isCloudSrc(v.src);
+    wrap.append(...[field('Name', name), field('Scale', sc), h('div', { style: { display: 'flex', flexDirection: 'column' } }, ...(cl ? [] : [chk('Hidden lines (dashed)', 'hidden', false), chk('Tangent edges', 'tangent', true)]), chk('Label under the view', 'label', true)),
       h('div', { class: 'pp-row ro' }, h('label', {}, 'Model'), h('span', {}, v.srcName)),
       r ? h('div', { class: 'pp-row ro' }, h('label', {}, 'Size (model)'), h('span', {}, `${fmt(r[2] - r[0], 1)} × ${fmt(r[3] - r[1], 1)} mm`)) : null,
-      v.parent ? h('div', { class: 'pp-row ro' }, h('label', {}, 'Projected from'), h('span', {}, this.V(v.parent)?.name || '')) : null].filter(Boolean));
+      v.parent ? h('div', { class: 'pp-row ro' }, h('label', {}, 'Projected from'), h('span', {}, this.V(v.parent)?.name || '')) : null,
+      v.cut ? this.sectionPanel(v) : null,
+      cl ? this.cloudPanel(v) : null].filter(Boolean));
     return wrap;
   }
   sheetPanel() {
@@ -481,13 +535,14 @@ export class DrawingDoc {
       h('div', { class: 'pp-row ro' }, h('label', {}, 'Scale'), h('span', {}, scaleText(sh.scale))),
       h('div', { class: 'pp-row ro' }, h('label', {}, 'Zone grid'), h('span', {}, zoneGrid(sh) ? `${zoneGrid(sh).nx} × ${zoneGrid(sh).ny}` : 'off')),
       h('div', { class: 'pp-inline', style: { margin: '4px 8px' } }, h('button', { class: 'mini txt', onclick: () => this.cmdSheet() }, 'Sheet format…'), h('button', { class: 'mini txt', onclick: () => this.cmdTitleBlock() }, 'Title block…')),
-      this.doc.views.length ? null : h('p', { class: 'pm-info', style: { margin: '8px' } }, 'Start with Standard 3 Views or Model View. The part or assembly must be saved.'));
+      this.doc.views.length ? null : h('p', { class: 'pm-info', style: { margin: '8px' } }, 'Start with Standard 3 Views or Model View. The part, assembly or point cloud must be saved.'));
   }
 
   // ======================= keys =======================
   onKey(e) {
     if (this.tool?.key?.(e)) { this.vp.requestRender(); return true; }
     if (e.key === 'Escape' && (this.tool || this.app.pm.open)) { if (this.app.pm.open) this.app.pm.cancel(); this.endTool(); return true; }
+    if (e.key === 'Escape' && this.selAnn) { this.selAnn = null; this.renderTree(); this.app.cm.refresh(); this.vp.requestRender(); return true; }
     if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) { this.undo(); return true; }
     if (e.ctrlKey && (e.key === 'y' || e.key === 'Y')) { this.redo(); return true; }
     if (e.ctrlKey) return false;
@@ -497,8 +552,9 @@ export class DrawingDoc {
     return false;
   }
   onActivate() { this.vp.requestRender(); }
-  dispose() { this.vp.dispose(); }
+  dispose() { this.closeProps?.(); this.closeRoomList?.(); this._inline?.remove(); this.vp.dispose(); }
 }
 
 const viewScaleOf = (d, v) => { const sh = d.doc.sheets.find((x) => x.id === v.sheet) || d.sheet; return scaleVal(v.scale || sh.scale); };
+for (const M of [DrawingClouds, DrawingSections, DrawingOverlay, DrawingProps, DrawingOutline, DrawingRooms, DrawingInfo]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(DrawingDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));
 for (const k of Object.getOwnPropertyNames(DrawingTools.prototype)) if (k !== 'constructor') Object.defineProperty(DrawingDoc.prototype, k, Object.getOwnPropertyDescriptor(DrawingTools.prototype, k));

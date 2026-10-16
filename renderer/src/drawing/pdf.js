@@ -1,5 +1,7 @@
 // Minimal vector PDF writer for drawing sheets (one page per sheet, true scale: 1 mm = 72/25.4 pt).
 // Text uses the standard Helvetica fonts (WinAnsi), so no font embedding is needed.
+import { pdfDots } from './dots.js';
+import { pdfGrey } from './raster.js';
 const K = 72 / 25.4;
 const n = (v) => (Math.round(v * K * 1000) / 1000).toString();
 // WinAnsi: Latin-1 range maps 1:1 for the characters we use; others -> '?'
@@ -27,14 +29,18 @@ export const EM = 1 / 0.72;
 
 function hex(c) { const m = /^#?([0-9a-f]{6})$/i.exec(c || ''); if (!m) return '0 0 0'; const v = parseInt(m[1], 16); return [(v >> 16) & 255, (v >> 8) & 255, v & 255].map((x) => (x / 255).toFixed(3)).join(' '); }
 
-function pageContent(prims) {
+function pageContent(prims, imgs = []) {
   const ops = ['1 J 1 j'];
   let lw = -1, dash = '', col = '0 0 0';
   for (const p of prims) {
-    if (p.t === 'sel' || p.t === 'annbox') continue;
+    if (p.t === 'sel' || p.t === 'annbox' || p.t === 'annpath') continue;
+    if (p.t === 'dots') { ops.push(pdfDots(p, K)); continue; }
+    if (p.t === 'raster') { const g = pdfGrey(p); if (g) { imgs.push(g); ops.push(`q ${n(p.w)} 0 0 ${n(p.h)} ${n(p.x)} ${n(p.y)} cm /Im${imgs.length} Do Q`); } continue; }
     if (p.t === 'fill') {
-      const c = hex(p.color); ops.push(`${c} rg`);
-      const q = p.pts; let s = `${n(q[0])} ${n(q[1])} m`; for (let i = 2; i < q.length; i += 2) s += ` ${n(q[i])} ${n(q[i + 1])} l`; ops.push(s + ' h f');
+      const c = hex(p.color), a = p.alpha != null ? Math.max(0, Math.min(20, Math.round(p.alpha * 20))) : 20;
+      const q = p.pts; let s = `${n(q[0])} ${n(q[1])} m`; for (let i = 2; i < q.length; i += 2) s += ` ${n(q[i])} ${n(q[i + 1])} l`;
+      // transparency: graphics states /GA0../GA20 (5 % steps) in every page's resources
+      ops.push(a < 20 ? `q /GA${a} gs ${c} rg ${s} h f Q` : `${c} rg ${s} h f`);
       continue;
     }
     if (p.t === 'line' || p.t === 'circle') {
@@ -68,18 +74,26 @@ function pageContent(prims) {
 }
 
 // pages: [{w, h (mm), prims}] -> PDF file as a binary string (chars 0..255)
-export function makePdf(pages, { title = 'Drawing', creator = 'MonoLith' } = {}) {
+// contents: optional page streams already compressed ({data (binary string), flate: true})
+const bin = (u) => { let s = ''; for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192)); return s; };
+// contents: optional prepared pages [{data, flate, imgs: [{w, h, data (binary string), flate}]}]
+export function makePdf(pages, { title = 'Drawing', creator = 'MonoLith', contents = null } = {}) {
   const objs = [];
   const add = (s) => { objs.push(s); return objs.length; };
   const cat = add(''), pagesId = add('');
   const f1 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
   const f2 = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+  const gs = Array.from({ length: 21 }, (_, i) => add(`<< /Type /ExtGState /ca ${(i / 20).toFixed(2)} /CA ${(i / 20).toFixed(2)} >>`));
+  const gsRes = ` /ExtGState << ${gs.map((id, i) => `/GA${i} ${id} 0 R`).join(' ')} >>`;
   const kids = [];
-  for (const pg of pages) {
-    const c = pageContent(pg.prims);
-    const cs = add(`<< /Length ${c.length} >>\nstream\n${c}\nendstream`);
-    kids.push(add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${n(pg.w)} ${n(pg.h)}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >> >> /Contents ${cs} 0 R >>`));
-  }
+  pages.forEach((pg, pi) => {
+    let z = contents?.[pi];
+    if (!z) { const im = []; const data = pageContent(pg.prims, im); z = { data, imgs: im.map((g) => ({ w: g.w, h: g.h, data: bin(g.data) })) }; }
+    const c = z.data;
+    const cs = add(`<< /Length ${c.length}${z.flate ? ' /Filter /FlateDecode' : ''} >>\nstream\n${c}\nendstream`);
+    const xo = (z.imgs || []).map((g, i) => `/Im${i + 1} ${add(`<< /Type /XObject /Subtype /Image /Width ${g.w} /Height ${g.h} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length ${g.data.length}${g.flate ? ' /Filter /FlateDecode' : ''} >>\nstream\n${g.data}\nendstream`)} 0 R`).join(' ');
+    kids.push(add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${n(pg.w)} ${n(pg.h)}] /Resources << /Font << /F1 ${f1} 0 R /F2 ${f2} 0 R >>${gsRes}${xo ? ` /XObject << ${xo} >>` : ''} >> /Contents ${cs} 0 R >>`));
+  });
   objs[cat - 1] = `<< /Type /Catalog /Pages ${pagesId} 0 R >>`;
   objs[pagesId - 1] = `<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`;
   const info = add(`<< /Title ${pdfStr(title)} /Creator ${pdfStr(creator)} /Producer ${pdfStr(creator)} >>`);
@@ -90,4 +104,19 @@ export function makePdf(pages, { title = 'Drawing', creator = 'MonoLith' } = {})
   out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('');
   out += `trailer\n<< /Size ${objs.length + 1} /Root ${cat} 0 R /Info ${info} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return out;
+}
+
+// same PDF with compressed page streams (point cloud dots make big pages); CompressionStream 'deflate' = zlib
+export async function makePdfCompressed(pages, opts = {}) {
+  if (typeof CompressionStream === 'undefined') return makePdf(pages, opts);
+  const contents = [];
+  const z = async (u) => bin(new Uint8Array(await new Response(new Blob([u]).stream().pipeThrough(new CompressionStream('deflate'))).arrayBuffer()));
+  for (const pg of pages) {
+    const im = [], text = pageContent(pg.prims, im), u = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) u[i] = text.charCodeAt(i) & 255;
+    const imgs = [];
+    for (const g of im) imgs.push({ w: g.w, h: g.h, data: await z(g.data), flate: true });
+    contents.push({ data: await z(u), flate: true, imgs });
+  }
+  return makePdf(pages, { ...opts, contents });
 }

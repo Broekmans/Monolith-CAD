@@ -4,6 +4,7 @@
 // Sections are saved in the document as "Saved Views" (doc.doc.sections) and
 // shown in the tree; the active one can be dragged / scrolled on its red cut face.
 import * as THREE from 'three';
+import { treeRow } from './treeui.js';
 import { h, toast, contextMenu, promptText } from './ui.js';
 import { icon } from './icons.js';
 import { worldGeo } from '../../shared/mates.mjs';
@@ -243,17 +244,8 @@ export function sectionTreeRows(doc) {
   const frag = document.createDocumentFragment();
   if (!secs.length) return frag;
   doc._secOpen ??= true;
-  const row = (depth, ic, label, opts = {}) => {
-    const r = h('div', { class: 'tr-row' + (opts.sel ? ' sel' : '') + (opts.dim ? ' dim' : ''), style: { paddingLeft: 6 + depth * 16 + 'px' }, title: opts.tip || '' },
-      opts.twisty !== undefined ? h('span', { class: 'twisty', onclick: (e) => { e.stopPropagation(); opts.onTwisty(); } }, opts.twisty ? '▾' : '▸') : h('span', { class: 'twisty' }),
-      h('span', { class: 'ico sm', html: icon(ic) }), h('span', { class: 'tr-label' }, label),
-      opts.eye !== undefined ? h('button', { class: 'mini', style: { marginLeft: 'auto' }, title: opts.eye ? 'Turn off' : 'Turn on', html: icon(opts.eye ? 'eye' : 'eyeOff'), onclick: (e) => { e.stopPropagation(); opts.onClick(); } }) : null);
-    if (opts.onClick) r.addEventListener('click', opts.onClick);
-    if (opts.onDbl) r.addEventListener('dblclick', opts.onDbl);
-    r.addEventListener('contextmenu', (e) => { e.preventDefault(); opts.onMenu?.(e); });
-    return r;
-  };
-  frag.appendChild(row(1, 'folder', 'Saved Views', { twisty: doc._secOpen, onTwisty: () => { doc._secOpen = !doc._secOpen; doc.renderTree(); } }));
+  const row = (depth, ic, label, opts = {}) => treeRow({ ...opts, depth, icon: ic, label, onEye: opts.eye !== undefined ? opts.onClick : undefined });
+  frag.appendChild(row(1, 'folder', 'Saved Views', { count: secs.length, twisty: doc._secOpen, onTwisty: () => { doc._secOpen = !doc._secOpen; doc.renderTree(); } }));
   if (doc._secOpen) for (const s of secs) {
     const on = doc.doc.secActive === s.id;
     frag.appendChild(row(2, 'section', s.name, {

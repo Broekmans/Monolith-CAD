@@ -858,6 +858,7 @@ function setupCloudIPC(ipcMain) {
   ipcMain.handle('cloud:register', async (e, spec, req) => { try { return await registerCloud(spec, e.sender, req); } catch (err) { return { error: String(err.message || err) }; } });
   ipcMain.handle('cloud:openCache', (_e, p) => { try { return openCacheFile(p); } catch (err) { return { error: String(err.message || err) }; } });
   ipcMain.handle('cloud:clean', (_e, dir, keep) => cleanDir(dir, keep));
+  ipcMain.handle('cloud:drawView', (_e, spec) => { try { return require('./clouddraw.cjs').drawCloudViews(spec, (id) => handles.get(id)); } catch (err) { return { error: String(err.message || err) }; } });
   ipcMain.handle('cloud:sysinfo', () => ({ cores: os.cpus().length, workers: POOL_SIZE, ram: os.totalmem() }));
 }
 

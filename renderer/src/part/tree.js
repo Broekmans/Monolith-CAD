@@ -6,6 +6,7 @@ import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
+import { treeRow, folderOpen, toggleFolder } from '../treeui.js';
 import { api } from '../api.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
@@ -24,64 +25,72 @@ export class PartTree {
     const consumedBy = new Map();
     for (const f of this.doc.features) if (f.sketch) consumedBy.set(f.sketch, f.id);
     const selKeys = new Set(this.sel.map((s) => s.key));
-    const row = (opts) => {
-      const r = h('div', {
-        class: 'tr-row' + (opts.sel ? ' sel' : '') + (opts.dim ? ' dim' : '') + (opts.err ? ' err' : ''),
-        style: { paddingLeft: 6 + (opts.depth || 0) * 16 + 'px' }, title: opts.tip || '',
-      },
-      opts.twisty !== undefined ? h('span', { class: 'twisty', onclick: (e) => { e.stopPropagation(); opts.onTwisty(); } }, opts.twisty ? '▾' : '▸') : h('span', { class: 'twisty' }),
-      h('span', { class: 'ico sm', html: icon(opts.icon) }), h('span', { class: 'tr-label' }, opts.label), opts.err ? h('span', { class: 'tr-err', title: opts.err }, '⚠') : null);
-      r.addEventListener('click', (e) => opts.onClick?.(e));
-      r.addEventListener('dblclick', (e) => opts.onDbl?.(e));
-      r.addEventListener('contextmenu', (e) => { e.preventDefault(); opts.onMenu?.(e); });
-      r.addEventListener('mouseenter', () => opts.onEnter?.());
-      r.addEventListener('mouseleave', () => opts.onLeave?.());
-      return r;
-    };
-    tree.appendChild(row({ icon: 'part', label: `${this.doc.name}  (Default)`, onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Rename…', run: () => this.renamePart() }]) }));
-    tree.appendChild(row({ icon: 'massProps', label: `Material <${this.doc.material}>`, depth: 1, onDbl: () => this.editMaterial(), onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Edit Material…', run: () => this.editMaterial() }]) }));
-    for (const name of Object.keys(STD_PLANES)) {
-      const key = 'plane:' + name;
-      tree.appendChild(row({
-        icon: 'plane', label: `${name} Plane`, depth: 1, sel: selKeys.has(key),
-        onClick: (e) => this.clickItem({ kind: 'plane', name, plane: STD_PLANES[name], key }, e.ctrlKey || e.shiftKey),
-        onEnter: () => { this.hoverTreePlane = name; this.updatePlanes(); }, onLeave: () => { this.hoverTreePlane = null; this.updatePlanes(); },
-        onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Sketch', icon: 'sketch', run: () => this.startSketch(STD_PLANES[name], name) }, { label: 'Normal To', icon: 'normalTo', run: () => this.vp.normalTo(frameOf(STD_PLANES[name])) }]),
-      }));
+    const add = (o) => tree.appendChild(treeRow(o));
+    const folder = (key, dflt, o) => { const open = folderOpen(this, key, dflt); add({ icon: 'folder', ...o, twisty: open, onTwisty: () => toggleFolder(this, key), data: { folder: key } }); return open; };
+    add({ icon: 'part', label: `${this.doc.name}  (Default)`, onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Rename…', run: () => this.renamePart() }]) });
+    add({ icon: 'massProps', label: `Material <${this.doc.material}>`, depth: 1, onDbl: () => this.editMaterial(), onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Edit Material…', run: () => this.editMaterial() }]) });
+    // Solid Bodies
+    const hasBody = !!this.bodyMesh;
+    if (folder('bodies', false, { label: 'Solid Bodies', count: hasBody ? 1 : 0, depth: 1 }) && hasBody) {
+      add({
+        icon: 'part', label: this.doc.name, depth: 2, eye: !this.doc.bodyHidden, onEye: () => this.toggleBody(), dim: !!this.doc.bodyHidden, data: { item: 'body' },
+        onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: this.doc.bodyHidden ? 'Show Body' : 'Hide Body', icon: this.doc.bodyHidden ? 'eye' : 'eyeOff', run: () => this.toggleBody() }]),
+      });
     }
-    tree.appendChild(row({ icon: 'origin', label: 'Origin', depth: 1 }));
+    // Origin
+    if (folder('origin', true, { label: 'Origin', depth: 1 })) {
+      for (const name of Object.keys(STD_PLANES)) {
+        const key = 'plane:' + name;
+        const shown = (this.doc.planesShown || []).includes(name);
+        add({
+          icon: 'plane', label: `${name} Plane`, depth: 2, sel: selKeys.has(key), eye: shown, onEye: () => this.togglePlaneShown(name), data: { item: key },
+          onClick: (e) => this.clickItem({ kind: 'plane', name, plane: STD_PLANES[name], key }, e.ctrlKey || e.shiftKey),
+          onEnter: () => { this.hoverTreePlane = name; this.updatePlanes(); }, onLeave: () => { this.hoverTreePlane = null; this.updatePlanes(); },
+          onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Sketch', icon: 'sketch', run: () => this.startSketch(STD_PLANES[name], name) }, { label: 'Normal To', icon: 'normalTo', run: () => this.vp.normalTo(frameOf(STD_PLANES[name])) }, { label: shown ? 'Hide' : 'Show', icon: shown ? 'eyeOff' : 'eye', run: () => this.togglePlaneShown(name) }]),
+        });
+      }
+      add({ icon: 'origin', label: 'Origin Point', depth: 2 });
+    }
     tree.appendChild(sectionTreeRows(this));
-    for (const rec of this.doc.pointClouds || []) {
+    const pcs = this.doc.pointClouds || [];
+    if (pcs.length && folder('clouds', true, { label: 'Point Clouds', count: pcs.length, depth: 1 })) for (const rec of pcs) {
       const loaded = this.clouds?.views.has(rec.id);
-      tree.appendChild(row({
-        icon: 'cloud', label: rec.name + (loaded ? '' : '  (not loaded)'), depth: 1, dim: rec.visible === false, err: loaded ? null : undefined,
+      const toggle = () => { rec.visible = rec.visible === false; this.clouds.views.get(rec.id)?.refresh(); this.app.setDirty(true); this.renderTree(); this.vp.requestRender(); };
+      add({
+        icon: 'cloud', label: rec.name + (loaded ? '' : '  (not loaded)'), depth: 2, dim: rec.visible === false, err: loaded ? null : undefined,
+        eye: rec.visible !== false, onEye: toggle,
         onClick: () => this.showCloudProps(rec.id), onDbl: () => this.showCloudProps(rec.id),
         onMenu: (e) => contextMenu(e.clientX, e.clientY, [
           { label: 'Properties…', icon: 'cloud', run: () => this.showCloudProps(rec.id) },
-          { label: rec.visible === false ? 'Show' : 'Hide', icon: rec.visible === false ? 'eye' : 'eyeOff', run: () => { rec.visible = rec.visible === false; this.clouds.views.get(rec.id)?.refresh(); this.app.setDirty(true); this.renderTree(); this.vp.requestRender(); } },
+          { label: rec.visible === false ? 'Show' : 'Hide', icon: rec.visible === false ? 'eye' : 'eyeOff', run: toggle },
           { label: 'Zoom To', icon: 'zoomFit', run: () => { const v = this.clouds.views.get(rec.id); if (v) this.vp.fit(v.box); } },
           { label: 'Reload', run: () => this.clouds.load(rec) },
           '-', { label: 'Remove', icon: 'delete', run: () => this.removePointCloud(rec.id) },
         ]),
-      }));
+      });
     }
     this.expanded = this.expanded || new Set();
+    const consumed = this.consumedSketches();
+    const editingSketch = this.sketcher?.original?.id;
     const featureRow = (f, i, depth) => {
       const s = st.get(f.id);
-      const key = (f.type === 'sketch' ? 'sketch:' : 'feature:') + f.id;
+      const isSk = f.type === 'sketch';
+      const key = (isSk ? 'sketch:' : 'feature:') + f.id;
       const children = this.doc.features.filter((x) => x.type === 'sketch' && consumedBy.get(x.id) === f.id);
       const isOpen = this.expanded.has(f.id);
-      const r = row({
-        icon: FEATURE_META[metaKey(f)]?.icon || 'sketch', label: f.name + (f.type === 'sketch' && !this.isSketchDefined(f) ? '' : ''), depth,
+      const vis = isSk ? (f.visible ?? !consumed.has(f.id)) : undefined;
+      add({
+        icon: FEATURE_META[metaKey(f)]?.icon || 'sketch', label: f.name, depth: depth + 1,
         sel: selKeys.has(key), dim: i >= roll || f.suppressed, err: s?.state === 'error' ? s.error : null,
+        editing: f.id === editingSketch || f.id === this.editingId,
+        eye: vis, onEye: () => this.toggleSketchVisible(f),
         twisty: children.length ? isOpen : undefined, onTwisty: () => { if (isOpen) this.expanded.delete(f.id); else this.expanded.add(f.id); this.renderTree(); },
-        onClick: (e) => this.clickItem({ kind: f.type === 'sketch' ? 'sketch' : 'feature', id: f.id, key }, e.ctrlKey || e.shiftKey),
-        onDbl: () => (f.type === 'sketch' ? this.editSketch(f.id) : this.editFeature(f.id)),
+        onClick: (e) => this.clickItem({ kind: isSk ? 'sketch' : 'feature', id: f.id, key }, e.ctrlKey || e.shiftKey),
+        onDbl: () => (isSk ? this.editSketch(f.id) : this.editFeature(f.id)),
         onMenu: (e) => this.featureMenu(e, f, i),
         onEnter: () => this.setHoverFeat(f.id), onLeave: () => this.setHoverFeat(null),
-        tip: s?.error || '',
+        tip: s?.error || '', data: depth === 0 ? { fi: i } : { item: key },
       });
-      tree.appendChild(r);
       if (isOpen) for (const c of children) featureRow(c, this.doc.features.indexOf(c), depth + 1);
     };
     this.doc.features.forEach((f, i) => {
@@ -92,6 +101,18 @@ export class PartTree {
     if (roll >= this.doc.features.length) tree.appendChild(this.rollbackBar());
     this.app.cm.refresh();
   }
+  toggleBody() { this.beginChange(); this.doc.bodyHidden = !this.doc.bodyHidden; if (!this.doc.bodyHidden) delete this.doc.bodyHidden; this.commit(); this.bodyGroup.visible = !this.doc.bodyHidden; this.renderTree(); this.vp.requestRender(); }
+  togglePlaneShown(name) {
+    this.beginChange();
+    const s = new Set(this.doc.planesShown || []);
+    if (s.has(name)) s.delete(name); else s.add(name);
+    if (s.size) this.doc.planesShown = [...s]; else delete this.doc.planesShown;
+    this.commit(); this.updatePlanes(); this.renderTree();
+  }
+  toggleSketchVisible(f) {
+    const vis = f.visible ?? !this.consumedSketches().has(f.id);
+    this.beginChange(); f.visible = !vis; this.commit(); this.updateSketchDisplay(); this.renderTree();
+  }
   isSketchDefined() { return true; }
 
   rollbackBar() {
@@ -99,21 +120,18 @@ export class PartTree {
     bar.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       const tree = this.app.el.tree;
-      const rows = [...tree.querySelectorAll('.tr-row')];
+      const rows = [...tree.querySelectorAll('.tr-row[data-fi]')]; // top-level history rows only
       const move = (ev) => {
         bar.style.transform = `translateY(${ev.clientY - e.clientY}px)`;
       };
       const up = (ev) => {
         window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
         // find the feature row above the drop point
-        const top = this.doc.features.filter((f) => !(f.type === 'sketch' && this.consumedSketches().has(f.id)));
-        const featureRows = rows.slice(5); // after part/material/planes/origin
-        let idx = top.length;
-        for (let k = 0; k < featureRows.length && k < top.length; k++) {
-          const rr = featureRows[k].getBoundingClientRect();
-          if (ev.clientY < rr.top + rr.height / 2) { idx = k; break; }
+        let target = null;
+        for (const r of rows) {
+          const rr = r.getBoundingClientRect();
+          if (ev.clientY < rr.top + rr.height / 2) { target = +r.dataset.fi; break; }
         }
-        const target = idx >= top.length ? null : this.doc.features.indexOf(top[idx]);
         this.setRollback(target);
       };
       window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
@@ -139,7 +157,7 @@ export class PartTree {
       items.push({ label: 'Edit Sketch', icon: 'sketch', run: () => this.editSketch(f.id) });
       const consumed = this.consumedSketches().has(f.id);
       const vis = f.visible ?? !consumed;
-      items.push({ label: vis ? 'Hide' : 'Show', icon: vis ? 'eyeOff' : 'eye', run: () => { this.beginChange(); f.visible = !vis; this.commit(); this.updateSketchDisplay(); } });
+      items.push({ label: vis ? 'Hide' : 'Show', icon: vis ? 'eyeOff' : 'eye', run: () => this.toggleSketchVisible(f) });
       items.push({ label: 'Export Sketch to DXF…', icon: 'export', run: () => this.exportSketchDxf(f) });
     } else {
       items.push({ label: 'Edit Feature', icon: FEATURE_META[metaKey(f)]?.icon, run: () => this.editFeature(f.id) });

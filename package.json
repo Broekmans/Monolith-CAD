@@ -1,6 +1,6 @@
 {
   "name": "monolith",
-  "version": "0.1.45",
+  "version": "0.1.69",
   "description": "Standalone parametric CAD for engineering and architecture",
   "main": "main/main.cjs",
   "scripts": {
@@ -94,6 +94,15 @@
     "publish": null,
     "linux": {
       "target": "dir"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "vendor/libredwg",
+        "to": "libredwg",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

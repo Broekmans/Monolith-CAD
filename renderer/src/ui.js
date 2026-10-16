@@ -77,7 +77,7 @@ export class CommandManager {
 }
 
 // ---------------- PropertyManager ----------------
-// fields: {key, type:'number'|'select'|'check'|'selbox'|'text'|'info'|'buttons'|'group', ...}
+// fields: {key, type:'number'|'select'|'color'|'check'|'selbox'|'text'|'info'|'buttons'|'group', ...}
 export class PropertyManager {
   constructor(root) {
     this.root = root;
@@ -131,6 +131,11 @@ export class PropertyManager {
         sel.addEventListener('change', () => { pm.values[f.key] = sel.value; fire(f.key); });
         wrap.append(label || '', sel);
         pm.inputs[f.key] = sel;
+      } else if (f.type === 'color') {
+        const inp = h('input', { type: 'color', value: String(pm.values[f.key] || '#000000') });
+        inp.addEventListener('change', () => { pm.values[f.key] = inp.value; fire(f.key); });
+        wrap.append(label || '', inp);
+        pm.inputs[f.key] = inp;
       } else if (f.type === 'check') {
         const cb = h('input', { type: 'checkbox', checked: !!pm.values[f.key] });
         cb.addEventListener('change', () => { pm.values[f.key] = cb.checked; fire(f.key); });
@@ -259,6 +264,7 @@ export function closeMenu() {
 export function toast(text, kind = 'info', ms = 3500) {
   let host = document.getElementById('toasts');
   if (!host) { host = h('div', { id: 'toasts' }); document.body.appendChild(host); }
+  try { window.__lithLog?.('MESSAGE', kind, text); } catch {}
   const t = h('div', { class: 'toast ' + kind }, text);
   host.appendChild(t);
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 300); }, ms);
