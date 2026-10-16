@@ -1,3 +1,8 @@
+0.1.76 (2026-10-16)
+- MonoLith now also runs on Linux (x64, AppImage or tar.gz), with the built-in DWG converter. Windows stays the main platform.
+- On Linux, logs, projects and settings are kept in the MonoLith folder in your home folder.
+- Publishing a release to GitHub now also builds and publishes a separate Linux release automatically.
+
 0.1.75 (2026-10-16)
 - New Options window (Tools > Options…, or the gear button top right): view, mouse, viewport, feature preview, feature value, dimension and point cloud settings in one place. Changes show live; Cancel puts them back.
 - Save as My Defaults (file monolith-options.json in the CAD Program folder), Back to My Defaults, Reset to Factory Defaults, Import… / Export… (JSON).

@@ -22,9 +22,18 @@ function migrateSettings() {
   } catch { /* ignore */ }
 }
 if (!isTest) migrateSettings();
-// ---------- action log: <CAD Program>\Logs\MonoLith-YYYY-MM-DD.log (one file per day, 14 days kept) ----------
+// ---------- data folder: Logs, Projects, drafting-standard.json, monolith-options.json ----------
+// Windows: the folder that holds the MonoLith\ install folder (<CAD Program>). Linux/macOS: the program may run from a
+// read-only place (AppImage), so ~/MonoLith (env MONOLITH_HOME overrides everywhere). Development: userData.
+function dataRoot() {
+  if (process.env.MONOLITH_HOME) return process.env.MONOLITH_HOME;
+  if (!app.isPackaged) return app.getPath('userData');
+  if (process.platform === 'win32') return path.dirname(path.dirname(process.execPath));
+  return path.join(os.homedir(), 'MonoLith');
+}
+// ---------- action log: <data folder>\Logs\MonoLith-YYYY-MM-DD.log (one file per day, 14 days kept) ----------
 function logDir() {
-  const d = app.isPackaged ? path.join(path.dirname(path.dirname(process.execPath)), 'Logs') : path.join(app.getPath('userData'), 'Logs');
+  const d = path.join(dataRoot(), 'Logs');
   try { fs.mkdirSync(d, { recursive: true }); } catch { return app.getPath('userData'); }
   return d;
 }
@@ -79,4 +88,4 @@ function writeDump(name, text) {
   } catch { return null; }
 }
 
-module.exports = { optionsCfg, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent };
+module.exports = { dataRoot, optionsCfg, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent };

@@ -1,0 +1,69 @@
+# Linux build of MonoLith (secondary platform; Windows stays the main one).
+# Runs by itself when PUBLISH-GITHUB.bat pushes a version tag (v0.1.76 …): builds LibreDWG (static, cached),
+# packs MonoLith as AppImage + tar.gz, runs the smoke test on the packed app and publishes a SEPARATE release
+# "MonoLith <ver> for Linux" (tag v<ver>-linux, never marked as latest).
+# Manual run: Actions > Linux release > Run workflow (version tag, e.g. v0.1.76).
+name: Linux release
+on:
+  push:
+    tags: ['v*', '!v*-linux']
+  workflow_dispatch:
+    inputs:
+      tag: { description: 'Version tag to build (e.g. v0.1.76)', required: true }
+permissions:
+  contents: write
+env:
+  LIBREDWG: '0.13.3'
+jobs:
+  linux:
+    runs-on: ubuntu-22.04   # older glibc = runs on more distros
+    steps:
+      - name: Version
+        id: v
+        run: |
+          T="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$T" >> "$GITHUB_OUTPUT"; echo "ver=${T#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with: { ref: '${{ steps.v.outputs.tag }}' }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: System packages
+        run: sudo apt-get update && sudo apt-get install -y xvfb libfuse2 libgtk-3-0 libnss3 libasound2 libgbm1
+      - name: LibreDWG cache
+        id: ldwg
+        uses: actions/cache@v4
+        with: { path: ~/libredwg, key: 'libredwg-${{ env.LIBREDWG }}-static-ubuntu22' }
+      - name: Build LibreDWG (static)
+        if: steps.ldwg.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp && curl -sSL -o l.tar.xz "https://github.com/LibreDWG/libredwg/releases/download/$LIBREDWG/libredwg-$LIBREDWG.tar.xz"
+          tar xf l.tar.xz && cd "libredwg-$LIBREDWG"
+          ./configure --disable-bindings --disable-python --disable-shared --enable-static --prefix="$HOME/libredwg" > /dev/null
+          make -j4 MAKEINFO=true > /dev/null && make install MAKEINFO=true > /dev/null
+          mkdir -p "$HOME/libredwg/samples" && cp test/test-data/example_2000.dwg "$HOME/libredwg/samples/" || true
+      - name: Install
+        run: npm ci
+      - name: Build AppImage + tar.gz
+        run: LIBREDWG_BIN="$HOME/libredwg/bin" sh scripts/linux.sh
+      - name: Smoke test (packed app)
+        run: xvfb-run -a node tests/e2e/smoke_linux.mjs "$HOME/libredwg/samples/example_2000.dwg"
+      - name: Release notes
+        run: |
+          {
+            echo "**Linux build of MonoLith ${{ steps.v.outputs.ver }}** (x64). Windows is the main platform; the Windows download is in release ${{ steps.v.outputs.tag }}."
+            echo
+            echo "- **AppImage**: download, \`chmod +x MonoLith-*.AppImage\`, run it (needs libfuse2; or start with \`--appimage-extract-and-run\`)."
+            echo "- **tar.gz**: unpack anywhere and run \`./monolith\`."
+            echo "- Settings, logs and projects: \`~/MonoLith\` (change with the environment variable MONOLITH_HOME)."
+            echo "- DWG import/export works with the built-in LibreDWG converter."
+            echo
+            echo "### Changes"
+            awk 'NR>1 && /^[0-9]+\.[0-9]+\.[0-9]+ \(/{exit} {print}' CHANGELOG.txt 2>/dev/null || true
+          } > notes.md
+      - name: Publish release v<ver>-linux
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: |
+          T="${{ steps.v.outputs.tag }}-linux"
+          gh release delete "$T" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$T" release/MonoLith-*-linux-x64.AppImage release/MonoLith-*-linux-x64.tar.gz \
+            --target "$(git rev-parse HEAD)" --title "MonoLith ${{ steps.v.outputs.ver }} for Linux" --notes-file notes.md --latest=false

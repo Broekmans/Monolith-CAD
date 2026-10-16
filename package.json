@@ -1,6 +1,6 @@
 {
   "name": "monolith",
-  "version": "0.1.75",
+  "version": "0.1.76",
   "description": "Standalone parametric CAD for engineering and architecture",
   "main": "main/main.cjs",
   "scripts": {
@@ -9,7 +9,8 @@
     "dist": "node scripts/build.mjs --min && electron-builder --win --x64",
     "test:kernel": "node tests/kernel.test.mjs",
     "test:e2e": "npm run build:renderer && node tests/e2e/e2e_part2.mjs && node tests/e2e/e2e_plan.mjs",
-    "test:pointcloud": "node tests/pointcloud.test.mjs"
+    "test:pointcloud": "node tests/pointcloud.test.mjs",
+    "dist:linux": "sh scripts/linux.sh"
   },
   "keywords": [],
   "author": "Enerkorp",
@@ -89,20 +90,47 @@
         }
       ],
       "icon": "build/icon.ico",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "vendor/libredwg",
+          "to": "libredwg",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
     },
     "publish": null,
     "linux": {
-      "target": "dir"
-    },
-    "extraResources": [
-      {
-        "from": "vendor/libredwg",
-        "to": "libredwg",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ]
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "tar.gz",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Graphics",
+      "executableName": "monolith",
+      "artifactName": "MonoLith-${version}-linux-x64.${ext}",
+      "synopsis": "CAD for parts, assemblies, drawings, plans and point clouds",
+      "extraResources": [
+        {
+          "from": "vendor/libredwg-linux",
+          "to": "libredwg",
+          "filter": [
+            "**/*"
+          ]
+        }
+      ]
+    }
   }
 }

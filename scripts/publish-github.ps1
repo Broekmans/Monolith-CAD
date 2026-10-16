@@ -112,3 +112,5 @@ if ($LASTEXITCODE -ne 0) { Fail 'Creating the release failed' }
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
 Write-Host "Done: https://github.com/$repo/releases/tag/$tag" -ForegroundColor Green
+Write-Host "Linux: GitHub now builds 'MonoLith $ver for Linux' by itself (release $tag-linux, about 15-20 minutes)."
+Write-Host "       Follow it at https://github.com/$repo/actions" 

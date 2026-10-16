@@ -4,9 +4,10 @@
 const { app, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { dataRoot } = require('./settings.cjs');
 
 function projectsRoot() {
-  const d = process.env.MONOLITH_PROJECTS || (app.isPackaged ? path.join(path.dirname(path.dirname(process.execPath)), 'Projects') : path.join(app.getPath('userData'), 'Projects'));
+  const d = process.env.MONOLITH_PROJECTS || path.join(dataRoot(), 'Projects');
   try { fs.mkdirSync(d, { recursive: true }); } catch { /* ignore */ }
   return d;
 }
