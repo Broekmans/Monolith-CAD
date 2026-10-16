@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('monolith', {
+  isTest: !!process.env.MONOLITH_TEST,
+  optionsCfg: (o) => ipcRenderer.invoke('options:cfg', o),
   kernel: (op, args) => ipcRenderer.invoke('kernel', op, args),
   openFile: (opts) => ipcRenderer.invoke('file:open', opts),
   saveFile: (opts) => ipcRenderer.invoke('file:save', opts),
@@ -45,6 +47,7 @@ contextBridge.exposeInMainWorld('monolith', {
   logDir: () => ipcRenderer.invoke('log:dir'),
   setDarkMenu: (d) => ipcRenderer.send('ui:dark', d),
   setGridMenu: (g) => ipcRenderer.send('ui:grid', g),
+  setIsoMenu: (g) => ipcRenderer.send('ui:iso', g),
   setViewportMenu: (v) => ipcRenderer.send('ui:viewport', v),
   setZoom: (f) => ipcRenderer.send('ui:zoom', f),
   onMenu: (fn) => ipcRenderer.on('menu', (_e, cmd, arg) => fn(cmd, arg)),

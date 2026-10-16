@@ -1,8 +1,10 @@
-// Program settings: dark mode, UI scale (stored in localStorage, synced with the Interface menu).
+// Program settings: dark mode, UI scale, grid … (values in app/options.js, synced with the Interface / Viewport menus)
+// and the Options window (Tools > Options…).
 import { cacheKey, packMesh } from '../meshcache.js';
 import { h, CommandManager, PropertyManager, toast, dialog } from '../ui.js';
 import { icon } from '../icons.js';
 import { api } from '../api.js';
+import { OPTIONS_DEF, OPT_CATS, opt, allOpts, setOpts, setOpt, factory, myDefaults, setMine, hasStored, clean } from './options.js';
 import { initActionLog, askLogConsentOnce } from '../actionlog.js';
 import { initSolver } from '../sketch/solver.js';
 import { setSketchTheme } from '../sketch/sketcher.js';
@@ -17,24 +19,110 @@ export class AppSettings {
     document.body.classList.toggle('dark', dark);
     setSketchTheme(dark);
     try { localStorage.setItem('monolith.theme', dark ? 'dark' : 'light'); } catch {}
+    if (!init) setOpt('dark', !!dark);
     window.dispatchEvent(new Event('monolith-theme'));
     api.setDarkMenu(dark);
+    if (init) { api.setIsoMenu?.(this.isoForFeatures()); api.setGridMenu?.(this.gridDefault()); }
     if (!init) { try { this.doc?.vp?.requestRender?.(); } catch {} }
   }
 
-  // viewport grid: program default (Interface menu, remembered); a document can override it (doc.grid)
-  gridDefault() { try { return localStorage.getItem('monolith.grid') !== 'off'; } catch { return true; } }
+  // viewport grid: program default (Options / Viewport menu); a document can override it (doc.grid)
+  gridDefault() { return opt('gridDefault'); }
   setGrid(on) {
+    setOpt('gridDefault', !!on);
     try { localStorage.setItem('monolith.grid', on ? 'on' : 'off'); } catch {}
     api.setGridMenu?.(on);
     for (const t of this.root?.tabs || this.tabs || []) { if (t.doc?.doc && 'grid' in t.doc.doc) delete t.doc.doc.grid; t.doc?.syncGrid?.(); }
     this.syncViewportMenu?.();
   }
 
+  // feature dialogs turn the view to Isometric when you look straight at the sketch (Options / Interface menu)
+  isoForFeatures() { return opt('isoFeatures'); }
+  setIsoForFeatures(on) { setOpt('isoFeatures', !!on); try { localStorage.setItem('monolith.isoFeat', on ? 'on' : 'off'); } catch {} api.setIsoMenu?.(on); }
+
   setUiScale(f, save = true) {
     f = Math.min(2, Math.max(0.6, Math.round(f * 20) / 20));
     this.uiScale = f; api.setZoom(f);
-    if (save) { try { localStorage.setItem('monolith.uiScale', String(f)); } catch {} }
+    if (save) { setOpt('uiScale', Math.round(f * 100)); try { localStorage.setItem('monolith.uiScale', String(f)); } catch {} }
+  }
+  setActionLog(on) { api.logCfg?.({ enabled: !!on, asked: true }); }
+  openDraftStd() {
+    if (this.doc?.cmdDraftStd) { closeOptions(); this.doc.cmdDraftStd(); } else toast('Open or select a drawing first: the Drafting Standard belongs to drawings (button on the Annotate tab)');
+  }
+
+  // first start without stored options: take "My Defaults" from <CAD Program>\monolith-options.json
+  async loadMyDefaults() {
+    const f = await api.optionsCfg?.().catch(() => null);
+    const { __path, __error, ...o } = f || {};
+    this.optionsPath = __path;
+    setMine(o);
+    if (!hasStored() && Object.keys(clean(o)).length) this.applyOptions(o);
+  }
+  // set values and run what must happen for them (theme, UI scale …); repaint documents
+  applyOptions(o, changedOnly = true) {
+    const before = allOpts(), changed = setOpts(o);
+    const keys = changedOnly ? changed : Object.keys(clean(o));
+    for (const k of keys) { const d = OPTIONS_DEF.find((x) => x.key === k); if (d?.apply && before[k] !== undefined) d.apply(this, opt(k)); }
+    for (const t of this.root?.tabs || this.tabs || []) { t.doc?.refreshGhost?.(); t.doc?.vp?.requestRender?.(); t.doc?.updateSketchDisplay?.(); }
+    return changed;
+  }
+
+  // Tools > Options…: categories left, label | control rows right; changes preview live, Cancel puts them back
+  async optionsDialog() {
+    closeOptions();
+    const logc = (await api.logCfg?.().catch(() => null)) || {};
+    if (logc.enabled !== undefined && logc.enabled !== opt('actionLog')) setOpt('actionLog', logc.enabled !== false);
+    if (this.optionsPath === undefined) await this.loadMyDefaults();
+    const start = allOpts();
+    let cat = (() => { try { return localStorage.getItem('monolith.optionsCat'); } catch { return null; } })();
+    if (!OPT_CATS.includes(cat)) cat = OPT_CATS[0];
+    const list = h('div', { class: 'opt-cats' }), rows = h('div', { class: 'opt-rows' });
+    const msg = h('div', { class: 'opt-msg' }, '');
+    const set = (k, v) => { this.applyOptions({ [k]: v }); };
+    const control = (d) => {
+      const v = opt(d.key);
+      if (d.type === 'bool') { const i = h('input', { type: 'checkbox', checked: v }); i.addEventListener('change', () => set(d.key, i.checked)); i.dataset.key = d.key; return i; }
+      if (d.type === 'color') { const i = h('input', { type: 'color', value: v }); i.addEventListener('input', () => set(d.key, i.value)); i.dataset.key = d.key; return i; }
+      if (d.type === 'button') return h('button', { class: 'opt-btn', onclick: () => d.run(this) }, d.text);
+      if (d.type === 'info') return h('span', { class: 'opt-info' }, d.text);
+      const i = h('input', { type: 'number', value: String(v), min: d.min, max: d.max, step: d.step || 1 });
+      i.dataset.key = d.key;
+      const commit = () => { const n = +i.value; if (!Number.isFinite(n) || i.value === '') { i.value = String(opt(d.key)); return; } set(d.key, n); i.value = String(opt(d.key)); };
+      i.addEventListener('change', commit);
+      i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } e.stopPropagation(); });
+      return h('span', { class: 'opt-num' }, i, h('span', { class: 'unit' }, d.type === 'pct' ? '%' : d.unit || ''));
+    };
+    const show = () => {
+      list.replaceChildren(...OPT_CATS.map((c) => h('button', { class: 'opt-cat' + (c === cat ? ' on' : ''), onclick: () => { cat = c; try { localStorage.setItem('monolith.optionsCat', c); } catch {} show(); } }, c)));
+      rows.replaceChildren(h('div', { class: 'opt-head' }, cat), ...OPTIONS_DEF.filter((d) => d.cat === cat).map((d) => h('div', { class: 'opt-row' }, h('label', {}, d.label), control(d))));
+    };
+    const load = (o, text) => { this.applyOptions(o); show(); msg.textContent = text; };
+    const exportJson = async () => {
+      const p = await api.saveFile({ defaultPath: 'monolith-options.json', filters: [{ name: 'Options', extensions: ['json'] }], text: JSON.stringify(allOpts(), null, 2) });
+      if (p) msg.textContent = 'Exported ' + p.split(/[\\/]/).pop();
+    };
+    const importJson = async () => {
+      const f = await api.openFile({ filters: [{ name: 'Options', extensions: ['json'] }] }); if (!f?.text) return;
+      try { const o = clean(JSON.parse(f.text)); load(o, `Imported ${Object.keys(o).length} settings from ${f.path.split(/[\\/]/).pop()} (OK keeps them)`); } catch { msg.textContent = 'Not an options file'; }
+    };
+    const saveMine = async () => {
+      const r = await api.optionsCfg?.(allOpts());
+      if (r?.__error) { msg.textContent = 'Could not save: ' + r.__error; return; }
+      this.optionsPath = r?.__path; setMine(allOpts());
+      msg.textContent = 'Saved as My Defaults' + (r?.__path ? ' (' + r.__path.split(/[\\/]/).pop() + ')' : '');
+    };
+    const foot = h('div', { class: 'opt-foot' },
+      h('button', { class: 'opt-btn', title: 'Store these settings as your own defaults (file in the CAD Program folder)', onclick: saveMine }, 'Save as My Defaults'),
+      h('button', { class: 'opt-btn', onclick: () => load(myDefaults(), 'My Defaults loaded') }, 'Back to My Defaults'),
+      h('button', { class: 'opt-btn', onclick: () => load(factory(), 'Factory defaults loaded') }, 'Reset to Factory Defaults'),
+      h('span', { style: 'flex:1' }),
+      h('button', { class: 'opt-btn', onclick: importJson }, 'Import…'),
+      h('button', { class: 'opt-btn', onclick: exportJson }, 'Export…'));
+    show();
+    const body = h('div', { class: 'opt-body' }, h('div', { class: 'opt-main' }, list, rows), foot, msg);
+    const r = await dialog({ title: 'Options', body, buttons: [{ label: 'Cancel', value: 'cancel' }, { label: 'OK', value: 'ok', primary: true }] });
+    if (r !== 'ok' && !closeOptions.forced) this.applyOptions(start); // Cancel / Esc / × : back to the values before
+    closeOptions.forced = false;
   }
 
   uiScaleDialog() {
@@ -50,3 +138,6 @@ export class AppSettings {
       .then((ok) => this.setUiScale(ok ? +sl.value / 100 : start, true));
   }
 }
+
+// close an open Options window without undoing (used when a button inside opens another dialog)
+function closeOptions() { const b = document.querySelector('.dlg-back .opt-body')?.closest('.dlg-back'); if (b) { closeOptions.forced = true; b.querySelector('.dlg-buttons button.primary')?.click(); } }

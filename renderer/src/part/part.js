@@ -10,6 +10,7 @@ import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
@@ -64,6 +65,9 @@ export function newPartDoc(name = 'Part1') {
 
 export const COLORS = { body: 0xcfd6df, edge: 0x111111, hover: 0xff9a1a, sel: 0x1e90ff, plane: 0x6a9ad8 };
 
+// ghost preview colours: added volume, removed volume, body before the feature
+export const GHOST_COL = { boss: 0xf2b630, bossEdge: 0xffc83d, cut: 0xe0463c, cutEdge: 0xff5a4a, prev: 0x7d8aa0 };
+
 export class PartDoc {
   constructor(app, doc) {
     this.app = app;
@@ -85,9 +89,12 @@ export class PartDoc {
     const app = this.app;
     this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
     this.viewport = this.vp = this.viewSet.proxy;
+    this.viewSet.onLayout = () => app.syncViewportMenu?.(); // close / maximize from the pane buttons
     this.vp.onContextMenu = (e) => this.viewContextMenu(e);
+    this.vp.onMiddleClick = () => this.zoomFit(); // double middle click = Zoom to Fit
     this.scene = this.vp.scene;
     this.bodyGroup = new THREE.Group(); this.scene.add(this.bodyGroup);
+    this.ghostGroup = new THREE.Group(); this.ghostGroup.name = 'ghost'; this.scene.add(this.ghostGroup); // feature preview (see showGhost)
     this.sketchGroup = new THREE.Group(); this.scene.add(this.sketchGroup);
     this.planeGroup = new THREE.Group(); this.scene.add(this.planeGroup);
     this.hlGroup = new THREE.Group(); this.scene.add(this.hlGroup);
@@ -142,6 +149,7 @@ export class PartDoc {
     const box = new THREE.Box3();
     if (this.mesh?.bbox) box.union(new THREE.Box3(new THREE.Vector3(...this.mesh.bbox.min), new THREE.Vector3(...this.mesh.bbox.max)));
     this.sketchGroup.traverse((o) => { if (o.geometry) { o.geometry.computeBoundingBox(); box.union(o.geometry.boundingBox); } });
+    this.ghostGroup?.traverse((o) => { if (o.geometry) { o.geometry.computeBoundingBox(); box.union(o.geometry.boundingBox); } });
     if (this.sketcher) {
       for (const c of this.sketcher.curves()) for (const p of sampleCurve(c, 16)) box.expandByPoint(new THREE.Vector3(...this.sketcher.to3(p)));
       box.expandByPoint(new THREE.Vector3(...this.sketcher.to3([0, 0])));
@@ -262,15 +270,17 @@ export class PartDoc {
   }
 
   // ======================= regeneration =======================
-  async regen(previewFeatures = null) {
+  async regen(previewFeatures = null, opts = {}) {
     const token = ++this.regenToken;
     const features = previewFeatures || this.doc.features;
     const upTo = previewFeatures ? undefined : this.doc.rollback ?? undefined;
     this.app.setBusy(true);
     try {
-      const res = await api.kernel('regen', { features, upTo });
+      const ghost = !!previewFeatures && !!opts.ghost;
+      const res = await api.kernel('regen', { features, upTo, ghost });
       if (token !== this.regenToken) return res;
-      this.applyMesh(res.mesh);
+      if (ghost && res.ghost) this.showGhost(res, previewFeatures[previewFeatures.length - 1]);
+      else { this.clearGhost(); this.applyMesh(res.mesh); }
       this.mass = res.mass;
       if (!previewFeatures) {
         this.savedMesh = { key: cacheKey(features, upTo), mesh: res.mesh }; // embedded in the file on save
@@ -289,6 +299,52 @@ export class PartDoc {
     } finally {
       if (token === this.regenToken) this.app.setBusy(false);
     }
+  }
+
+  // Feature preview ("ghost"). Extrude / Revolve: the body as it was before the feature stays solid and the volume the
+  // feature adds (yellow) or removes (red) is drawn see-through on top. Other features (fillet, chamfer, shell,
+  // patterns): the result is shown solid and the body before the feature as a faint see-through outline.
+  showGhost(res, f) {
+    const g = res.ghost, tool = g.tool && (f?.type === 'extrude' || f?.type === 'revolve');
+    this.clearGhost();
+    this._ghostArgs = [res, f]; // Options window: redraw with new colours / opacities
+    this.ghost = { op: g.op, tool: tool ? g.tool : null, prev: tool ? null : g.prev, result: res.mesh };
+    this.applyMesh(tool ? g.prev : res.mesh);
+    const add = (m, color, faceA, edgeA, behindA) => {
+      if (!m?.positions?.length) return;
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(m.positions), 3));
+      geom.setIndex(new THREE.BufferAttribute(new Uint32Array(m.indices), 1));
+      geom.computeVertexNormals();
+      const mk = (opacity, depthTest, order) => {
+        // the front pass writes depth so the viewport grid does not draw over the ghost
+        const o = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: depthTest, depthTest, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }));
+        o.renderOrder = order; o.raycast = () => {}; this.ghostGroup.add(o);
+      };
+      mk(faceA, true, 5);
+      if (behindA) mk(behindA, false, 6); // the part hidden inside the body shows faintly through it
+      const segs = [];
+      for (const e of m.edges) { const p = e.pts; for (let i = 3; i < p.length; i += 3) segs.push(p[i - 3], p[i - 2], p[i - 1], p[i], p[i + 1], p[i + 2]); }
+      const eg = new THREE.BufferGeometry(); eg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs), 3));
+      // edges: full strength on top of everything so the outline stays sharp; faces stay light
+      const l = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: edgeCol ?? color, transparent: edgeA < 1, opacity: edgeA, depthTest: false }));
+      l.renderOrder = 7; l.raycast = () => {}; this.ghostGroup.add(l);
+    };
+    let edgeCol = null;
+    // colours and opacities: Tools > Options > Feature Preview (faces 8 %, inside 4 %, edges 100 %)
+    if (tool) {
+      const col = new THREE.Color(opt(g.op === 'cut' ? 'ghostCut' : 'ghostBoss'));
+      edgeCol = col.clone().offsetHSL(0, 0, 0.06).getHex();
+      add(g.tool, col.getHex(), opt('ghostFace') / 100, opt('ghostEdge') / 100, opt('ghostBehind') / 100);
+    } else add(g.prev, GHOST_COL.prev, opt('ghostPrev') / 100, 0.35, 0);
+    this.vp.requestRender();
+  }
+  refreshGhost() { if (this.ghost && this._ghostArgs) this.showGhost(...this._ghostArgs); }
+  clearGhost() {
+    this.ghost = null; this._ghostArgs = null;
+    if (!this.ghostGroup) return;
+    for (const o of [...this.ghostGroup.children]) { this.ghostGroup.remove(o); o.geometry?.dispose(); o.material?.dispose(); }
+    this.vp?.requestRender();
   }
 
   applyMesh(m) {
@@ -381,7 +437,8 @@ export class PartDoc {
       }
       const selected = this.sel.some((s) => s.kind === 'sketch' && s.id === f.id);
       const hov = (this.hover?.kind === 'sketch' && this.hover.id === f.id) || (this.hoverFeat && (this.hoverFeat === f.id || this.F(this.hoverFeat)?.sketch === f.id));
-      const color = selected ? COLORS.sel : hov ? COLORS.hover : 0x3050a0;
+      // shown through a double-clicked face / tree hover: bright so it reads on top of the model (dark + light mode)
+      const color = selected ? COLORS.sel : hov ? COLORS.hover : shownBy ? new THREE.Color(opt(document.body.classList.contains('dark') ? 'shownSkDark' : 'shownSkLight')).getHex() : 0x3050a0;
       if (pts.length) {
         const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
         const ls = new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color, depthTest: !shownBy })); if (shownBy) ls.renderOrder = 5; g.add(ls);

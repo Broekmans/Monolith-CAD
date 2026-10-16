@@ -60,9 +60,11 @@ export class DrawingDoc {
     const app = this.app;
     this.viewSet = new ViewSet(app.el.views, { mode: 'plan', cls: ['paper', 'drawing'] }); // Viewport menu: 1, 2 or 4 panes of the sheet
     this.vp = this.viewport = this.viewSet.proxy;
+    this.viewSet.onLayout = () => app.syncViewportMenu?.(); // close / maximize from the pane buttons
     this.vp.overlayDrawers.push((ctx) => this.draw(ctx));
     onRasterReady(() => this.vp.requestRender());
     this.vp.onContextMenu = (e) => this.contextMenu(e);
+    this.vp.onMiddleClick = () => this.zoomFit(); // double middle click = Zoom to Fit
     this.bind();
     api.draftStd?.().then((r) => { setCompanyStd(clean(r || {})); if (!this.doc.style && !this.doc.views.length) this.doc.style = companyStd(); this.vp.requestRender(); }).catch(() => {});
     this.buildCommands();
@@ -104,6 +106,8 @@ export class DrawingDoc {
       sheets: [C('addSheet', 'Add Sheet', 'plus', () => this.addSheet(), { enabled: idle }),
         C('delSheet', 'Delete Sheet', 'delete', () => this.deleteSheet(), { enabled: () => idle() && this.doc.sheets.length > 1 })],
     };
+    const NAMES = { views: 'Create', rebuild: 'Update', output: 'Export', edit: 'Edit', format: 'Sheet', annotate: 'Dimension & Notes', rooms: 'Table', dimStyle: 'Format', title: 'Title Block', sheets: 'Sheets' };
+    for (const [k, l] of Object.entries(NAMES)) if (G[k]) G[k].label = l;
     const TABS = [['Drawing', ['views', 'rebuild', 'output', 'edit']], ['Annotate', ['annotate', 'rooms', 'dimStyle', 'edit']], ['Sheet', ['format', 'title', 'sheets', 'output']]];
     this.app.cm.setTabs(TABS.map(([name, gs]) => ({ name, groups: gs.map((g) => G[g]) })), 'Drawing');
   }
@@ -270,6 +274,7 @@ export class DrawingDoc {
     const r = this.vp.el.getBoundingClientRect(), om = this.outlineMenu(this.toSheet(e.clientX - r.left, e.clientY - r.top));
     contextMenu(e.clientX, e.clientY, [
       ...om,
+      ...(!v && !om.length ? this.viewSet.menuItems() : []), // empty space: Maximize/Restore + Close View
       { label: 'Zoom to Sheet', key: 'F', run: () => this.zoomFit() },
       ...(v ? [{ label: 'Projected View…', run: () => this.cmdProjected() }, ...(isCloudSrc(v.src) ? [] : [{ label: v.hidden ? 'Hide hidden lines' : 'Show hidden lines', run: () => this.setViewProp(v, { hidden: !v.hidden }) }]), { label: 'Delete view', run: () => this.deleteView() }] : []),
       { label: 'Model View…', run: () => this.cmdModelView(false) },

@@ -7,7 +7,7 @@ import { icon } from '../icons.js';
 import { api } from '../api.js';
 import * as G from './planGeom.js';
 const { dist, add, sub, mul, lerp } = G;
-import { parseDxf, planToDxf } from '../io/dxf.js';
+import { parseDxf, planToDxf, skippedText } from '../io/dxf.js';
 import { circleFrom3, cross2 } from '../sketch/geom2d.js';
 import { CloudManager, cloudPanel } from '../pointcloud.js';
 import { newPlanDoc, LAYER_FOR, pointInPoly, polyArea, seqCommand, selectThen, COMMANDS, dimCommand, kindFor, openingCommand, nearestWall, xformCommand, offsetEntity, lineIntersect, trimEntity, filletLines } from './plan.js';
@@ -25,7 +25,9 @@ export class PlanIO {
       }
     });
     this.zoomExtents();
-    toast(`Imported ${res.entities.length} entities from ${name}`, 'ok');
+    const sk = skippedText(res.skipped);
+    if (sk) toast(`Imported ${res.entities.length} entities from ${name} — ${sk}${res.skipped.IMAGE && !res.entities.length ? '. This file only holds raster pictures; picture import is not supported yet.' : ''}`, res.entities.length ? 'info' : 'error', 9000);
+    else toast(`Imported ${res.entities.length} entities from ${name}`, 'ok');
   }
 
   explodeForDxf() {

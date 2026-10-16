@@ -149,7 +149,7 @@ export class PartFeatures {
       if (!alive) return;
       const f = build(v);
       if (!f) { this.regen(base); return; }
-      this.regen([...base, f]);
+      this.regen([...base, f], { ghost: true });
     };
     if (edit) this.regen(base);
     let debounce = null;

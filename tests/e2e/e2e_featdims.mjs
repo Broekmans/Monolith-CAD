@@ -58,6 +58,21 @@ console.log('depth now', await win.evaluate(() => lithApp.doc.doc.features.find(
 const h2 = await win.evaluate(() => { const d = lithApp.doc._dimHits.find((x) => x.kind === 'cons' && x.value === 120); const r = lithApp.doc.vp.el.getBoundingClientRect(); return d && [r.left + (d.x0 + d.x1) / 2, r.top + (d.y0 + d.y1) / 2]; });
 if (h2) { await win.mouse.dblclick(h2[0], h2[1]); await W(300); await win.keyboard.press('Control+a'); await win.keyboard.type('150'); await win.keyboard.press('Enter'); await idle(); }
 console.log('bbox x', await win.evaluate(() => { const xs = lithApp.doc.mesh.faces.map((f) => f.c[0]); return [Math.min(...xs), Math.max(...xs)]; }));
+// 0.1.72: a single click on a dimension label keeps the dimensions (first click of a double-click)
+const h3 = await win.evaluate(() => { const d = lithApp.doc._dimHits.find((x) => x.kind === 'cons'); const r = lithApp.doc.vp.el.getBoundingClientRect(); return d && [r.left + (d.x0 + d.x1) / 2, r.top + (d.y0 + d.y1) / 2]; });
+if (h3) { await win.mouse.click(h3[0], h3[1]); await W(300); }
+console.log('0.1.72 click on label keeps dims:', await win.evaluate(() => [!!lithApp.doc.dimFeat, lithApp.doc._dimHits.length]));
+// sizes without a dimension: the circle of the cut has none → dashed Ø shown, editing it adds a diameter dimension
+await win.keyboard.press('Escape'); await win.mouse.click(5, 300); await W(200);
+await win.evaluate(() => { const d = lithApp.doc; d.showFeatureDims(d.doc.features.find((f) => f.type === 'extrude' && f.op === 'cut').id); }); await W(400);
+console.log('0.1.72 cut dims:', await win.evaluate(() => lithApp.doc._dimHits.map((d) => d.kind + ':' + d.text).join(' | ')), 'sketch line colour', await win.evaluate(() => lithApp.doc.sketchGroup.children[0]?.material.color.getHexString()));
+await shot('fd-auto');
+const h4 = await win.evaluate(() => { const d = lithApp.doc._dimHits.find((x) => x.kind === 'auto'); const r = lithApp.doc.vp.el.getBoundingClientRect(); return d && [r.left + (d.x0 + d.x1) / 2, r.top + (d.y0 + d.y1) / 2]; });
+if (h4) { await win.mouse.dblclick(h4[0], h4[1]); await W(300); await win.locator('.dim-inline').fill('20'); await win.locator('.dim-inline').press('Enter'); await idle(); }
+console.log('0.1.72 after Ø20:', await win.evaluate(() => { const d = lithApp.doc, sk = d.doc.features.filter((f) => f.type === 'sketch')[1]; const c = sk.cons.find((x) => x.type === 'diameter'); const g = sk.geo.find((x) => x.type === 'circle'); return { cons: c && c.value, r: g.r, hits: d._dimHits.map((x) => x.kind + ':' + x.text).join(' | ') }; }));
+// rectangle without dimensions: one width + one height shown
+// rectangle without dimensions (remove its two dims on a copy): one width + one height shown
+console.log('0.1.72 rect without dims:', await win.evaluate(() => { const d = lithApp.doc, sk = d.doc.features.find((f) => f.type === 'sketch'); const keep = sk.cons; sk.cons = keep.filter((c) => !['length', 'distance', 'hdist', 'vdist'].includes(c.type)); d.showFeatureDims(d.doc.features.find((f) => f.type === 'extrude').id); const t = d.featureDims().map((x) => x.kind + ':' + x.text).join(' | '); sk.cons = keep; d.showFeatureDims(null); return t; }));
 // tree hover on cut
 await win.keyboard.press('Escape');
 await win.locator('.tr-row:has-text("Cut-Extrude")').hover(); await W(400);

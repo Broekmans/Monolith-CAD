@@ -2,6 +2,7 @@
 // The scans stay where they are on disk; the document stores their paths and display settings.
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
+import { opt } from '../app/options.js';
 import { ViewSet } from '../viewset.js';
 import { h, fmt, contextMenu, toast, dialog, evalNumber, promptText } from '../ui.js';
 import { icon } from '../icons.js';
@@ -19,7 +20,7 @@ const mpts = (n) => (n >= 1e6 ? fmt(n / 1e6, n >= 1e8 ? 0 : 1) + ' M' : n >= 1e3
 const secs = (s) => (s >= 90 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.round(s)} s`);
 
 export function newCloudDoc(name = 'PointCloud1') {
-  return { kind: 'cloud', version: 1, name, origin: null, clouds: [], view: { budget: 10e6, edl: true, edlStrength: 1, round: false } };
+  return { kind: 'cloud', version: 1, name, origin: null, clouds: [], view: { budget: opt('cloudBudget') * 1e6, edl: opt('cloudEdl'), edlStrength: 1, round: false } };
 }
 
 export class CloudDoc {
@@ -44,6 +45,7 @@ export class CloudDoc {
     this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
     this.viewport = this.vp = this.viewSet.proxy;
     this.viewSet.onActive = () => this.scheduleLOD();
+    this.viewSet.onLayout = () => { this.scheduleLOD(); app.syncViewportMenu?.(); };
     this.scene = this.vp.scene;
     this.edls = new Map(); // one depth-shading pass per pane (own render targets / size)
     this.overlay = new THREE.Scene();
@@ -57,7 +59,9 @@ export class CloudDoc {
       if (this.overlay.children.length) { const ac = r.autoClear; r.autoClear = false; r.clearDepth(); r.render(this.overlay, this.vp.camera); r.autoClear = ac; } // part preview etc. (not depth shaded)
     };
     this.vp.onViewChange = () => this.viewChanged();
+    this.vp.onMiddleClick = () => this.zoomFit(); // double middle click = Zoom to Fit
     this.vp.onContextMenu = (e) => this.tool?.onContext?.(e) || contextMenu(e.clientX, e.clientY, [
+      ...this.viewSet.menuItems(), // Maximize/Restore + Close View
       { label: 'Zoom to Fit', key: 'F', run: () => this.zoomFit() },
       { label: 'Add Point Cloud…', run: () => this.addCloudDialog() },
       { label: this.doc.view.edl ? 'Shading off' : 'Shading on', run: () => this.setView({ edl: !this.doc.view.edl }) },
@@ -84,7 +88,11 @@ export class CloudDoc {
       [C('export', 'Export', 'export', () => this.exportDialog(), { enabled: has, tip: 'Save the selected scan as LAS, PLY or XYZ' }),
         C('rebuild', 'Rebuild Cache', 'history', () => this.rebuildCache(this.selId), { enabled: () => !!this.selId, tip: 'Read the scan file again and rebuild its display cache' })],
     ];
-    this.app.cm.setTabs([{ name: 'Point Cloud', groups }, this.editTab(), this.measureTab(), this.analyseTab(), this.registerTab()], 'Point Cloud');
+    const tabs = [{ name: 'Point Cloud', groups }, this.editTab(), this.measureTab(), this.analyseTab(), this.registerTab()];
+    // ribbon group names per tab (shown under each group)
+    const NAMES = { 'Point Cloud': ['Scans', 'View', 'Display', 'Export'], Edit: ['Select & Crop', 'Filter', 'Combine', 'Edit'], Measure: ['Inspect', 'Measure', 'Export'], Analyse: ['Surface', 'Compare', 'Export', 'Edit'], Register: ['Clouds', 'Part', 'Report', 'Edit'] };
+    for (const t of tabs) (NAMES[t.name] || []).forEach((l, k) => { if (t.groups[k]) t.groups[k].label = l; });
+    this.app.cm.setTabs(tabs, 'Point Cloud');
   }
   buildHeadsUp() {
     const bar = this.app.el.headsUp;

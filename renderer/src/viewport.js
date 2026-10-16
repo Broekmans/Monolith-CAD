@@ -1,5 +1,6 @@
 // 3D viewport: orthographic CAD camera, SolidWorks-style mouse navigation,
 // a 2D overlay canvas for annotations, and a corner view triad.
+import { opt } from './app/options.js';
 import { ViewCube } from './viewcube.js';
 import * as THREE from 'three';
 import { Grid } from './grid.js';
@@ -84,7 +85,16 @@ export class Viewport {
   requestRender() { this.needsRender = true; }
 
   resize() {
-    const w = this.el.clientWidth || 1, h = this.el.clientHeight || 1;
+    const w = this.el.clientWidth, h = this.el.clientHeight;
+    if (!w || !h) { if (!this.width) { this.width = 1; this.height = 1; } return; } // hidden (other tab / maximized pane): keep the last size
+    // the model scales with the view: only the width changed → scale by the width, only the height → by the
+    // height, both → keep everything that was visible (option scaleWithView, default on)
+    const w0 = this.width, h0 = this.height;
+    if (w0 > 1 && h0 > 1 && (w0 !== w || h0 !== h) && opt('scaleWithView')) {
+      const rw = w0 / w, rh = h0 / h;
+      const k = Math.abs(rw - 1) < 1e-3 ? rh : Math.abs(rh - 1) < 1e-3 ? rw : Math.max(rw, rh);
+      this.scale = Math.min(1e5, Math.max(1e-5, this.scale * k));
+    }
     this.width = w; this.height = h;
     const dpr = window.devicePixelRatio || 1;
     if (this.renderer.getPixelRatio() !== dpr) this.renderer.setPixelRatio(dpr); // UI scale / monitor change
@@ -256,7 +266,7 @@ export class Viewport {
       let kind = 'rotate';
       if (this.mode === 'plan' || e.shiftKey || e.button === 2) kind = 'pan';
       if (e.ctrlKey) kind = 'zoom';
-      drag = { kind, x: e.clientX, y: e.clientY, moved: false, button: e.button };
+      drag = { kind, x: e.clientX, y: e.clientY, moved: false, button: e.button, t: performance.now() };
     });
     el.addEventListener('pointermove', (e) => {
       if (!drag) return;
@@ -270,15 +280,21 @@ export class Viewport {
     const end = (e) => {
       if (!drag) return;
       const wasRightClick = drag.button === 2 && !drag.moved;
+      // double click with the middle button (two short presses without dragging) = Zoom to Fit
+      const now = performance.now();
+      const midClick = drag.button === 1 && !drag.moved && now - drag.t < 400 && e.type === 'pointerup';
+      const midDouble = midClick && opt('midDouble') && now - (this._lastMid || 0) < opt('midDoubleMs');
+      this._lastMid = midClick && !midDouble ? now : 0;
       drag = null;
       if (wasRightClick && this.onContextMenu) this.onContextMenu(e);
+      if (midDouble && this.onMiddleClick) this.onMiddleClick(e);
     };
     el.addEventListener('pointerup', end);
     el.addEventListener('pointercancel', end);
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
       const r = el.getBoundingClientRect();
-      this.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(e.deltaY * 0.0015));
+      this.zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(e.deltaY * 0.0015 * opt('wheelZoom') / 100));
     }, { passive: false });
   }
 

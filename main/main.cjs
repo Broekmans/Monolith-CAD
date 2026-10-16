@@ -13,7 +13,7 @@ const RENDERER = path.join(ROOT, 'renderer');
 const isTest = !!process.env.MONOLITH_TEST;
 const { listProjects, createProject, openFolder, projectsRoot } = require('./projects.cjs');
 const { pcCall, startWorker, kernel, stopWorkers } = require('./kernel.cjs');
-const { writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
+const { optionsCfg, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
 const { dwgToDxf, dxfToDwg, converterStatus, setODAPath, listFonts } = require('./tools.cjs');
 const { setupCloudIPC, stopCloudWorkers } = require('./cloudio.cjs');
 protocol.registerSchemesAsPrivileged([{ scheme: 'monolith', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
@@ -45,7 +45,7 @@ function send(cmd, arg) {
   w?.webContents.send('menu', cmd, arg);
 }
 
-let uiDark = false, uiGrid = true;
+let uiDark = false, uiGrid = true, uiIso = true;
 // Viewport menu state of the active document (null = no 3D document: items disabled)
 let uiVp = null; // { layout, grid, multi }
 function buildMenu() {
@@ -92,7 +92,10 @@ function buildMenu() {
     { label: 'View&port', submenu: [
       ...[['single', 'Single View'], ['two-v', 'Two Views Side by Side'], ['two-h', 'Two Views Stacked'], ['four', 'Four Views']].map(([id, label]) => (
         { label, type: 'radio', checked: (uiVp?.layout || 'single') === id, enabled: !!uiVp, click: () => send('layout', id) })),
+      { label: 'Custom (views closed)', type: 'radio', checked: uiVp?.layout === 'custom', enabled: false, visible: uiVp?.layout === 'custom' },
       { type: 'separator' },
+      { label: uiVp?.max ? 'Restore Views' : 'Maximize View', enabled: !!uiVp?.multi, click: () => send('max-view') },
+      { label: 'Close View', enabled: !!uiVp?.multi, click: () => send('close-view') },
       { label: 'Reset Views', enabled: !!uiVp, click: () => send('reset-views') },
       { type: 'separator' },
       { label: 'Show Grid in This Document', type: 'checkbox', checked: !!uiVp?.grid, enabled: !!uiVp && uiVp.grid !== null, click: (mi) => send('doc-grid', mi.checked) },
@@ -100,9 +103,13 @@ function buildMenu() {
     ] },
     { label: '&Interface', submenu: [
       { label: 'Dark Mode', type: 'checkbox', checked: uiDark, click: (mi) => send('theme', mi.checked) },
+      { label: 'Turn to Isometric for Features', type: 'checkbox', checked: uiIso, click: (mi) => send('iso-features', mi.checked) },
       { type: 'separator' },
       { label: 'UI Scale…', click: () => send('ui-scale') },
       { label: 'Reset UI Scale (100%)', click: () => send('ui-scale-reset') },
+    ] },
+    { label: '&Tools', submenu: [
+      { label: 'Options…', click: () => send('options') },
     ] },
     { label: '&Help', submenu: [
       { label: 'Keyboard && Mouse', accelerator: 'F1', click: () => send('shortcuts') },
@@ -128,8 +135,10 @@ function setupIPC() {
   ipcMain.handle('log:dir', () => logDir());
   ipcMain.handle('log:dump', (_e, n, t) => writeDump(n, t));
   ipcMain.handle('std:cfg', (_e, s) => draftStd(s));
+  ipcMain.handle('options:cfg', (_e, o) => optionsCfg(o));
   ipcMain.handle('log:cfg', (_e, c) => (c ? setLogCfg(c) : getLogCfg()));
   ipcMain.on('ui:grid', (_e, g) => { if (uiGrid !== !!g) { uiGrid = !!g; buildMenu(); } });
+  ipcMain.on('ui:iso', (_e, g) => { if (uiIso !== !!g) { uiIso = !!g; buildMenu(); } });
   ipcMain.on('ui:viewport', (_e, v) => { const j = JSON.stringify(v ?? null); if (j !== JSON.stringify(uiVp)) { uiVp = v ?? null; buildMenu(); } });
   ipcMain.on('ui:dark', (_e, d) => { if (uiDark !== !!d) { uiDark = !!d; buildMenu(); } });
   ipcMain.on('ui:zoom', (e, f) => { const z = Math.min(2, Math.max(0.6, +f || 1)); e.sender.setZoomFactor(z); });

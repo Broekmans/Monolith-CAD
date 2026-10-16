@@ -13,6 +13,7 @@ import { AssemblyDoc, newAssemblyDoc, partSaved, partCache } from './assembly/as
 import { PC_EXTS, isPointCloud, askImportOptions } from './pointcloud.js';
 import { AppFiles } from './app/files.js';
 import { AppSettings } from './app/settings.js';
+import { opt } from './app/options.js';
 export const EXT = { part: 'lithprt', plan: 'lithpln', assembly: 'lithasm', cloud: 'lithpcd', drawing: 'lithdrw' };
 export const extOf = (k) => EXT[k] || 'lithprt';
 
@@ -40,11 +41,11 @@ export class App {
         ['undo', 'Undo (Ctrl+Z)', () => this.doc?.undo()], ['redo', 'Redo (Ctrl+Y)', () => this.doc?.redo()]]
         .map(([ic, tip, run]) => h('button', { class: 'qa-btn', title: tip, html: icon(ic), onclick: run })),
       h('div', { class: 'doc-title', id: 'docTitle' }, ''),
+      h('button', { class: 'qa-btn qa-opt', title: 'Options (Tools > Options…)', html: icon('gear'), onclick: () => this.optionsDialog() }),
       h('div', { class: 'busy', id: 'busy' }, h('span', { class: 'spinner' }), 'Rebuilding…'));
-    let dark = false; try { dark = localStorage.getItem('monolith.theme') === 'dark'; } catch {}
-    this.setTheme(dark, true);
-    let sc = 1; try { sc = +localStorage.getItem('monolith.uiScale') || 1; } catch {}
-    this.setUiScale(sc, false);
+    this.setTheme(opt('dark'), true); // Tools > Options (app/options.js)
+    this.setUiScale(opt('uiScale') / 100, false);
+    this.loadMyDefaults?.(); // first start: "My Defaults" file
     this.el = {};
     this.el.cmd = h('div', { class: 'cmdmgr' });
     this.el.tree = h('div', { class: 'panel tree' });
@@ -220,7 +221,7 @@ export class App {
   // Viewport menu (main process) shows the active document's layout + grid
   syncViewportMenu() {
     const d = this.root.active?.doc;
-    api.setViewportMenu(d?.viewSet ? { layout: d.viewSet.layout, grid: d.toggleGrid ? !!d.gridOn : null } : null);
+    api.setViewportMenu(d?.viewSet ? { layout: d.viewSet.layout, grid: d.toggleGrid ? !!d.gridOn : null, multi: d.viewSet.panes.length > 1, max: !!d.viewSet.max } : null);
   }
   cycleTab(dir) {
     const app = this.root, list = [app, ...app.tabs];
@@ -366,10 +367,14 @@ export class App {
     switch (cmd) {
       case 'theme': this.setTheme(!!arg); break;
       case 'grid': this.setGrid(!!arg); break;
+      case 'iso-features': this.setIsoForFeatures(!!arg); break;
       case 'layout': d?.setViewLayout?.(arg); this.syncViewportMenu(); break;
       case 'reset-views': d?.resetViews?.(); break;
+      case 'max-view': { const s = d?.viewSet; if (s) (s.max ? s.restoreViews() : s.maximize()); break; }
+      case 'close-view': d?.viewSet?.closePane(); break;
       case 'doc-grid': if (d?.toggleGrid && d.gridOn !== !!arg) d.toggleGrid(); this.syncViewportMenu(); break;
       case 'ui-scale': this.uiScaleDialog(); break;
+      case 'options': this.optionsDialog(); break;
       case 'ui-scale-reset': this.setUiScale(1); break;
       case 'new-part': this.newDoc('part'); break;
       case 'new-plan': this.newDoc('plan'); break;

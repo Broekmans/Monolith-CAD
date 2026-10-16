@@ -1,6 +1,7 @@
 // Small DOM toolkit: element builder, CommandManager ribbon, PropertyManager
 // panel, context menus, toasts and dialogs.
 import { icon } from './icons.js';
+import { opt } from './app/options.js';
 
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -51,13 +52,17 @@ export class CommandManager {
     const tab = this.tabs[this.active];
     if (tab) {
       for (const group of tab.groups) {
-        const g = h('div', { class: 'cm-group' });
-        for (const b of group) {
-          if (b === '|') { g.appendChild(h('div', { class: 'cm-sep' })); continue; }
+        // a group is an array of buttons; `group.label` (or {label, items}) = name shown under the group
+        const items = Array.isArray(group) ? group : group.items || [];
+        const row = h('div', { class: 'cm-grow' });
+        const g = h('div', { class: 'cm-group' }, row, group.label ? h('div', { class: 'cm-glabel' }, group.label) : null);
+        for (const b of items) {
+          if (!b) continue;
+          if (b === '|') { row.appendChild(h('div', { class: 'cm-sep' })); continue; }
           const btn = h('button', { class: 'cm-btn' + (b.small ? ' small' : ''), title: b.tip || b.label, 'data-cmd': b.id, onclick: () => b.run() },
             h('span', { class: 'ico', html: icon(b.icon) }), h('span', { class: 'lbl' }, b.label));
           this.buttons.push({ el: btn, def: b });
-          g.appendChild(btn);
+          row.appendChild(btn);
         }
         bar.appendChild(g);
       }
@@ -76,6 +81,9 @@ export class CommandManager {
   }
 }
 
+// name a ribbon group: grp('Create', [buttons]) -> the array with .label (shown under the group)
+export const grp = (label, items) => Object.assign(items, { label });
+
 // ---------------- PropertyManager ----------------
 // fields: {key, type:'number'|'select'|'color'|'check'|'selbox'|'text'|'info'|'buttons'|'group', ...}
 export class PropertyManager {
@@ -91,7 +99,7 @@ export class PropertyManager {
     const fire = (key) => { onChange?.(pm.values, key); };
     const body = h('div', { class: 'pm-body' });
     const addField = (f, parent) => {
-      const wrap = h('div', { class: 'pm-field pm-' + f.type });
+      const wrap = h('div', { class: 'pm-field pmf-' + f.type });
       if (f.type === 'group') {
         const grp = h('div', { class: 'pm-group' }, h('div', { class: 'pm-group-title' }, f.label));
         f.fields.forEach((ff) => addField(ff, grp));
@@ -114,7 +122,17 @@ export class PropertyManager {
           pm.values[f.key] = v; fire(f.key);
         };
         inp.addEventListener('change', commit);
-        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { commit(); e.preventDefault(); } e.stopPropagation(); });
+        inp.addEventListener('input', () => { inp._typed = true; });
+        // Enter: apply a changed value (preview updates); Enter again with the value unchanged = OK
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const v = evalNumber(inp.value), typed = inp._typed; inp._typed = false;
+            if (!typed && v !== null && v === +pm.values[f.key] && pm.onOk && this.current === pm) this.ok();
+            else { commit(); if (!opt('enterTwice') && pm.onOk && this.current === pm && !inp.classList.contains('bad')) this.ok(); else inp.select(); }
+          }
+          e.stopPropagation();
+        });
         const spin = (d) => { const v = (evalNumber(inp.value) ?? 0) + d * (f.step || 1); inp.value = String(+v.toFixed(6)); commit(); };
         const row = h('div', { class: 'pm-numrow' }, inp, f.unit ? h('span', { class: 'unit' }, f.unit) : null,
           h('div', { class: 'spin' }, h('button', { onclick: () => spin(1) }, '▲'), h('button', { onclick: () => spin(-1) }, '▼')));
@@ -203,7 +221,11 @@ export class PropertyManager {
         h('button', { class: 'pm-cancel', title: 'Cancel (Esc)', html: icon('cancel'), onclick: () => this.cancel() })));
     pm.onOk = onOk; pm.onCancel = onCancel;
     this.root.innerHTML = '';
-    this.root.append(header, msg, body);
+    // footer OK / Cancel (shown when the PropertyManager floats over the 3D view)
+    const foot = h('div', { class: 'pm-foot' },
+      onOk ? h('button', { class: 'pm-foot-ok primary', onclick: () => this.ok() }, okLabel && okLabel.length < 14 ? okLabel : 'OK') : null,
+      h('button', { class: 'pm-foot-cancel', onclick: () => this.cancel() }, 'Cancel'));
+    this.root.append(header, msg, body, foot);
     this.root.classList.add('show');
     pm.setMessage(message || '');
     renderBoxes();
@@ -305,7 +327,7 @@ export function dialog({ title, body, buttons = [{ label: 'OK', primary: true }]
   return new Promise((resolve) => {
     const back = h('div', { class: 'dlg-back' });
     const close = (v) => { back.remove(); resolve(v); };
-    const dlg = h('div', { class: 'dlg' }, h('div', { class: 'dlg-title' }, title), h('div', { class: 'dlg-body' }, body),
+    const dlg = h('div', { class: 'dlg' }, h('div', { class: 'dlg-title' }, h('span', {}, title), h('button', { class: 'dlg-x', title: 'Close (Esc)', onclick: () => close(null) }, '×')), h('div', { class: 'dlg-body' }, body),
       h('div', { class: 'dlg-buttons' }, buttons.map((b) => h('button', { class: b.primary ? 'primary' : '', onclick: () => close(b.value ?? b.label) }, b.label))));
     back.appendChild(dlg);
     back.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(null); e.stopPropagation(); });

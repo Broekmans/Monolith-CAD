@@ -32,6 +32,7 @@ export class AppFiles {
     t.syncViewportMenu?.();
     t.updateTitle();
     t.renderLeftTabs();
+    return t;
   }
 
   async newDoc(kind) {
@@ -69,18 +70,18 @@ export class AppFiles {
     const ext = f.path.split('.').pop().toLowerCase();
     if (isPointCloud(f.path)) {
       // a scan opened on its own starts a Point Cloud document; Import adds it to a part or plan as reference
-      await this.loadDoc(newCloudDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
-      await this.doc.addCloud(f.path);
+      const t = await this.loadDoc(newCloudDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
+      await t.doc.addCloud(f.path);
       return;
     }
     if (['dxf', 'dwg'].includes(ext)) {
-      await this.loadDoc(newPlanDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
-      await this.importPath(f);
+      const t = await this.loadDoc(newPlanDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
+      await t.importPath(f); // the new tab, not the tab Open was clicked in (Home has no document)
       return;
     }
     if (['step', 'stp', 'igs', 'iges'].includes(ext)) {
-      await this.loadDoc(newPartDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
-      await this.importPath(f);
+      const t = await this.loadDoc(newPartDoc(f.path.split(/[\\/]/).pop().replace(/\.\w+$/, '')));
+      await t.importPath(f);
       return;
     }
     let data;

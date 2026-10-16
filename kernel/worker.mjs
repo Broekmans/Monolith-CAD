@@ -16,11 +16,20 @@ function meshTransfer(m) {
 
 const isIdent = (m) => !m || m.every((v, i) => Math.abs(v - (i % 5 === 0 ? 1 : 0)) < 1e-12);
 const ops = {
-  regen({ features, upTo }) {
+  regen({ features, upTo, ghost }) {
     const r = K.regenerate(features, { upTo });
     const mesh = K.tessellate(r.body);
     try { const own = K.faceOwners(r.stages, r.body); mesh.faces.forEach((f) => { f.feat = own[f.id]; }); } catch { /* ownership is optional */ }
-    return { result: { status: r.status, mesh }, transfer: meshTransfer(mesh) };
+    const transfer = meshTransfer(mesh);
+    let g = null;
+    if (ghost) {
+      // feature preview: the body before the last feature + the last feature's tool (extruded / revolved profile)
+      const last = features[features.length - 1], t = last && r.tools?.get(last.id);
+      const prevBody = r.stages.filter((st) => st.id !== last?.id).pop()?.body || null;
+      g = { id: last?.id, op: t?.op || null, prev: prevBody ? K.tessellate(prevBody) : null, tool: t ? K.tessellate(t.shape) : null };
+      for (const m of [g.prev, g.tool]) if (m) transfer.push(...meshTransfer(m));
+    }
+    return { result: { status: r.status, mesh, ghost: g }, transfer };
   },
   mass({ features, upTo }) {
     const r = K.regenerate(features, { upTo });

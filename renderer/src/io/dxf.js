@@ -155,7 +155,29 @@ export function parseDxf(text) {
   walk(dxf.entities, ident, 0, null);
   void compose;
   const units = dxf.header?.$INSUNITS;
-  return { layers, entities: out, units };
+  return { layers, entities: out, units, skipped: skippedTypes(text) };
+}
+
+// Top-level ENTITIES the import does not turn into geometry (e.g. IMAGE = raster pictures), counted from the raw text
+// because the parser drops unknown types silently. -> {IMAGE: 4, ...}
+const HANDLED = new Set(['LINE', 'LWPOLYLINE', 'POLYLINE', 'VERTEX', 'SEQEND', 'CIRCLE', 'ARC', 'ELLIPSE', 'SPLINE', 'TEXT', 'MTEXT', 'POINT', 'INSERT', 'ATTRIB', 'DIMENSION', 'SOLID', '3DFACE', 'ENDSEC']);
+export function skippedTypes(text) {
+  const L = text.split(/\r?\n/), out = {};
+  let i = 0, inEnt = false;
+  for (; i < L.length - 1; i += 2) {
+    const g = L[i].trim(), v = L[i + 1].trim();
+    if (g !== '0') continue;
+    if (v === 'SECTION' && L[i + 3]?.trim() === 'ENTITIES') { inEnt = true; continue; }
+    if (!inEnt) continue;
+    if (v === 'ENDSEC') break;
+    if (!HANDLED.has(v)) out[v] = (out[v] || 0) + 1;
+  }
+  return out;
+}
+const TYPE_NAMES = { IMAGE: 'raster image', HATCH: 'hatch', LEADER: 'leader', MLEADER: 'multileader', '3DSOLID': '3D solid', REGION: 'region', WIPEOUT: 'wipeout', OLE2FRAME: 'OLE object', VIEWPORT: 'viewport', MESH: 'mesh', XLINE: 'construction line', RAY: 'ray', TOLERANCE: 'tolerance', ACAD_TABLE: 'table' };
+export function skippedText(sk) {
+  const parts = Object.entries(sk || {}).map(([t, n]) => `${n} ${TYPE_NAMES[t] || t}${n > 1 ? 's' : ''} (${t})`);
+  return parts.length ? parts.join(', ') + ' not imported' : '';
 }
 
 // Import DXF geometry into a Sketcher as lines/arcs/circles (unconstrained,

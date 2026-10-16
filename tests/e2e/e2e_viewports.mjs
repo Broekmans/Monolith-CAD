@@ -73,6 +73,59 @@ await win.mouse.move(...(await rect(1)).slice(0, 2).map((v) => v + 100)); await 
 await win.evaluate(() => { const d = lithApp.doc; d.editFeature(d.doc.features.find((x) => x.type === 'extrude').id); }); await idle();
 console.log('11 value box in active pane:', await win.evaluate(() => { const s = lithApp.doc.viewSet; return document.querySelector('.feat-val')?.parentElement === s.active.el; }));
 await win.keyboard.press('Escape'); await idle();
+// ---- 0.1.74: real divider drags, model scales with the view, close / maximize / restore, custom layout saved ----
+await win.evaluate(() => lithApp.onMenu('layout', 'four')); await W(600);
+const sc = () => win.evaluate(() => lithApp.doc.viewSet.panes.map((p) => +p.scale.toFixed(4)));
+const drag = async (sel, dx, dy, idx = 0) => { const b = await win.locator(sel).nth(idx).boundingBox(); const x = b.x + b.width / 2, y = b.y + Math.min(b.height / 2, 100); await win.mouse.move(x, y); await win.mouse.down(); for (let k = 1; k <= 6; k++) await win.mouse.move(x + dx * k / 6, y + dy * k / 6); await win.mouse.up(); await W(300); };
+const s0 = await sc(), z0 = (await info()).sizes;
+await drag('.vs-split.v', -200, 0);
+const s1 = await sc(), z1 = (await info()).sizes;
+console.log('12 v-divider -200px: split', JSON.stringify(await win.evaluate(() => lithApp.doc.viewSet.split.map((v) => +v.toFixed(3)))), 'sizes', JSON.stringify(z0), '→', JSON.stringify(z1));
+console.log('12 scale ratio pane0 (expect w0/w1):', (s1[0] / s0[0]).toFixed(3), 'vs', (parseInt(z0[0]) / parseInt(z1[0])).toFixed(3), '| pane1', (s1[1] / s0[1]).toFixed(3), 'vs', (parseInt(z0[1]) / parseInt(z1[1])).toFixed(3));
+await drag('.vs-split.h', 0, 120, 1); // the right column's row divider
+console.log('13 h-divider right column +120:', JSON.stringify(await win.evaluate(() => lithApp.doc.viewSet.cols.map((c) => c.rows.map((r) => +r.h.toFixed(3))))), JSON.stringify((await info()).sizes));
+await drag('.vs-split.v', 100, 0); // second drag on the same strip still works
+console.log('13b second v drag:', JSON.stringify(await win.evaluate(() => lithApp.doc.viewSet.split.map((v) => +v.toFixed(3)))));
+// maximize pane 3 with its button, restore
+const btn = async (i, cls) => { const b = await win.evaluate(([i, cls]) => { const r = lithApp.doc.viewSet.panes[i].el.querySelector(cls).getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }, [i, cls]); await win.mouse.move(...b); await win.mouse.click(...b); await W(400); };
+const before = JSON.stringify((await info()).sizes);
+await btn(3, '.vs-max');
+console.log('14 maximized:', await win.evaluate(() => { const s = lithApp.doc.viewSet; return [s.panes.indexOf(s.max), s.panes.map((p) => p.el.style.display || 'show').join()]; }), JSON.stringify((await info()).sizes[3]));
+await shot('max');
+await btn(3, '.vs-max');
+console.log('14 restored, same sizes:', JSON.stringify((await info()).sizes) === before);
+// right-click on empty space → Maximize View
+const [ex, ey] = await win.evaluate(() => { const r = lithApp.doc.viewSet.panes[2].el.getBoundingClientRect(); return [r.left + 15, r.bottom - 15]; });
+await win.mouse.click(ex, ey, { button: 'right' }); await W(300);
+const items = await win.locator('.ctx-item').allTextContents();
+console.log('15 context menu:', JSON.stringify(items.slice(0, 3)));
+await win.locator('.ctx-item:has-text("Maximize View")').click(); await W(300);
+console.log('15 max via menu:', await win.evaluate(() => lithApp.doc.viewSet.panes.indexOf(lithApp.doc.viewSet.max)));
+await win.mouse.click(ex, ey, { button: 'right' }); await W(300);
+await win.locator('.ctx-item:has-text("Restore Views")').click(); await W(300);
+console.log('15 restored:', await win.evaluate(() => lithApp.doc.viewSet.max === null));
+// close the bottom-right view (pane 3) → right column = one tall view
+await btn(3, '.vs-close');
+console.log('16 closed 3:', JSON.stringify(await info()), JSON.stringify(await win.evaluate(() => lithApp.doc.viewSet.cols.map((c) => c.rows.length))));
+await shot('three');
+// close pane 0 (top-left; owns the renderer) via the menu command
+await win.evaluate(() => { const s = lithApp.doc.viewSet; s.setActive(s.panes[0]); lithApp.onMenu('close-view'); }); await W(400);
+console.log('17 closed top-left:', JSON.stringify(await info()), JSON.stringify(await win.evaluate(() => lithApp.doc.viewSet.cols.map((c) => c.rows.length))), 'canvases ok', await win.evaluate(() => lithApp.doc.viewSet.panes[0].el.querySelector('canvas.gl') !== null));
+// save / reopen custom layout
+const saved2 = await win.evaluate(() => { const d = lithApp.doc; d.beforeSave(); return d.doc.viewLayout; });
+console.log('18 saved custom:', saved2.layout, JSON.stringify(saved2.cols));
+await win.evaluate(() => lithApp.onMenu('layout', 'single')); await W(300);
+await win.evaluate((s) => lithApp.doc.viewSet.restore(s), saved2); await W(400);
+console.log('18 restored custom:', JSON.stringify(await info()), JSON.stringify(await win.evaluate(() => lithApp.doc.viewSet.cols.map((c) => [+c.w.toFixed(3), c.rows.map((r) => +r.h.toFixed(3))]))));
+await win.evaluate(() => lithApp.onMenu('reset-views')); await W(400);
+console.log('19 reset views:', (await info()).layout, (await info()).n);
+// window resize in single view: model scales along
+await win.evaluate(() => lithApp.onMenu('layout', 'single')); await W(300);
+const a0 = await win.evaluate(() => [lithApp.doc.vp.scale, lithApp.doc.vp.width]);
+await win.evaluate(() => { document.querySelector('.left').style.width = '470px'; }); await W(500);
+const a1 = await win.evaluate(() => [lithApp.doc.vp.scale, lithApp.doc.vp.width]);
+console.log('20 panel wider: width', a0[1], '→', a1[1], 'scale ratio', (a1[0] / a0[0]).toFixed(3), 'expect', (a0[1] / a1[1]).toFixed(3));
+await win.evaluate(() => { document.querySelector('.left').style.width = ''; }); await W(300);
 await win.evaluate(() => lithApp.onMenu('theme', true)); await win.evaluate(() => lithApp.onMenu('layout', 'four')); await shot('dark');
 await win.evaluate(() => lithApp.onMenu('theme', false));
 console.log('ERRORS:', logs.length ? logs.join('\n') : 'none');

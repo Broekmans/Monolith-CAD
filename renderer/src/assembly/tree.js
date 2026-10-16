@@ -76,7 +76,7 @@ export class AsmTree {
     const p = this.pickAt(e);
     const items = [];
     const c = p && this.C(p.comp);
-    if (c) { if (!this.sel.some((s) => s.key === p.key)) this.sel = [p]; items.push({ label: c.name, disabled: true }, ...this.compMenu(c), '-'); }
+    if (c) { if (!this.sel.some((s) => s.key === p.key)) this.sel = [p]; items.push({ label: c.name, disabled: true }, ...this.compMenu(c), '-'); } else items.push(...this.viewSet.menuItems()); // empty space: Maximize/Restore + Close View
     items.push({ label: 'Insert Component…', icon: 'insertComp', run: () => this.cmdInsert() }, { label: 'Toolbox (DIN fasteners)…', icon: 'bolt', run: () => this.cmdToolbox() }, { label: 'Zoom to Fit', icon: 'zoomFit', key: 'F', run: () => this.zoomFit() }, { label: 'Isometric', icon: 'views', key: 'Ctrl+7', run: () => this.vp.setView('iso') });
     contextMenu(e.clientX, e.clientY, items);
   }

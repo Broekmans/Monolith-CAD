@@ -1,3 +1,38 @@
+0.1.75 (2026-10-16)
+- New Options window (Tools > Options…, or the gear button top right): view, mouse, viewport, feature preview, feature value, dimension and point cloud settings in one place. Changes show live; Cancel puts them back.
+- Save as My Defaults (file monolith-options.json in the CAD Program folder), Back to My Defaults, Reset to Factory Defaults, Import… / Export… (JSON).
+- Feature preview faces are lighter: 8 % (inside the body 4 %). Colours and opacities can be set in Options.
+- Mouse wheel step for feature values (factory 1), Enter twice to confirm, double middle click time, wheel zoom speed and "model scales with the view" are now options.
+
+0.1.74 (2026-10-16)
+- Viewports: the dividers between views can be dragged again (the model scales along with the view). Double-click a divider to split evenly.
+- Every view has Maximize View / Restore Views and Close View buttons (top right, with more than one view); also in the right-click menu on empty space and in the Viewport menu.
+- Closing a view gives its space to the others: four views -> one tall + two stacked -> two -> one. Your own layout is saved with the document; Viewport > Reset Views brings the standard layout back.
+- The model scales with the view when a view gets bigger or smaller (dividers, panels, window).
+- Mouse wheel over the value box now changes the value by 1 per notch (was 5).
+
+0.1.73 (2026-10-16)
+- Mouse wheel over the value box on the model changes the value by 5 (wheel up = more) while you create a new feature; the box stays under the mouse while you scroll. When you edit an existing feature the wheel keeps zooming the view.
+
+0.1.72 (2026-10-16)
+- Blue sketch dimensions on the model can now be double-clicked and edited in place, also when the label is beside the model (the first click used to hide the dimensions).
+- Double-clicking a face always shows the sizes of its sketch: sizes you never dimensioned appear with a dashed frame (a rectangle gets one width and one height, circles Ø, arcs R). Double-click one and type a value: the dimension is added to the sketch and the model rebuilds.
+- The sketch of a double-clicked feature is drawn in a bright blue on top of the model.
+- Feature preview: faces of the yellow (Boss) and red (Cut) ghost are much more see-through, their edges fully visible.
+
+0.1.71 (2026-10-16)
+- Feature preview as a "ghost": while Extruded/Revolved Boss/Base or Cut is open, the body stays as it was and the volume the feature adds (yellow) or removes (red) is shown see-through, also where it runs inside the body. Fillet, Chamfer, Shell and Patterns show the result with the body before the feature as a faint outline.
+- When a feature dialog opens while you look straight at its sketch (e.g. right after Exit Sketch), the view turns to Isometric (looking at the sketch's front side) and zooms to fit. Switch off in Interface > Turn to Isometric for Features.
+- Enter twice: in the value box on the model and in the dialog's number fields, Enter after typing applies the value and updates the preview; Enter again confirms the feature and closes it. Esc cancels.
+- Double-click a dimension on the model: you edit the value right there in the view, no window. Enter = apply, Esc = cancel.
+- Double-click with the middle mouse button = Zoom to Fit (Part, Assembly, Plan, Drawing, Point Cloud).
+
+0.1.70 (2026-10-16)
+- Opening a DWG, DXF, STEP file or scan from the Home screen works again (the import now runs in the new tab; DWG gave an error).
+- DXF/DWG import tells which items were not imported, e.g. "4 raster images (IMAGE) not imported" (GeoSLAM orthophoto layouts only contain pictures).
+- Ribbon: every button group has a name underneath (Part: Sketch / Create / Modify, Boss/Base / Cut / Modify / Pattern, Measure / Import/Export; also Assembly, Plan, Drawing and Point Cloud). Plan: Text has its own group, Modify is one group.
+- Popup windows have one compact look: header strip with the title in small capitals and a close button, label | value rows, flat input fields, small blue OK. Applies to dialogs, the floating feature PropertyManager (now with OK / Cancel at the bottom), drawing settings boxes, Room List, right-click menus and the value box in the view.
+
 0.1.69 (2026-10-16)
 - DWG files now open without installing anything: MonoLith includes a built-in DWG converter (LibreDWG, free software under the GNU GPL, see MonoLith\resources\libredwg). It reads all DWG versions. When the ODA File Converter is installed it is still used first (best results); the built-in converter takes over when it is missing or fails.
 - DWG export: with the ODA File Converter as before (DWG 2018); without it the built-in converter saves DWG 2000.

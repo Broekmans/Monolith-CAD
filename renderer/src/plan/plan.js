@@ -3,7 +3,7 @@
 // live 3D model.
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
-import { h, fmt, contextMenu, toast, promptText, evalNumber } from '../ui.js';
+import { h, fmt, contextMenu, toast, promptText, evalNumber, grp } from '../ui.js';
 import { icon } from '../icons.js';
 import { api } from '../api.js';
 import * as G from './planGeom.js';
@@ -67,6 +67,7 @@ export class PlanDoc {
     this.viewport = this.vp;
     this.vp.overlayDrawers.push((ctx) => this.draw(ctx));
     this.vp.onContextMenu = (e) => this.contextMenu(e);
+    this.vp.onMiddleClick = () => this.zoomExtents(); // double middle click = Zoom to Fit
     this.vp3.setView('iso', false);
     this.modelGroup = new THREE.Group(); this.vp3.scene.add(this.modelGroup);
     this.applyLayout();
@@ -123,9 +124,9 @@ export class PlanDoc {
   buildCommands() {
     const C = (id, label, ic, cmd, extra = {}) => ({ id, label, icon: ic, run: () => this.runCommand(cmd), tip: `${label} (${cmd})`, ...extra });
     const draw = [
-      [C('line', 'Line', 'line', 'LINE'), C('pline', 'Polyline', 'polyline', 'PLINE'), C('rect', 'Rectangle', 'rect', 'RECTANG')],
-      [C('circle', 'Circle', 'circle', 'CIRCLE'), C('arc', 'Arc', 'arc3', 'ARC'), C('text', 'Text', 'text', 'TEXT')],
-      [C('dimlin', 'Linear Dim', 'dimension', 'DIMLINEAR'), C('dimal', 'Aligned Dim', 'dimAligned', 'DIMALIGNED')],
+      grp('Draw', [C('line', 'Line', 'line', 'LINE'), C('pline', 'Polyline', 'polyline', 'PLINE'), C('rect', 'Rectangle', 'rect', 'RECTANG'), C('circle', 'Circle', 'circle', 'CIRCLE'), C('arc', 'Arc', 'arc3', 'ARC')]),
+      grp('Text', [C('text', 'Text', 'text', 'TEXT')]),
+      grp('Dimension', [C('dimlin', 'Linear Dim', 'dimension', 'DIMLINEAR'), C('dimal', 'Aligned Dim', 'dimAligned', 'DIMALIGNED')]),
     ];
     const modify = [
       [C('move', 'Move', 'move', 'MOVE'), C('copy', 'Copy', 'copy', 'COPY'), C('rotate', 'Rotate', 'rotate', 'ROTATE')],
@@ -146,6 +147,11 @@ export class PlanDoc {
         { id: 'expDwg', label: 'Export DWG', icon: 'dwg', run: () => this.exportDxf('dwg') },
         { id: 'impPc2', label: 'Import Point Cloud', icon: 'cloud', run: () => this.app.importPointCloud() }],
     ];
+    // one Modify group with separators; group names under each group
+    const modGroup = grp('Modify', modify.flatMap((g, i) => (i ? ['|', ...g] : g)));
+    ['Architecture', 'View', 'Export'].forEach((l, i) => { arch[i].label = l; });
+    io[0].label = 'Import/Export';
+    modify.length = 0; modify.push(modGroup);
     this.app.cm.setTabs([{ name: 'Draw', groups: draw }, { name: 'Modify', groups: modify }, { name: 'Architecture', groups: arch }, { name: 'Import/Export', groups: io }], 'Draw');
   }
   setLayout(l) { this.layout = l; this.applyLayout(); this.app.cm.refresh(); if (l !== 'plan') this.update3D(); }

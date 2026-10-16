@@ -7,6 +7,7 @@ import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
@@ -40,13 +41,13 @@ export class PartPicking {
       const moved = Math.hypot(e.clientX - this._downAt[0], e.clientY - this._downAt[1]) > 4;
       this._downAt = null;
       if (moved) return;
+      if (this.dimLabelAt(e)) return; // first click of a double-click on a dimension label: keep the dimensions shown
       const p = this.pickAt(e);
       this.clickItem(p, e.ctrlKey || e.shiftKey);
     });
     el.addEventListener('dblclick', (e) => {
       if (this.sketcher) return;
-      const r = this.vp.el.getBoundingClientRect();
-      const hit = (this._dimHits || []).find((d) => { const x = e.clientX - r.left, y = e.clientY - r.top; return x >= d.x0 && x <= d.x1 && y >= d.y0 && y <= d.y1; });
+      const hit = this.dimLabelAt(e);
       if (hit) { this.editShownDim(hit); return; }
       const p = this.pickAt(e);
       if (p?.kind === 'sketch') this.editSketch(p.id);
@@ -57,6 +58,12 @@ export class PartPicking {
     });
   }
 
+  // dimension label (shown on the model) under the mouse
+  dimLabelAt(e) {
+    if (!this._dimHits?.length) return null;
+    const r = this.vp.el.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    return this._dimHits.find((d) => x >= d.x0 - 2 && x <= d.x1 + 2 && y >= d.y0 - 2 && y <= d.y1 + 2) || null;
+  }
   clickItem(p, additive) {
     const pm = this.app.pm.current;
     if (pm && p) {
@@ -252,6 +259,7 @@ export class PartPicking {
         const pre = c.type === 'diameter' ? 'Ø' : c.type === 'radius' ? 'R' : '';
         out.push({ text: pre + fmt(val, 2) + (c.type === 'angle' ? '°' : ''), value: val, pos3: to3(fr, [a[0] + (c.lp?.[0] ?? 0), a[1] + (c.lp?.[1] ?? 0)]), kind: 'cons', sk: sk.id, cons: c.id, driven: c.driving === false });
       }
+      if (opt('autoDims')) for (const d of autoDims(sk)) out.push({ ...d, pos3: to3(fr, d.at), kind: 'auto', sk: sk.id });
     }
     if (f.type !== 'sketch') {
       const P = [['depth', 'Depth', ' mm'], ['angle', 'Angle', '°'], ['radius', 'Radius', ' mm'], ['distance', 'Distance', ' mm'], ['thickness', 'Thickness', ' mm'], ['spacing', 'Spacing', ' mm'], ['count', 'Count', '']];
@@ -272,21 +280,55 @@ export class PartPicking {
       const w = ctx.measureText(d.text).width + 10;
       ctx.fillStyle = dark ? 'rgba(30,34,40,0.92)' : 'rgba(255,255,255,0.92)';
       ctx.strokeStyle = d.kind === 'feat' ? '#c06000' : '#1e5fbf'; ctx.lineWidth = 1;
-      ctx.fillRect(x - w / 2, y - 10, w, 20); ctx.strokeRect(x - w / 2, y - 10, w, 20);
+      ctx.fillRect(x - w / 2, y - 10, w, 20);
+      if (d.kind === 'auto') ctx.setLineDash([3, 2]); // size without a dimension yet (double-click = add one)
+      ctx.strokeRect(x - w / 2, y - 10, w, 20); ctx.setLineDash([]);
       ctx.fillStyle = d.driven ? '#888' : d.kind === 'feat' ? (dark ? '#ffb060' : '#a04f00') : (dark ? '#8fbfff' : '#1e4fa0');
       ctx.fillText(d.text, x - w / 2 + 5, y);
       this._dimHits.push({ ...d, x0: x - w / 2, x1: x + w / 2, y0: y - 10, y1: y + 10 });
     }
   }
-  async editShownDim(d) {
+  // double-click a dimension shown on the model: its label becomes an edit box right there (no window).
+  // Enter = apply (rebuild, or the feature preview while a feature dialog is open), Esc / click elsewhere = cancel.
+  editShownDim(d) {
     if (d.driven) { toast('Driven (reference) dimensions cannot be modified.'); return; }
-    const v = await promptText('Modify dimension', fmt(d.value, 4));
-    if (v === null || v === undefined || v === '') return;
+    this._dimInline?.cancel();
+    const inp = h('input', { type: 'text', class: 'dim-inline', spellcheck: 'false', value: fmt(d.value, 4) });
+    const w = Math.max(64, d.x1 - d.x0 + 18);
+    Object.assign(inp.style, { left: (d.x0 + d.x1) / 2 - w / 2 + 'px', top: d.y0 - 2 + 'px', width: w + 'px' });
+    for (const ev of ['pointerdown', 'dblclick', 'wheel']) inp.addEventListener(ev, (e) => e.stopPropagation());
+    let done = false;
+    const finish = (ok) => {
+      if (done) return; done = true; this._dimInline = null;
+      const val = inp.value; inp.remove(); this.vp.requestRender();
+      if (ok) this.applyShownDim(d, val);
+    };
+    this._dimInline = { inp, d, cancel: () => finish(false) };
+    inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); } });
+    inp.addEventListener('blur', () => finish(false));
+    this.vp.el.appendChild(inp);
+    inp.focus(); inp.select();
+  }
+  applyShownDim(d, v) {
+    if (v === null || v === undefined || String(v).trim() === '') return;
     const num = Number(String(v).replace(',', '.'));
     if (!isFinite(num) || (d.kind === 'feat' && d.key !== 'angle' && num <= 0)) { toast('Invalid value', 'error'); return; }
     this.beginChange();
     if (d.kind === 'feat') this.F(this.dimFeat)[d.key] = d.key === 'count' ? Math.max(2, Math.round(num)) : num;
-    else {
+    else if (d.kind === 'auto') {
+      // a size the sketch had no dimension for: typing a value adds that dimension to the sketch
+      if (num <= 0) { toast('Invalid value', 'error'); this.commit(); return; }
+      const sk = this.F(d.sk);
+      sk.next = sk.next || 1;
+      const c = { id: 'c' + sk.next++, ...d.cons, value: num, lp: d.lp };
+      sk.cons.push(c);
+      const r = solveSketch(sk);
+      const bad = (list) => (list || []).some((id) => id === c.id || String(id).startsWith(c.id + '#'));
+      if (!r || r.ok === false || bad(r.conflicting) || bad(r.redundant)) {
+        sk.cons.splice(sk.cons.indexOf(c), 1); solveSketch(sk);
+        toast('This size is already fixed by other relations in the sketch, so it cannot be set here. Edit the sketch instead.', 'warn', 5000);
+      } else this.app.setStatus(`Dimension ${fmt(num, 3)} added to ${sk.name}`);
+    } else {
       const sk = this.F(d.sk), c = sk.cons.find((x) => x.id === d.cons);
       const old = c.value; c.value = num;
       const r = solveSketch(sk);
@@ -309,4 +351,39 @@ export class PartPicking {
     else this.app.setStatus(this.selItem(s).label || '');
   }
 
+}
+
+// Sizes of a sketch that have no dimension yet (shown dashed on the model, editable like real ones; typing a value
+// adds the dimension). Lines without a length/distance dimension (a parallel line of the same length that already
+// shows a size is skipped, so a rectangle gets one width + one height), circles (Ø) and arcs (R) without one.
+export function autoDims(sk) {
+  const G = new Map(sk.geo.map((g) => [g.id, g])), P = (id) => { const p = G.get(id); return p ? [p.x, p.y] : null; };
+  const cons = (sk.cons || []).filter((c) => DIM_TYPES.has(c.type));
+  const pts = sk.geo.filter((g) => g.type === 'point');
+  const ctr = pts.length ? [pts.reduce((a, p) => a + p.x, 0) / pts.length, pts.reduce((a, p) => a + p.y, 0) / pts.length] : [0, 0];
+  const lines = sk.geo.filter((g) => g.type === 'line' && !g.construction).map((g) => {
+    const a = P(g.p1), b = P(g.p2); if (!a || !b) return null;
+    const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < 1e-6) return null;
+    return { g, a, b, L, u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] };
+  }).filter(Boolean);
+  const same = (x, y) => Math.abs(x.u[0] * y.u[1] - x.u[1] * y.u[0]) < 0.02 && Math.abs(x.L - y.L) < 1e-4 * Math.max(1, x.L);
+  const dimmed = (ln) => cons.some((c) => (c.type === 'length' && c.l === ln.g.id) || (['distance', 'hdist', 'vdist'].includes(c.type) && ((c.a === ln.g.p1 && c.b === ln.g.p2) || (c.a === ln.g.p2 && c.b === ln.g.p1))));
+  const shown = lines.filter(dimmed), size = Math.max(1, ...lines.map((l) => l.L)), off = size * 0.06;
+  const out = [];
+  for (const ln of lines) {
+    if (dimmed(ln) || shown.some((x) => same(x, ln))) continue;
+    shown.push(ln);
+    const m = [(ln.a[0] + ln.b[0]) / 2, (ln.a[1] + ln.b[1]) / 2];
+    let n = [-ln.u[1], ln.u[0]]; if ((m[0] - ctr[0]) * n[0] + (m[1] - ctr[1]) * n[1] < 0) n = [-n[0], -n[1]];
+    const lp = [n[0] * off, n[1] * off];
+    out.push({ text: fmt(ln.L, 2), value: ln.L, at: [m[0] + lp[0], m[1] + lp[1]], lp, cons: { type: 'length', l: ln.g.id } });
+  }
+  for (const g of sk.geo) {
+    if ((g.type !== 'circle' && g.type !== 'arc') || g.construction) continue;
+    if (cons.some((c) => (c.type === 'radius' || c.type === 'diameter') && c.c === g.id)) continue;
+    const c = P(g.c); if (!c || !(g.r > 0)) continue;
+    const full = g.type === 'circle', v = full ? 2 * g.r : g.r, lp = [g.r * 0.7, g.r * 0.7];
+    out.push({ text: (full ? 'Ø' : 'R') + fmt(v, 2), value: v, at: [c[0] + lp[0], c[1] + lp[1]], lp, cons: { type: full ? 'diameter' : 'radius', c: g.id } });
+  }
+  return out;
 }

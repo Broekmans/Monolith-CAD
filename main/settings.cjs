@@ -59,6 +59,14 @@ function draftStd(s) {
   try { return { ...JSON.parse(fs.readFileSync(stdFile(), 'utf8')), __path: stdFile() }; } catch { return { __path: stdFile() }; }
 }
 
+// ---------- Options "My Defaults": <CAD Program>\monolith-options.json (Tools > Options… > Save as My Defaults) ----------
+const optFile = () => process.env.MONOLITH_OPTIONS || path.join(path.dirname(logDir()), 'monolith-options.json');
+function optionsCfg(o) {
+  if (o && typeof o === 'object') { try { fs.writeFileSync(optFile(), JSON.stringify(o, null, 2)); } catch (e) { return { __error: e.message }; } return { ...o, __path: optFile() }; }
+  if (isTest && !process.env.MONOLITH_OPTIONS) return { __path: optFile() };
+  try { return { ...JSON.parse(fs.readFileSync(optFile(), 'utf8')), __path: optFile() }; } catch { return { __path: optFile() }; }
+}
+
 // test dumps (room detection input + result) in Logs\rooms, last 20 kept; only when the action log is on
 function writeDump(name, text) {
   if (!getLogCfg().enabled || (isTest && !process.env.MONOLITH_LOGTEST && !process.env.MONOLITH_DUMPTEST)) return null;
@@ -71,4 +79,4 @@ function writeDump(name, text) {
   } catch { return null; }
 }
 
-module.exports = { writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent };
+module.exports = { optionsCfg, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent };

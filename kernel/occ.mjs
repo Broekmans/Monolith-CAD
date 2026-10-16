@@ -519,7 +519,7 @@ export function regenerate(features, opts = {}) {
       status.push({ id: f.id, state: 'error', error: String(err.message || err) });
     }
   }
-  return { body, status, stages };
+  return { body, status, stages, tools };
 }
 
 // ---------- plan (architecture) model ----------

@@ -10,7 +10,7 @@ import { api } from '../api.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
-import { dxfToSketch, sketchToDxf } from '../io/dxf.js';
+import { dxfToSketch, sketchToDxf, skippedTypes, skippedText } from '../io/dxf.js';
 import { CloudManager, cloudPanel } from '../pointcloud.js';
 import { STD_PLANES, FEATURE_META, metaKey, MATERIALS, newPartDoc, COLORS, makePickData, edgeRef, frameOf, norm, to3, segDist, circle3, edgeAxis } from './part.js';
 
@@ -102,7 +102,8 @@ export class PartExchange {
     const apply = (sk) => {
       const n = dxfToSketch(dxfText, sk);
       sk.resolve(true);
-      toast(`Imported ${n} entities from ${name} into ${sk.sk.name}`, 'ok');
+      const skip = skippedText(skippedTypes(dxfText));
+      toast(`Imported ${n} entities from ${name} into ${sk.sk.name}${skip ? ' — ' + skip : ''}`, skip ? 'info' : 'ok', skip ? 9000 : 3500);
       this.zoomFit();
     };
     if (this.sketcher) { this.sketcher.pushUndo(); apply(this.sketcher); return; }

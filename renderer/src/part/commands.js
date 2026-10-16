@@ -59,6 +59,10 @@ export class PartCommands {
         C('expStep', 'Export STEP', 'step', () => this.exportCAD('step'), { enabled: notSketch }),
         C('expIges', 'Export IGES', 'export', () => this.exportCAD('iges'), { enabled: notSketch })],
     ];
+    // ribbon group names (shown under each group)
+    ['Sketch', 'Create', 'Modify'].forEach((l, i) => { sketchTab[i].label = l; });
+    ['Boss/Base', 'Cut', 'Modify', 'Pattern'].forEach((l, i) => { features[i].label = l; });
+    ['Measure', 'Import/Export'].forEach((l, i) => { evaluate[i].label = l; });
     this.tabs = [{ name: 'Sketch', groups: sketchTab }, { name: 'Features', groups: features }, { name: 'Evaluate', groups: evaluate }];
     this.app.cm.setTabs(this.tabs, 'Sketch');
   }
@@ -150,6 +154,7 @@ export class PartCommands {
     if (p?.kind === 'sketch') items.push({ label: 'Edit Sketch', icon: 'sketch', run: () => this.editSketch(p.id) }, { label: 'Extruded Boss/Base', icon: 'extrude', run: () => { this.sel = [p]; this.cmdExtrude('boss'); } }, { label: 'Extruded Cut', icon: 'cutExtrude', run: () => { this.sel = [p]; this.cmdExtrude('cut'); } });
     if (p?.kind === 'plane') items.push({ label: 'Sketch', icon: 'sketch', run: () => this.startSketch(p.plane, p.name) });
     if (items.length) items.push('-');
+    else items.push(...this.viewSet.menuItems()); // empty space: Maximize/Restore + Close View
     items.push({ label: 'Zoom to Fit', icon: 'zoomFit', key: 'F', run: () => this.zoomFit() }, { label: 'Isometric', icon: 'views', key: 'Ctrl+7', run: () => this.vp.setView('iso') });
     contextMenu(e.clientX, e.clientY, items);
   }

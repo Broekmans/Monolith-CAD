@@ -179,7 +179,9 @@ export class AssemblyDoc {
     const app = this.app;
     this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
     this.viewport = this.vp = this.viewSet.proxy;
+    this.viewSet.onLayout = () => app.syncViewportMenu?.(); // close / maximize from the pane buttons
     this.vp.onContextMenu = (e) => this.viewContextMenu(e);
+    this.vp.onMiddleClick = () => this.zoomFit(); // double middle click = Zoom to Fit
     this.scene = this.vp.scene;
     this.compGroup = new THREE.Group(); this.scene.add(this.compGroup);
     this.syncGrid();
@@ -210,6 +212,8 @@ export class AssemblyDoc {
       [C('expStep', 'Export STEP', 'step', () => this.exportCAD('step'), { enabled: idle }),
         C('expIges', 'Export IGES', 'export', () => this.exportCAD('iges'), { enabled: idle })],
     ];
+    ['Component', 'Position', 'View', 'Update'].forEach((l, i) => { groups[i].label = l; });
+    ['Measure', 'Import/Export'].forEach((l, i) => { evaluate[i].label = l; });
     this.app.cm.setTabs([{ name: 'Assembly', groups }, { name: 'Evaluate', groups: evaluate }], 'Assembly');
   }
 

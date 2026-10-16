@@ -3,14 +3,20 @@
 // - the feature's sketch stays visible with a light profile fill, its dimensions are shown on the model
 //   (double-click one to change it; the preview follows);
 // - the main value (Depth / Angle / Radius / Distance / Thickness / Spacing) sits in an edit box on the model,
-//   for Extrude with a drag arrow along the extrude direction. Enter in the box = OK, Esc = Cancel.
+//   for Extrude with a drag arrow along the extrude direction. Enter applies a changed value (preview updates),
+//   Enter again with the same value = OK, Esc = Cancel;
+// - Extrude / Revolve preview = ghost of the added (yellow) / removed (red) volume (part.js showGhost);
+// - looking straight at the sketch when the dialog opens -> the view turns to Isometric (featTurnIso).
 import * as THREE from 'three';
 import { h, fmt } from '../ui.js';
+import { opt } from '../app/options.js';
 import { sketchCurves, findRegions } from '../../../shared/profile.mjs';
 import { frameOf, to3 } from './part.js';
 
 // main value per feature type: [PM key, label, unit]
 export const MAIN = { extrude: ['depth', 'Depth', 'mm'], revolve: ['angle', 'Angle', '°'], fillet: ['radius', 'Radius', 'mm'], chamfer: ['distance', 'Distance', 'mm'], shell: ['thickness', 'Thickness', 'mm'], linearPattern: ['spacing', 'Spacing', 'mm'], circularPattern: ['angle', 'Total angle', '°'] };
+// mouse wheel step for the value box (mm, or ° for angles)
+export const WHEEL_STEP = 1; // factory value; Tools > Options > Feature Values
 const evalNum = (s) => { const v = Number(String(s).replace(',', '.').trim()); return isFinite(v) ? v : null; };
 
 export class PartFeatureUI {
@@ -22,14 +28,30 @@ export class PartFeatureUI {
       const inp = h('input', { type: 'text', spellcheck: 'false', value: fmt(+values[m[0]], 4) });
       const grip = h('div', { class: 'feat-grip', title: 'Drag to change the ' + m[1].toLowerCase() });
       const box = h('div', { class: 'feat-val', title: 'Enter = OK · Esc = Cancel · Tab = apply' }, h('label', {}, m[1]), inp, h('span', { class: 'unit' }, m[2]));
-      for (const ev of ['pointerdown', 'dblclick', 'wheel']) box.addEventListener(ev, (e) => e.stopPropagation());
+      for (const ev of ['pointerdown', 'dblclick']) box.addEventListener(ev, (e) => e.stopPropagation());
+      // mouse wheel over the box: ±WHEEL_STEP (1) per notch (wheel up = more) while creating a new feature; when editing an
+      // existing feature the wheel keeps zooming the view
+      const isNew = !this.pmState?.edit || !opt('wheelNewOnly');
+      box.addEventListener('wheel', (e) => {
+        if (!isNew) return; // passes on to the viewport (zoom)
+        e.preventDefault(); e.stopPropagation();
+        const cur = evalNum(inp.value) ?? +this.featUI.values[m[0]] ?? 0;
+        const st = opt('wheelStep') || WHEEL_STEP, next = +(cur + (e.deltaY < 0 ? st : -st)).toFixed(6);
+        if (next <= 0) return;
+        inp.value = fmt(next, 4); inp._typed = false;
+        this.featUI.pinned = true; // the box stays under the mouse while wheeling (it would follow the arrow tip)
+        this.featApply(String(next));
+      }, { passive: false });
       inp.addEventListener('keydown', (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') { e.preventDefault(); if (this.featApply(inp.value) !== false) this.app.pm.ok(); }
+        // Enter: a changed value is applied (preview updates); Enter again with the same value = OK
+        if (e.key === 'Enter') { e.preventDefault(); const typed = inp._typed; inp._typed = false; const r = this.featApply(inp.value); if ((r === 'same' && !typed) || (r && !opt('enterTwice'))) this.app.pm.ok(); else if (r) inp.select(); }
         else if (e.key === 'Escape') { e.preventDefault(); this.app.pm.cancel(); }
       });
       inp.addEventListener('change', () => this.featApply(inp.value));
+      inp.addEventListener('input', () => { inp._typed = true; });
       grip.addEventListener('pointerdown', (e) => this.featGripDown(e));
+      box.addEventListener('pointerleave', () => { if (this.featUI?.pinned) { this.featUI.pinned = false; this.vp.requestRender(); } });
       this.vp.el.append(box, grip);
       Object.assign(ui, { box, inp, grip });
     }
@@ -48,9 +70,24 @@ export class PartFeatureUI {
     const ui = this.featUI; if (!ui) return;
     ui.values = v;
     const sid = v.sketchSel?.[0]?.id || null;
-    if (sid !== ui.sketch) { ui.sketch = sid; this.dimFeat = sid; this.updateSketchDisplay(); }
+    if (sid !== ui.sketch) { ui.sketch = sid; this.dimFeat = sid; this.updateSketchDisplay(); if (sid && !ui.turned) { ui.turned = true; this.featTurnIso(); } }
     if (ui.inp && document.activeElement !== ui.inp && !ui.drag) ui.inp.value = fmt(+v[ui.key], 4);
     this.vp.requestRender();
+  }
+  // Looking straight at the feature's sketch (e.g. right after Exit Sketch)? Turn to an isometric view that looks at
+  // the sketch's front side, then zoom to fit. Interface menu "Turn to Isometric for Features" switches it off.
+  featTurnIso() {
+    if (this.app.isoForFeatures?.() === false) return;
+    const pr = this.featProfile(); if (!pr) return;
+    const vp = this.vp, n = pr.fr.n, vd = vp.viewDir();
+    if (Math.abs(vd.x * n[0] + vd.y * n[1] + vd.z * n[2]) < Math.cos(opt('isoTol') * Math.PI / 180)) return; // not looking straight at it (> isoTol, 10°)
+    const d = n.map((c) => (Math.abs(c) > 0.3 ? -Math.sign(c) : -1)), L = Math.hypot(...d), dn = d.map((x) => x / L);
+    const up = [-dn[1] * dn[0], 1 - dn[1] * dn[1], -dn[1] * dn[2]], U = Math.hypot(...up) || 1;
+    vp.orient(dn, up.map((x) => x / U), true);
+    let k = 0;
+    const wait = () => { if (vp.anim && k++ < 90) requestAnimationFrame(wait); else this.zoomFit(); };
+    requestAnimationFrame(wait);
+    this.app.setStatus('View turned to Isometric (Interface menu: Turn to Isometric for Features)');
   }
   // value typed / dragged → the PM field (its change handler validates, stores and previews)
   featApply(text) {
@@ -60,7 +97,7 @@ export class PartFeatureUI {
     if (n === null || n <= 0 || !f) { ui.inp?.classList.add('bad'); return false; }
     ui.inp?.classList.remove('bad');
     const val = ui.key === 'count' ? Math.max(2, Math.round(n)) : n;
-    if (+pm.values[ui.key] === val) return true;
+    if (+pm.values[ui.key] === val) return 'same';
     f.value = String(val); f.dispatchEvent(new Event('change'));
     return true;
   }
@@ -118,7 +155,7 @@ export class PartFeatureUI {
       Object.assign(ui.grip.style, { left: s[0] + ux * 5 + 'px', top: s[1] + uy * 5 + 'px', display: '' });
       ui.dirScr = [ux, uy];
     } else ui.grip.style.display = 'none';
-    Object.assign(ui.box.style, { left: s[0] + 22 + 'px', top: s[1] + 'px', display: '' });
+    if (!ui.pinned) Object.assign(ui.box.style, { left: s[0] + 22 + 'px', top: s[1] + 'px', display: '' });
   }
   // drag the arrow: value follows the mouse along the extrude direction on screen
   featGripDown(e) {
@@ -153,7 +190,7 @@ export class PartFeatureUI {
       g.dispose();
     }
     const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: 0xffc478, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+    const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: 0xffc478, transparent: true, opacity: opt('profileFill') / 100, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
     mesh.renderOrder = 4; mesh.raycast = () => {};
     return mesh;
   }
