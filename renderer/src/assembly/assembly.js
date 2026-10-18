@@ -10,6 +10,7 @@ import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
+import { optHex } from '../app/options.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
 import * as M from '../../../shared/mates.mjs';
 import { FASTENERS, fastenerDef, fastenerPart, fastenerName, hasLength, sizeDia } from '../../../shared/fasteners.mjs';
@@ -24,7 +25,7 @@ export function newAssemblyDoc(name = 'Assembly1') {
   return { kind: 'assembly', version: 1, name, units: 'mm', components: [], mates: [], next: 1 };
 }
 
-export const COLORS = { edge: 0x111111, hover: 0xff9a1a, sel: 0x1e90ff };
+export const COLORS = { get edge() { return optHex('edgeColor'); }, get hover() { return optHex('hoverColor'); }, get sel() { return optHex('selColor'); } }; // Options > Colours
 export const PALETTE = [0xcfd6df, 0xd8cfbf, 0xc4d6c8, 0xd6c6d2, 0xc6d0e0, 0xe0d6c0, 0xc8dcdc];
 export const IDENT = [0, 0, 0, 1];
 
@@ -233,7 +234,7 @@ export class AssemblyDoc {
         { label: 'Wireframe', icon: 'wire', run: () => this.setDisplay('wire') },
       ]);
     };
-    bar.append(B('zoomFit', 'Zoom to Fit (F)', () => this.zoomFit()), B('views', 'View Orientation', viewsMenu), B('shaded', 'Display Style', dispMenu), B('section', 'Section View', () => toggleSection(this)));
+    bar.append(B('zoomFit', 'Zoom to Fit (F)', () => this.zoomFit()), B('views', 'View Orientation', viewsMenu), B('shaded', 'Display Style', dispMenu), B('section', 'Section View', () => toggleSection(this)), B('grid', 'Show / Hide Grid', () => this.toggleGrid()));
   }
   get gridOn() { return this.doc.grid ?? this.app.gridDefault?.() ?? true; }
   syncGrid() { const g = this.vp.grid; g.on = this.gridOn; g.frame = null; this.vp.requestRender(); }

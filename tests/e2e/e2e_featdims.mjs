@@ -78,4 +78,12 @@ await win.keyboard.press('Escape');
 await win.locator('.tr-row:has-text("Cut-Extrude")').hover(); await W(400);
 console.log('hover faces', await win.evaluate(() => lithApp.doc.hlGroup.children.length));
 await shot('fd2');
+// 0.1.80: four views — double-click a label in the big (first) view, not only in the last-drawn view
+await win.evaluate(() => lithApp.onMenu('layout', 'four')); await win.waitForTimeout(800);
+await win.evaluate(() => { const d = lithApp.doc; d.viewSet.setActive(d.viewSet.panes[0]); d.showFeatureDims(d.doc.features.find((f) => f.type === 'extrude')?.id); }); await win.waitForTimeout(600);
+const perPane = await win.evaluate(() => lithApp.doc.viewSet.panes.map((p) => lithApp.doc.dimHitsOf(p).length));
+const hp = await win.evaluate(() => { const d = lithApp.doc, p = d.viewSet.panes[0], x = d.dimHitsOf(p)[0], r = p.el.getBoundingClientRect(); return x && [r.left + (x.x0 + x.x1) / 2, r.top + (x.y0 + x.y1) / 2, x.text]; });
+if (hp) { await win.mouse.dblclick(hp[0], hp[1]); await win.waitForTimeout(400); }
+console.log('0.1.80 four views: labels per pane', JSON.stringify(perPane), '| dblclick in pane 0 on', hp?.[2], '→ inline editor:', await win.evaluate(() => !!document.querySelector('.dim-inline')));
+await win.keyboard.press('Escape');
 await app.close();

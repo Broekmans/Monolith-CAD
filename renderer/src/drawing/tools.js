@@ -5,6 +5,7 @@
 // this.preview (extra primitives) and this.hover (snap marker).
 import { h, fmt, toast, promptText } from '../ui.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { STD, projected, isOrtho, viewRect, viewXf, viewScale, scaleText } from './sheet.js';
 import { fitData, fitAt, roomAt, openingAt, near, lineDist, mergeData } from './fit.js';
 import { annValue, centroid, DIM } from './dims.js';
@@ -27,7 +28,7 @@ export class DrawingTools {
   pxMm() { return Math.abs(this.affine().ex[0]) || 1; }
   // nearest geometry under p (sheet mm): vertex / circle centre (8 px) before edges (6 px)
   snapAt(p, only = null) {
-    const k = this.pxMm(), tv = 8 / k, te = 6 / k;
+    const k = this.pxMm(), tv = opt('snapVertexPx') / k, te = opt('snapEdgePx') / k;
     let best = null;
     for (const v of this.doc.views.filter((q) => q.sheet === this.sheetId && q.geom)) {
       if (only && v.id !== only) continue;

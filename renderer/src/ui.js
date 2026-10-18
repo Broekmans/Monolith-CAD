@@ -283,7 +283,7 @@ export function closeMenu() {
   menuEl?.remove(); menuEl = null;
 }
 
-export function toast(text, kind = 'info', ms = 3500) {
+export function toast(text, kind = 'info', ms = opt('toastSec') * 1000) {
   let host = document.getElementById('toasts');
   if (!host) { host = h('div', { id: 'toasts' }); document.body.appendChild(host); }
   try { window.__lithLog?.('MESSAGE', kind, text); } catch {}
@@ -323,6 +323,31 @@ export function modifyBox(x, y, value, { title = 'Modify', unit = 'mm', onApply,
   return { close: cancel };
 }
 
+// Move a dialog by dragging its title strip (0.1.87); the offset is remembered per dialog title and kept on screen.
+export function dragByTitle(dlg, key) {
+  const head = dlg.querySelector('.dlg-title'); if (!head) return;
+  head.classList.add('movable');
+  let off = [0, 0];
+  try { const v = JSON.parse(localStorage.getItem(key) || 'null'); if (Array.isArray(v)) off = v; } catch { /* none */ }
+  const apply = () => {
+    dlg.style.translate = `${off[0]}px ${off[1]}px`;
+    const r = head.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight; // title stays reachable
+    let dx = 0, dy = 0;
+    if (r.right < 80) dx = 80 - r.right; if (r.left > W - 80) dx = W - 80 - r.left;
+    if (r.top < 0) dy = -r.top; if (r.bottom > H) dy = H - r.bottom;
+    if (dx || dy) { off = [off[0] + dx, off[1] + dy]; dlg.style.translate = `${off[0]}px ${off[1]}px`; }
+  };
+  apply();
+  head.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    e.preventDefault();
+    const x0 = e.clientX, y0 = e.clientY, o0 = off.slice();
+    const mv = (ev) => { off = [o0[0] + ev.clientX - x0, o0[1] + ev.clientY - y0]; apply(); };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); try { localStorage.setItem(key, JSON.stringify(off)); } catch { /* no storage */ } };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  });
+}
+
 export function dialog({ title, body, buttons = [{ label: 'OK', primary: true }] }) {
   return new Promise((resolve) => {
     const back = h('div', { class: 'dlg-back' });
@@ -332,6 +357,7 @@ export function dialog({ title, body, buttons = [{ label: 'OK', primary: true }]
     back.appendChild(dlg);
     back.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(null); e.stopPropagation(); });
     document.body.appendChild(back);
+    dragByTitle(dlg, 'monolith.dlgPos.' + title);
     dlg.querySelector('button.primary')?.focus();
   });
 }

@@ -2,6 +2,10 @@
 // a 2D overlay canvas for annotations, and a corner view triad.
 import { opt } from './app/options.js';
 import { ViewCube } from './viewcube.js';
+import { drawSecHandles } from './section/handles.js';
+
+// true while a mouse button that navigates is held (middle/right, Alt + left): no hover highlights then
+export const navHeld = (e) => !opt('navHighlight') && (!!(e.buttons & 6) || (!!(e.buttons & 1) && e.altKey));
 import * as THREE from 'three';
 import { Grid } from './grid.js';
 
@@ -107,6 +111,7 @@ export class Viewport {
     this.overlay.style.width = w + 'px'; this.overlay.style.height = h + 'px';
     if (!this.out) { this.renderer.domElement.style.width = w + 'px'; this.renderer.domElement.style.height = h + 'px'; }
     this._updateCamera();
+    this.viewCube?.layout(); // cube size follows the view (Options > Viewports)
     this.requestRender();
   }
 
@@ -133,35 +138,6 @@ export class Viewport {
   }
 
   // section view: dotted X and Y lines across the cut plane (always visible, drawn on top)
-  _renderSecAxes(sec) {
-    const box = new THREE.Box3();
-    this.scene.traverse((o) => { if (o.isMesh && !o.userData.isCap && o.visible && o.geometry && !o.material?.transparent) { if (!o.geometry.boundingBox) o.geometry.computeBoundingBox(); box.union(o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld)); } });
-    if (box.isEmpty()) return;
-    const n = new THREE.Vector3(...sec.n).normalize();
-    const ctr = box.getCenter(new THREE.Vector3());
-    const p0 = ctr.clone().addScaledVector(n, -(n.dot(ctr) + sec.c));
-    const ref = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    const u = ref.addScaledVector(n, -n.dot(ref)).normalize();
-    const v = new THREE.Vector3().crossVectors(n, u);
-    const h = Math.max(box.getSize(new THREE.Vector3()).length() * 0.6, 1);
-    const pts = [p0.clone().addScaledVector(u, -h), p0.clone().addScaledVector(u, h), p0.clone().addScaledVector(v, -h), p0.clone().addScaledVector(v, h)];
-    if (!this._secAx) {
-      const g = new THREE.BufferGeometry().setFromPoints(pts);
-      const m = new THREE.LineDashedMaterial({ color: 0x333333, dashSize: 1, gapSize: 1, depthTest: false, depthWrite: false, transparent: true });
-      this._secAx = new THREE.LineSegments(g, m);
-      this._secAx.renderOrder = 999;
-      this._secAxScene = new THREE.Scene();
-      this._secAxScene.add(this._secAx);
-    }
-    const ln = this._secAx;
-    ln.geometry.setFromPoints(pts);
-    ln.computeLineDistances();
-    ln.geometry.attributes.position.needsUpdate = true;
-    ln.material.color.set(document.body.classList.contains('dark') ? 0xdddddd : 0x333333);
-    ln.material.dashSize = h / 40; ln.material.gapSize = h / 60;
-    this.renderer.render(this._secAxScene, this.camera);
-  }
-
   _render() {
     this._updateCamera();
     const r = this.renderer;
@@ -183,7 +159,6 @@ export class Viewport {
     if (this.renderScene) this.renderScene(r); else r.render(this.scene, this.camera);
     r.clippingPlanes = [];
     if (this.mode === '3d') this.grid.render(r, this);
-    if (sec) this._renderSecAxes(sec);
     if (this.mode === '3d') {
       const s = 90;
       r.setViewport(8, 8, s, s);
@@ -219,9 +194,22 @@ export class Viewport {
         ctx.fillText(t, 8 + 45 + v.x / 1.6 * 45, this.height - 8 - 45 - v.y / 1.6 * 45);
       }
     }
+    if (this.section) { try { drawSecHandles(this, ctx); } catch (e) { console.error(e); } } else this._secHit = null;
     for (const d of this.overlayDrawers) {
       ctx.save();
       try { d(ctx, this); } catch (e) { console.error(e); }
+      ctx.restore();
+    }
+    // the view cube (drawn in the GL canvas below) stays on top: nothing of the overlay (sketch, dimensions) over it
+    const vc = this.viewCube, el = vc?.el;
+    if (vc && el?.offsetWidth) {
+      // only the cube's own outline (convex hull of its 8 projected corners), not a circle around it
+      const S = vc.S, cx = el.offsetLeft + S / 2, cy = el.offsetTop + S / 2, qi = this.camera.quaternion.clone().invert(), k = S / 2 / 0.9;
+      const pts = [];
+      for (const x of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const z of [-0.5, 0.5]) { const v = new THREE.Vector3(x, y, z).applyQuaternion(qi); pts.push([cx + v.x * k, cy - v.y * k]); }
+      const hull = hull2(pts);
+      ctx.save(); ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath(); hull.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath(); ctx.fill();
       ctx.restore();
     }
   }
@@ -273,9 +261,10 @@ export class Viewport {
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
       drag.x = e.clientX; drag.y = e.clientY;
-      if (drag.kind === 'rotate') this.rotateBy(dx * 0.008, dy * 0.008);
+      const rs = 0.008 * opt('rotateSpeed') / 100;
+      if (drag.kind === 'rotate') this.rotateBy(dx * rs, dy * rs);
       else if (drag.kind === 'pan') this.panBy(dx, dy);
-      else this.zoomAt(this.width / 2, this.height / 2, Math.exp(dy * 0.01));
+      else this.zoomAt(this.width / 2, this.height / 2, Math.exp(dy * 0.01 * opt('dragZoomSpeed') / 100));
     });
     const end = (e) => {
       if (!drag) return;
@@ -347,8 +336,9 @@ export class Viewport {
     y.crossVectors(z, x);
     m.makeBasis(x, y, z);
     const q = new THREE.Quaternion().setFromRotationMatrix(m);
-    if (!animate) { this._applyQuat(q); return; }
-    this.anim = { from: this.camera.quaternion.clone(), to: q, t0: performance.now(), dur: 280 };
+    const dur = opt('viewAnimMs');
+    if (!animate || !(dur > 0)) { this.anim = null; this._applyQuat(q); return; }
+    this.anim = { from: this.camera.quaternion.clone(), to: q, t0: performance.now(), dur };
   }
   _applyQuat(q) {
     const cam = this.camera;
@@ -444,4 +434,14 @@ export class Viewport {
     if (!this.out) this.renderer.dispose();
     this.el.remove();
   }
+}
+
+// convex hull (monotone chain) of 2D points
+function hull2(P) {
+  const p = P.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+  for (const q of p.slice().reverse()) { while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
 }

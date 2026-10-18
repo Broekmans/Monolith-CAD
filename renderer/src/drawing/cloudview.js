@@ -6,15 +6,17 @@
 // density and depth range need a recompute (done automatically).
 import { h, fmt, toast } from '../ui.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { PC_EXTS } from '../pointcloud.js';
 import { scaleVal } from './sheet.js';
 
 export const CLOUD_EXTS = ['lithpcd', ...PC_EXTS];
 export const isCloudSrc = (p) => new RegExp(`\\.(${CLOUD_EXTS.join('|')})$`, 'i').test(p || '');
-export const DENSITY = { fine: 0.15, normal: 0.25, light: 0.4 }; // paper mm per dot cell
-export const PIXEL = { fine: 0.07, normal: 0.1, light: 0.15 }; // paper mm per density pixel (≈ 360 / 250 / 170 dpi)
-export const PRESETS = { plan: { from: 1.0, to: 1.3 }, slab: { from: 0.2, to: 1.7 } };
-export const cloudDefaults = () => ({ color: 'density', dark: 1, thick: 0.3, size: 0.25, density: 'normal', clip: { on: false, ref: 'back', from: 0, to: 1 } });
+// Normal values from Options > Drawings; Fine / Light keep the same ratio to Normal (0.6 / 1.6 and 0.7 / 1.5)
+export const DENSITY = { get fine() { return opt('dotNormal') * 0.6; }, get normal() { return opt('dotNormal'); }, get light() { return opt('dotNormal') * 1.6; } }; // paper mm per dot cell
+export const PIXEL = { get fine() { return opt('pixNormal') * 0.7; }, get normal() { return opt('pixNormal'); }, get light() { return opt('pixNormal') * 1.5; } }; // paper mm per density pixel
+export const PRESETS = { get plan() { return { from: opt('planFrom'), to: opt('planTo') }; }, get slab() { return { from: opt('slabFrom'), to: opt('slabTo') }; } };
+export const cloudDefaults = () => ({ color: 'density', dark: 1, thick: opt('cloudThick'), size: 0.25, density: 'normal', clip: { on: false, ref: 'back', from: 0, to: 1 } });
 const sepOf = (p) => (p.includes('\\') ? '\\' : '/');
 const dirOf = (p) => p.replace(/[\\/][^\\/]*$/, '');
 const baseOf = (p) => p.split(/[\\/]/).pop();

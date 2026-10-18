@@ -1,10 +1,50 @@
 # Publishes the current MonoLith version to GitHub:
 #  - pushes the source (from MonoLith-source.zip) to the repo and tags it v<version>
 #  - creates a GitHub Release with the newest changelog entry and the program zip to download
+#  - then starts the Linux build on GitHub (workflow linux-release.yml), waits for it and reports the
+#    separate release v<version>-linux; the run summary is saved in Logs\linux-build-<version>.log
 # Run via PUBLISH-GITHUB.bat in the CAD Program folder. Needs: git + GitHub CLI (gh), logged in.
+# BUILD-LINUX.bat runs only the Linux part (-LinuxOnly) for the version at the top of the changelog (retry).
+param([switch]$LinuxOnly)
 $ErrorActionPreference = 'Continue'   # native tools write to stderr; every step is checked explicitly
 Set-Location $PSScriptRoot
 function Fail($m) { Write-Host "ERROR: $m" -ForegroundColor Red; exit 1 }
+
+# --- Linux build on GitHub (secondary platform): start, wait, report; summary in Logs\linux-build-<ver>.log ---
+function Start-LinuxBuild($repo, $tag, $ver) {
+  $logDir = Join-Path $PSScriptRoot 'Logs'; New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+  $log = Join-Path $logDir "linux-build-$ver.log"
+  function L($m) { Write-Host $m; Add-Content -Path $log -Value ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $m) }
+  L "=== Linux build for $tag ($repo) ==="
+  # GitHub Actions must be on for the repository (turned on here if it is off; needs owner rights)
+  gh api -X PUT "repos/$repo/actions/permissions" -F enabled=true -f allowed_actions=all *> $null
+  gh workflow enable linux-release.yml --repo $repo *> $null
+  $before = (gh run list --repo $repo --workflow linux-release.yml --limit 1 --json databaseId --jq '.[0].databaseId' 2>$null)
+  gh workflow run linux-release.yml --repo $repo --ref main -f tag=$tag 2>&1 | ForEach-Object { L "  $_" }
+  if ($LASTEXITCODE -ne 0) { L 'ERROR: could not start the Linux build (is .github/workflows/linux-release.yml on GitHub?)'; return $false }
+  $id = $null
+  for ($i = 0; $i -lt 30 -and -not $id; $i++) {
+    Start-Sleep -Seconds 4
+    $r = (gh run list --repo $repo --workflow linux-release.yml --limit 1 --json databaseId --jq '.[0].databaseId' 2>$null)
+    if ($r -and "$r" -ne "$before") { $id = "$r".Trim() }
+  }
+  if (-not $id) { L 'ERROR: the Linux build did not show up on GitHub'; return $false }
+  L "Linux build started: https://github.com/$repo/actions/runs/$id (about 15-20 minutes; you may close this window, it keeps running on GitHub)"
+  gh run watch $id --repo $repo --interval 30 --exit-status | Out-Host
+  $ok = ($LASTEXITCODE -eq 0)
+  $sum = gh run view $id --repo $repo 2>&1 | Out-String; Add-Content -Path $log -Value $sum
+  if (-not $ok) {
+    L 'ERROR: the Linux build failed. Failed step log below (Claude can read this file).'
+    gh run view $id --repo $repo --log-failed 2>&1 | Select-Object -Last 200 | Add-Content -Path $log
+    Write-Host "Saved: $log" -ForegroundColor Yellow
+    return $false
+  }
+  $assets = gh release view "$tag-linux" --repo $repo --json assets --jq '.assets[].name' 2>$null
+  L "Linux release ready: https://github.com/$repo/releases/tag/$tag-linux"
+  $assets | ForEach-Object { L "  $_" }
+  Write-Host 'Linux users can download it now.' -ForegroundColor Green
+  return $true
+}
 
 # --- tools: installed automatically when missing ---
 function Refresh-Path { $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') }
@@ -50,7 +90,8 @@ $start = ($lines | Select-String -Pattern '^\d+\.\d+\.\d+' | Select-Object -Firs
 if (-not $start) { Fail 'No version line found in the changelog' }
 $ver = ($lines[$start - 1] -split ' ')[0]
 # notes = every changelog entry since the last GitHub release (so small in-between versions are included)
-$last = (gh release list --repo $repo --limit 1 --json tagName --jq '.[0].tagName' 2>$null)
+# (Linux releases v<ver>-linux are skipped; filtered here because Windows PowerShell 5 drops quotes in native args)
+$last = @(gh release list --repo $repo --limit 20 --json tagName --jq '.[].tagName' 2>$null) | Where-Object { $_ -and $_ -notlike '*-linux' } | Select-Object -First 1
 if ($last) { $last = "$last".Trim().TrimStart('v') }
 $notes = @()
 for ($i = $start - 1; $i -lt $lines.Count; $i++) {
@@ -59,6 +100,11 @@ for ($i = $start - 1; $i -lt $lines.Count; $i++) {
 }
 $notesText = '## Changes' + "`n`n" + (($notes -join "`n").Trim()) + "`n`n**Download:** MonoLith-$ver-win.zip below - unzip anywhere and run ``MonoLith\MonoLith.exe``."
 $tag = "v$ver"
+if ($LinuxOnly) {
+  gh release view $tag --repo $repo *> $null
+  if ($LASTEXITCODE -ne 0) { Fail "Release $tag is not on GitHub yet - run PUBLISH-GITHUB.bat first." }
+  if (Start-LinuxBuild $repo $tag $ver) { exit 0 } else { exit 1 }
+}
 Write-Host "=== Publishing MonoLith $ver to $repo ===" -ForegroundColor Cyan
 
 gh release view $tag --repo $repo *> $null
@@ -112,5 +158,5 @@ if ($LASTEXITCODE -ne 0) { Fail 'Creating the release failed' }
 Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
 Write-Host "Done: https://github.com/$repo/releases/tag/$tag" -ForegroundColor Green
-Write-Host "Linux: GitHub now builds 'MonoLith $ver for Linux' by itself (release $tag-linux, about 15-20 minutes)."
-Write-Host "       Follow it at https://github.com/$repo/actions" 
+Write-Host ''
+[void](Start-LinuxBuild $repo $tag $ver)

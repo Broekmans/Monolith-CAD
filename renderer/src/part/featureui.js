@@ -62,7 +62,7 @@ export class PartFeatureUI {
     const ui = this.featUI; if (!ui) return;
     ui.box?.remove(); ui.grip?.remove();
     this.featUI = null;
-    this.dimFeat = null; this._dimHits = [];
+    this.dimFeat = null; this._dimHitsBy = new WeakMap();
     this.updateSketchDisplay();
   }
   // PM values changed: sketch to show, value in the box

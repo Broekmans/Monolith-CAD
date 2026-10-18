@@ -76,6 +76,26 @@ function optionsCfg(o) {
   try { return { ...JSON.parse(fs.readFileSync(optFile(), 'utf8')), __path: optFile() }; } catch { return { __path: optFile() }; }
 }
 
+// your Options changes (OK in Tools > Options…): <data folder>\Logs\option-changes.json
+// { key: { label, factory, value, changes, first, last, history: [[date, from, to]] (last 10) } } — read by Claude to tune factory defaults.
+// Env MONOLITH_OPTTRACK = other file (tests); in tests without it nothing is written.
+const trackFile = () => process.env.MONOLITH_OPTTRACK || path.join(logDir(), 'option-changes.json');
+function trackOptions(list) {
+  if (!Array.isArray(list) || !list.length) return null;
+  if (isTest && !process.env.MONOLITH_OPTTRACK) return null;
+  let o = {}; try { o = JSON.parse(fs.readFileSync(trackFile(), 'utf8')) || {}; } catch {}
+  const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  for (const c of list) {
+    if (!c?.key) continue;
+    const e = o[c.key] || { label: c.label, factory: c.factory, changes: 0, first: now, history: [] };
+    e.label = c.label || e.label; e.factory = c.factory; e.value = c.to; e.changes++; e.last = now;
+    e.history = [...(e.history || []), [now, c.from, c.to]].slice(-10);
+    o[c.key] = e;
+  }
+  try { fs.writeFileSync(trackFile(), JSON.stringify(o, null, 2)); } catch (e) { return { __error: e.message }; }
+  return { __path: trackFile() };
+}
+
 // test dumps (room detection input + result) in Logs\rooms, last 20 kept; only when the action log is on
 function writeDump(name, text) {
   if (!getLogCfg().enabled || (isTest && !process.env.MONOLITH_LOGTEST && !process.env.MONOLITH_DUMPTEST)) return null;
@@ -88,4 +108,4 @@ function writeDump(name, text) {
   } catch { return null; }
 }
 
-module.exports = { dataRoot, optionsCfg, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent };
+module.exports = { dataRoot, optionsCfg, trackOptions, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent };

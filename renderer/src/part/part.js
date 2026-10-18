@@ -10,7 +10,7 @@ import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
-import { opt } from '../app/options.js';
+import { opt, optHex } from '../app/options.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
@@ -23,6 +23,10 @@ import { PartFeatures } from './features.js';
 import { PartExchange } from './exchange.js';
 import { PartCommands } from './commands.js';
 import { PartFeatureUI } from './featureui.js';
+import { PartConvertLink } from './convertlink.js';
+import { PartDimDrag } from './dimdrag.js';
+import { hasLinks } from './linkgeom.js';
+import { fixParallelDims } from './drive.js';
 
 export const STD_PLANES = {
   Front: { origin: [0, 0, 0], normal: [0, 0, 1], xDir: [1, 0, 0] },
@@ -63,7 +67,11 @@ export function newPartDoc(name = 'Part1') {
   return { kind: 'part', version: 1, name, units: 'mm', material: 'Not specified', features: [], rollback: null, next: 1 };
 }
 
-export const COLORS = { body: 0xcfd6df, edge: 0x111111, hover: 0xff9a1a, sel: 0x1e90ff, plane: 0x6a9ad8 };
+// model colours = Options > Colours (read live, so a change shows after applyColors / the next redraw)
+export const COLORS = {
+  get body() { return optHex('bodyColor'); }, get edge() { return optHex('edgeColor'); }, get hover() { return optHex('hoverColor'); },
+  get sel() { return optHex('selColor'); }, get plane() { return optHex('planeColor'); },
+};
 
 // ghost preview colours: added volume, removed volume, body before the feature
 export const GHOST_COL = { boss: 0xf2b630, bossEdge: 0xffc83d, cut: 0xe0463c, cutEdge: 0xff5a4a, prev: 0x7d8aa0 };
@@ -111,6 +119,8 @@ export class PartDoc {
     this.vp.fit({ min: [-60, -60, -60], max: [60, 60, 60] });
     this.doc.pointClouds ||= [];
     this.clouds = new CloudManager(app, () => this.doc.pointClouds, () => [this.scene], () => { this.renderTree(); this.vp.requestRender(); });
+    for (const f of this.doc.features) if (f.type === 'sketch') fixParallelDims(f); // 0.1.89: parallel-line distances measured from the sketch side
+    this._autoLink = true; // older parts: fixed converted geometry on model edges gets linked (Options > Sketch)
     this.regen().then(async () => {
       if (this.doc.viewLayout && this.viewSet.restore(this.doc.viewLayout)) { /* saved panes + views */ } else if (this.mesh?.bbox) this.vp.fit(this.mesh.bbox);
       if (this.doc.pointClouds.length) { await this.clouds.loadAll(); if (!this.mesh?.bbox) this.zoomFit(); }
@@ -272,26 +282,43 @@ export class PartDoc {
   // ======================= regeneration =======================
   async regen(previewFeatures = null, opts = {}) {
     const token = ++this.regenToken;
-    const features = previewFeatures || this.doc.features;
+    let features = previewFeatures || this.doc.features;
     const upTo = previewFeatures ? undefined : this.doc.rollback ?? undefined;
     this.app.setBusy(true);
     try {
+      // linked converted edges (On Edge) follow earlier sketches / features: update those sketches first (preview: on a copy)
+      let link = null;
+      if (previewFeatures) { if (features.some(hasLinks)) { features = JSON.parse(JSON.stringify(features)); link = await this.relink(features); } }
+      else {
+        const auto = !!this._autoLink && opt('linkOld'); this._autoLink = false;
+        link = await this.relink(features, { upTo, auto });
+        if (token !== this.regenToken) return null;
+        if (link?.changed && this.sketcher == null) this.updateSketchDisplay();
+      }
+      if (token !== this.regenToken) return null;
       const ghost = !!previewFeatures && !!opts.ghost;
       const res = await api.kernel('regen', { features, upTo, ghost });
       if (token !== this.regenToken) return res;
-      if (ghost && res.ghost) this.showGhost(res, previewFeatures[previewFeatures.length - 1]);
+      this.linkStatus(link, res.status);
+      if (ghost && res.ghost) this.showGhost(res, features[features.length - 1]);
       else { this.clearGhost(); this.applyMesh(res.mesh); }
       this.mass = res.mass;
       if (!previewFeatures) {
         this.savedMesh = { key: cacheKey(features, upTo), mesh: res.mesh }; // embedded in the file on save
         this.status = res.status;
+        this.storeEdgeGroups(res.status);
         this.resolvedPlanes = new Map(res.status.filter((x) => x.plane).map((x) => [x.id, x.plane]));
         this.renderTree(); this.updateSketchDisplay();
+        this.linkedMessage(link);
       }
       const err = res.status.find((s) => s.state === 'error');
       if (previewFeatures) this.app.pm.current?.setMessage(err ? err.error : '', err ? 'error' : 'info');
-      else if (err) this.app.setStatus(`Rebuild error in ${this.F(err.id)?.name}: ${err.error}`, 'error');
-      else this.app.setStatus('Ready');
+      else if (err) {
+        this.app.setStatus(`Rebuild error in ${this.F(err.id)?.name}: ${err.error}`, 'error');
+        try { window.__lithLog?.('REBUILD ERROR', res.status.filter((s) => s.state === 'error').map((s) => `${this.F(s.id)?.name}: ${s.error}`).join(' | ')); } catch { /* log optional */ }
+      }
+      else if (this._statusAfter && !previewFeatures) { this.app.setStatus(this._statusAfter); this._statusAfter = null; } // message of the change that caused this rebuild
+      else if (!link?.linkedNow?.length) this.app.setStatus('Ready');
       return res;
     } catch (e) {
       toast('Kernel error: ' + e.message, 'error');
@@ -309,7 +336,8 @@ export class PartDoc {
     this.clearGhost();
     this._ghostArgs = [res, f]; // Options window: redraw with new colours / opacities
     this.ghost = { op: g.op, tool: tool ? g.tool : null, prev: tool ? null : g.prev, result: res.mesh };
-    this.applyMesh(tool ? g.prev : res.mesh);
+    // boss: body before + the added volume; cut: the real result (the model updates) + the removed volume on top
+    this.applyMesh(tool && g.op !== 'cut' ? g.prev : res.mesh);
     const add = (m, color, faceA, edgeA, behindA) => {
       if (!m?.positions?.length) return;
       const geom = new THREE.BufferGeometry();
@@ -339,7 +367,27 @@ export class PartDoc {
     } else add(g.prev, GHOST_COL.prev, opt('ghostPrev') / 100, 0.35, 0);
     this.vp.requestRender();
   }
+  // kernel tells which group of edges (same owning features) each fillet / chamfer edge belongs to: kept in the edge
+  // reference so the edge is found again when its pocket / boss moves far (matchEdges fallback)
+  storeEdgeGroups(status) {
+    for (const st of status) {
+      if (!st.refs) continue;
+      const f = this.F(st.id); if (!f?.edges) continue;
+      st.refs.forEach((g, k) => {
+        const e = f.edges[k]; if (!g || !e) return;
+        const { mid, bb, ...grp } = g; e.grp = grp;
+        if (mid) { e.mid = mid; if (bb) e.bb = bb; } // the reference follows the edge (position of this rebuild)
+      });
+      delete st.refs;
+    }
+  }
   refreshGhost() { if (this.ghost && this._ghostArgs) this.showGhost(...this._ghostArgs); }
+  // Options > Colours changed: recolour body, edges, planes and highlights without a rebuild
+  applyColors() {
+    this.bodyMesh?.material.color.setHex(COLORS.body);
+    this.bodyGroup?.traverse((o) => { if (o.isLineSegments) o.material.color.setHex(COLORS.edge); });
+    this.updatePlanes?.(); this.updateHighlights?.(); this.vp?.requestRender();
+  }
   clearGhost() {
     this.ghost = null; this._ghostArgs = null;
     if (!this.ghostGroup) return;
@@ -517,4 +565,4 @@ export function edgeAxis(ed) {
 }
 
 // mix in methods split off into separate files
-for (const M of [PartPicking, PartTree, PartSketching, PartFeatures, PartExchange, PartCommands, PartFeatureUI]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(PartDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));
+for (const M of [PartPicking, PartTree, PartSketching, PartFeatures, PartExchange, PartCommands, PartFeatureUI, PartConvertLink, PartDimDrag]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(PartDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));

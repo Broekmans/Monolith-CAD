@@ -1,3 +1,87 @@
+0.1.93 (2026-10-18)
+- The grid is off by default (Options > Viewports; a grid you switched on yourself stays on). New grid button in the view toolbar to show / hide it in the document.
+- View toolbar: slimmer, and a vertical column at the bottom right of the view cube (in a low view it moves left of the cube).
+- Dimensions: when the label sits beyond the end of its dimension line, a dotted line connects them, so you can see what the label belongs to.
+- Sketch: model edges that are not in the sketch plane (e.g. the outer edge of a filleted rim) can be picked for dimensions and relations; edges in the sketch plane and edges nearest to you win when they overlap.
+
+0.1.92 (2026-10-18)
+- Sketch: clicking a model edge or corner (Smart Dimension, or to add a relation) no longer adds a visible converted line. The sketch keeps an invisible link that sticks to the model and follows it; the model edge itself is highlighted orange when you hover it, also for the second pick of a dimension. References made this way in earlier versions are invisible now too; their dimensions stay. Lines made with the Convert Entities button stay visible.
+- Clicking the same model edge again reuses its link instead of adding another one.
+- While placing a dimension, its label stays exactly under the mouse until you click.
+
+0.1.91 (2026-10-18)
+- Smart Dimension / Trim: the sketch entity under the mouse is drawn thick and orange on top, so a converted reference line that lies on a model edge (dashed, On Edge) is clearly highlighted too. Before, it looked like the edge could not be picked when looking straight at the sketch.
+
+0.1.90 (2026-10-18)
+- Existing distances between two parallel lines that were measured from the far end of a long line (e.g. the corner of the part, made with 0.1.87/0.1.88) are turned around when the part opens: they now measure from the sketch line to the edge, so their extension lines no longer run to the bottom of the model. Same value, label stays where it was.
+- Fillet and chamfer edges now follow their edge from rebuild to rebuild (the stored edge position is updated after every successful rebuild), so several changes in a row keep finding the right edge.
+
+0.1.89 (2026-10-18)
+- Smart Dimension between two parallel lines (e.g. a sketch line and a model edge): the distance is measured from the shorter line's end nearest to where you clicked, so the dimension sits at the sketch instead of at the far end of the model edge. (A dimension made this way in 0.1.87/0.1.88 keeps its old anchor: delete it and add it again.)
+
+0.1.88 (2026-10-18)
+- View cube: only the cube itself covers the sketch now (no more circle around it that hid sketch lines and dimensions).
+- Smart Dimension: the model edge or corner that would be picked is highlighted in orange while hovering.
+
+0.1.87 (2026-10-18)
+- Smart Dimension: click a model edge or corner as the first or second entity; it becomes linked reference geometry (On Edge) in the sketch, so you can dimension from the sketch to the edge of the part.
+- Double-clicking a dimension in a sketch always opens its value box, also while Smart Dimension is active and when the second click lands a few pixels off.
+- Dragging a dimension inside the sketch starts from where its label is drawn.
+- The view cube stays on top: sketch lines, relations and dimensions are no longer drawn over it.
+- Options > Viewports: "View toolbar scale" (50–200 %).
+- Dialogs (Options and others) can be moved by dragging their title strip; the position is remembered.
+
+0.1.86 (2026-10-18)
+- Dimensions shown on the model (double-clicked face) can be dragged to where you want them; the dimension line and extension lines follow. The position is saved in the sketch, so the open sketch shows it there too. Works for dimensions, dashed sizes and the extrude depth. Esc while dragging puts it back; Undo works.
+- A dimension whose stored label position ended up far away from what it measures (after the geometry moved) is now drawn right next to it, in the model and in the sketch. Labels you placed yourself stay where you put them.
+
+0.1.85 (2026-10-18)
+- Double-clicking a face now shows the sketch dimensions on the model with extension lines, dimension lines, arrows and angle arcs, like when the sketch is open. Dimensions are drawn in blue, sizes without a dimension in dashed blue; each label sits on its dimension line and can still be double-clicked to change it.
+- Extrude depth is shown with an orange dimension line along the extrude direction, next to the profile.
+- Options > Dimensions: "Show dimension lines on the model" (on).
+
+0.1.84 (2026-10-18)
+- Sketch: double-clicking a dimension while editing a sketch works again when several views are open (only the last drawn view reacted).
+- Fillets and chamfers keep their edges when the pocket or boss they sit on moves far (e.g. the camera cut moved 50 mm from the edge): each edge remembers which features it lies between and is found again in that group.
+- Dimension changes typed in the sketch's value box also move the sketch in steps when the change is large.
+- Rebuild errors are written to the action log.
+
+0.1.83 (2026-10-18)
+- Convert Entities: converted edges stay linked to the model (relation "On Edge") and follow it when earlier sketches or features change, keeping the sketch's own relations and dimensions. Points placed on model corners follow too. Existing parts are linked when they are opened (fixed converted edges that lie on a model edge); the status bar says how many.
+- Changing a size (dashed) that follows converted edges now changes the dimension in the earlier sketch that made those edges, e.g. Sketch2 158 → 168 sets Sketch1 148 → 158.
+- Large size changes (84 → 700) now change the main dimension instead of a small offset, and the sketch moves there in steps so offsets and slots keep their side. Linked sketches follow large changes the same way.
+- Fillets, chamfers and sketch faces find their edges/faces better after large size changes (a rim of 5 mm stays 5 mm from the side).
+- Options > Sketch: link converted edges (on), link old converted edges when opening a part (on), edge match tolerance (4 %), size that follows converted edges changes the sketch that made them (on), largest step per solve for large size changes (25 %).
+- A linked edge that can no longer be found shows an orange warning on the sketch in the tree; the geometry stays at its last position.
+
+0.1.82 (2026-10-17)
+- Cut preview: the model now shows the real result while the Extruded / Revolved Cut dialog is open (the hole is already there), and only the volume that is really removed is drawn as a see-through ghost with an outline, in yellow like the boss preview (Through All no longer shows a long beam through the screen). The sketch stays visible.
+- Options: the cut preview colour is yellow by default (Feature Preview > Cut colour). Settings still on an old factory value follow a new factory value automatically.
+
+0.1.81 (2026-10-17)
+- Section View: the dotted lines across the cut are now glowing red (the colour of the cut face) and can be dragged with the mouse: dragging a line moves the section plane. A red arrow at the centre shows the direction and can be dragged too; the mouse wheel over a line or the arrow moves the plane in steps. The offset is shown next to the mouse while dragging. Works in every view.
+- New Options category "Section View": handle colour, glow, line width, arrow length, grab distance, wheel step.
+
+0.1.80 (2026-10-17)
+- Several views: double-clicking a dimension shown on the model (blue value or dashed size) now works in every view. Before, only the view that was drawn last reacted to the double-click.
+
+0.1.79 (2026-10-17)
+- The view cube grows and shrinks with the view: size as a percentage of the view, with a minimum and maximum (Tools > Options > Viewports).
+- The view toolbar always stays inside the active view: under the view cube, or left of it when the view is too low. Position can be set in Options (under / left of the view cube, or top centre as before).
+- Many more settings in Tools > Options, sorted into categories with sub-headings: mouse speeds, view turning, arrow-key step, divider width, grid line strength, model / selection / sketch colours, sketch pick distance, drawing paper colour and snap distances, point cloud view defaults (slice heights, dot spacing, section thickness), point size and depth shading for new point cloud documents, message time.
+- Search box in the Options window; changed settings are marked with a dot (hover shows the factory value).
+- Your setting changes (OK in Options) are recorded in Logs\option-changes.json and the action log, so the factory defaults can be tuned to how you work (can be turned off under General).
+
+0.1.78 (2026-10-17)
+- Several views: the view cube now reacts exactly where you see it (the picture was drawn 24 px above its clickable area when the view buttons were shown).
+- The view toolbar (Zoom to Fit, views, display style, section) sits under the view cube of the active view and moves along when you click another view.
+- Views can be minimized: the new "—" button (or right-click / Viewport menu > Minimize View) turns a view into a tab bottom-left; click the tab to bring it back in its old place with its own view. Viewport > Restore Minimized Views brings all back. Minimized views are saved with the file.
+- Rotating, panning or zooming with the mouse (middle/right button, Alt + left) no longer highlights faces or sketch entities.
+
+0.1.77 (2026-10-17)
+- Changing a dashed size on the model (a size without its own dimension) no longer gives "already fixed by other relations" when another dimension in the sketch drives it: that dimension is changed instead, so the size gets your value and the sketch keeps its dimensions (e.g. a rounded corner R10 that is equal to a dimensioned R10 changes that dimension). The status bar says which dimension changed.
+- When a size really cannot be set (it follows model edges with a Fix relation, or only relations), the message now says why.
+
 0.1.76 (2026-10-16)
 - MonoLith now also runs on Linux (x64, AppImage or tar.gz), with the built-in DWG converter. Windows stays the main platform.
 - On Linux, logs, projects and settings are kept in the MonoLith folder in your home folder.

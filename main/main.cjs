@@ -13,7 +13,7 @@ const RENDERER = path.join(ROOT, 'renderer');
 const isTest = !!process.env.MONOLITH_TEST;
 const { listProjects, createProject, openFolder, projectsRoot } = require('./projects.cjs');
 const { pcCall, startWorker, kernel, stopWorkers } = require('./kernel.cjs');
-const { optionsCfg, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
+const { optionsCfg, trackOptions, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
 const { dwgToDxf, dxfToDwg, converterStatus, setODAPath, listFonts } = require('./tools.cjs');
 const { setupCloudIPC, stopCloudWorkers } = require('./cloudio.cjs');
 protocol.registerSchemesAsPrivileged([{ scheme: 'monolith', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
@@ -95,6 +95,8 @@ function buildMenu() {
       { label: 'Custom (views closed)', type: 'radio', checked: uiVp?.layout === 'custom', enabled: false, visible: uiVp?.layout === 'custom' },
       { type: 'separator' },
       { label: uiVp?.max ? 'Restore Views' : 'Maximize View', enabled: !!uiVp?.multi, click: () => send('max-view') },
+      { label: 'Minimize View', enabled: !!uiVp?.multi, click: () => send('min-view') },
+      { label: 'Restore Minimized Views', enabled: !!uiVp?.mins, click: () => send('restore-mins') },
       { label: 'Close View', enabled: !!uiVp?.multi, click: () => send('close-view') },
       { label: 'Reset Views', enabled: !!uiVp, click: () => send('reset-views') },
       { type: 'separator' },
@@ -136,6 +138,7 @@ function setupIPC() {
   ipcMain.handle('log:dump', (_e, n, t) => writeDump(n, t));
   ipcMain.handle('std:cfg', (_e, s) => draftStd(s));
   ipcMain.handle('options:cfg', (_e, o) => optionsCfg(o));
+  ipcMain.handle('options:track', (_e, l) => trackOptions(l));
   ipcMain.handle('log:cfg', (_e, c) => (c ? setLogCfg(c) : getLogCfg()));
   ipcMain.on('ui:grid', (_e, g) => { if (uiGrid !== !!g) { uiGrid = !!g; buildMenu(); } });
   ipcMain.on('ui:iso', (_e, g) => { if (uiIso !== !!g) { uiIso = !!g; buildMenu(); } });

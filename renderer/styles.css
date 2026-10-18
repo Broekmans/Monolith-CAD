@@ -115,6 +115,7 @@ body.dark .tog.on { color: #8fb8f5; }
 .tr-eye { margin-left: auto; flex: none; width: 20px; height: 18px; padding: 1px 2px; border: 0; background: none; border-radius: 3px; cursor: pointer; color: var(--muted); opacity: 0; display: inline-flex; align-items: center; justify-content: center; }
 .tr-eye svg { width: 14px; height: 14px; }
 .tr-err + .tr-eye { margin-left: 4px; }
+.tr-warn { color: #e08a00; }
 .tr-row:hover .tr-eye, .tr-eye.off { opacity: 1; }
 .tr-eye:hover { background: var(--line2); color: var(--accent); }
 .tr-eye.off { color: var(--muted); }
@@ -428,6 +429,11 @@ body.dark .vc-arrow:hover { color: #5fa2f5; }
 .vs-btn svg { width: 11px; height: 11px; }
 .vs-btn:hover { opacity: 1; background: var(--panel2); border-color: var(--line); }
 .vs-btn.vs-close:hover { background: #d04040; border-color: #d04040; color: #fff; }
+.vs-dock { position: absolute; left: 6px; bottom: 6px; z-index: 8; display: flex; gap: 4px; }
+.vs-tab { display: flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px 0 5px; font-size: 12px; line-height: 1; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.15); }
+.vs-tab svg { width: 12px; height: 12px; }
+.vs-tab:hover { border-color: var(--accent); color: var(--accent); }
+.headsup.under-cube { z-index: 6; }
 .viewset.multi .viewcube, .viewset.multi .vc-arrows, .viewset.maxed .viewcube, .viewset.maxed .vc-arrows { margin-top: 24px; }
 
 /* DWG converter dialog */
@@ -490,12 +496,13 @@ body.dark .dlg, body.dark .panel.pmroot.pm-float, body.dark .ann-props, body.dar
 /* Options window (Tools > Options…) */
 .dlg:has(.opt-body) { max-width: 820px; width: 780px; }
 .opt-body { display: flex; flex-direction: column; gap: 8px; margin: -12px -16px; }
-.opt-main { display: flex; min-height: 380px; max-height: 60vh; }
+.opt-main { display: flex; height: min(62vh, 520px); min-height: 300px; }
+.dlg:has(.opt-body) .dlg-body { overflow: hidden; }
 .opt-cats { width: 170px; flex: none; border-right: 1px solid var(--pop-line); padding: 6px 0; display: flex; flex-direction: column; }
 .opt-cat { text-align: left; border: 0; background: none; color: var(--text); padding: 5px 12px; cursor: pointer; font-size: 12px; }
 .opt-cat:hover { background: var(--pop-head); }
 .opt-cat.on { background: var(--pop-head); box-shadow: inset 3px 0 0 var(--pop-ok); font-weight: 600; }
-.opt-rows { flex: 1; overflow: auto; padding: 6px 12px; }
+.opt-rows { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 6px 12px; }
 .opt-head { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin: 4px 0 8px; }
 .opt-row { display: grid; grid-template-columns: 1fr 190px; align-items: center; gap: 10px; min-height: 28px; border-bottom: 1px solid color-mix(in srgb, var(--pop-line) 45%, transparent); font-size: 12px; }
 .opt-row > input[type=checkbox] { justify-self: start; }
@@ -508,4 +515,18 @@ body.dark .dlg, body.dark .panel.pmroot.pm-float, body.dark .ann-props, body.dar
 .opt-btn:hover { border-color: var(--pop-ok); }
 .opt-foot { display: flex; gap: 6px; padding: 8px 12px 0; border-top: 1px solid var(--pop-line); }
 .opt-msg { min-height: 16px; padding: 0 12px 4px; color: var(--muted); font-size: 11px; }
+.opt-search { margin: 0 8px 6px; height: 24px; border: 1px solid var(--pop-line); background: var(--pop-input); color: var(--text); padding: 0 6px; border-radius: 2px; font-size: 12px; }
+.opt-group { font-size: 11px; font-weight: 600; color: var(--text); margin: 12px 0 2px; padding-bottom: 3px; border-bottom: 1px solid var(--pop-line); }
+.opt-group:first-of-type { margin-top: 2px; }
+.opt-row.changed > label::after { content: ' •'; color: var(--pop-ok); font-weight: 700; }
+.opt-sel { height: 24px; border: 1px solid var(--pop-line); background: var(--pop-input); color: var(--text); border-radius: 2px; font-size: 12px; max-width: 190px; }
 .qa-opt { margin-right: 6px; }
+
+/* 0.1.87: dialogs move by their title strip */
+.dlg-title.movable { cursor: move; user-select: none; }
+
+/* 0.1.93: slimmer view toolbar; vertical column at the view cube */
+.headsup { gap: 1px; padding: 2px; border-radius: 5px; }
+.hu-btn { width: 26px; height: 24px; padding: 2px; }
+.hu-btn svg { width: 17px; height: 17px; }
+.headsup.vertical { flex-direction: column; }

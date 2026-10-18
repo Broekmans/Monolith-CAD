@@ -7,6 +7,8 @@ import { h, fmt, modifyBox, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { listFonts, loadFont, textGeometry, preferredFont } from './fonts.js';
 import { textLoops } from '../../../shared/profile.mjs';
+import { opt } from '../app/options.js';
+import { refFromMeshEdge } from '../part/linkgeom.js';
 import { niceHeight, COL, COL_LIGHT, COL_DARK, setSketchTheme, SKETCH_TOOLS, REL_DEFS, newSketch } from './sketcher.js';
 
 export class SketchText {
@@ -99,9 +101,12 @@ export class SketchText {
     for (let i = 0; i < edge.pts.length; i += 3) pts.push(loc([edge.pts[i], edge.pts[i + 1], edge.pts[i + 2]]));
     if (pts.length < 2) return;
     this.pushUndo();
+    // linked to the model edge (On Edge): follows it when earlier sketches / features change (Options > Sketch)
+    const ref = opt('linkConvert') && this.host?.mesh ? refFromMeshEdge(edge, this.host.mesh.bbox) : null;
+    const fix = (g) => { if (ref) g.onEdge = ref; this.addCons(ref ? { type: 'fix', e: g.id, onEdge: true } : { type: 'fix', e: g.id }); };
     if (edge.type === 'line') {
       const l = this.addLine(pts[0], pts[pts.length - 1], construction);
-      this.addCons({ type: 'fix', e: l.id });
+      fix(l);
     } else if (edge.type === 'circle') {
       const a = pts[0], m = pts[Math.floor(pts.length / 2)], b = pts[pts.length - 1];
       const closed = dist(a, b) < 1e-6;
@@ -110,12 +115,12 @@ export class SketchText {
       if (closed) {
         const c = this.addPoint(cc.c[0], cc.c[1]);
         const g = { id: this.gid(), type: 'circle', c, r: cc.r, construction }; this.sk.geo.push(g);
-        this.addCons({ type: 'fix', e: g.id });
+        fix(g);
       } else {
         const ccw = cross2([m[0] - a[0], m[1] - a[1]], [b[0] - a[0], b[1] - a[1]]) > 0;
         const g = this.makeArc(cc.c, ccw ? a : b, ccw ? b : a, cc.r, null);
         g.construction = construction;
-        this.addCons({ type: 'fix', e: g.id });
+        fix(g);
       }
     } else {
       // free-form edge: approximate with fixed line segments

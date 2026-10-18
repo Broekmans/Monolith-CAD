@@ -4,6 +4,8 @@ import { solve, analyzeDefinition, measure, DIM_TYPES } from './solver.js';
 import { dist, projectOnSegment, angleInArc, normAng, lineLine, lineCircle, circleCircle, circleFrom3, cross2, TAU } from './geom2d.js';
 import { sampleCurve, sketchCurves } from '../../../shared/profile.mjs';
 import { h, fmt, modifyBox, toast } from '../ui.js';
+import { navHeld } from '../viewport.js';
+import { opt } from '../app/options.js';
 import { icon } from '../icons.js';
 import { listFonts, loadFont, textGeometry, preferredFont } from './fonts.js';
 import { textLoops } from '../../../shared/profile.mjs';
@@ -55,6 +57,20 @@ export class SketchTools {
     if (e.button !== 0 || e.altKey) return;
     const { p, sx, sy } = this.local(e);
     this.mouse = { p, sx, sy };
+    // double-click on a dimension label = edit it, also while a tool (Smart Dimension) is active; own timing so a
+    // slightly moved second click still counts (0.1.87)
+    if (!this.tool?.pending) {
+      const dh = this.pick(p, sx, sy, { points: false, curves: false });
+      const dc = dh?.kind === 'cons' && this.sk.cons.find((x) => x.id === dh.id);
+      if (dc && DIM_TYPES.has(dc.type)) {
+        const now = performance.now(), last = this._dimClick;
+        this._dimClick = { id: dc.id, t: now, sx, sy };
+        if (last && last.id === dc.id && now - last.t < 500 && Math.hypot(sx - last.sx, sy - last.sy) < 12) {
+          this._dimClick = null; this.drag = null; this.editDim(dc, e.clientX, e.clientY); return;
+        }
+        if (this.tool) return; // a click on a label does not start a new dimension
+      }
+    }
     if (this.tool) { this.toolClick(p, sx, sy, e); return; }
     if (this.mirrorMode) { this.mirrorClick(p, sx, sy, e); return; }
     const hit = this.pick(p, sx, sy);
@@ -65,7 +81,10 @@ export class SketchTools {
       if (hit.kind === 'geo') this.drag = { id: hit.id, start: p, last: p, moved: false, sx, sy };
       if (hit.kind === 'cons') {
         const c = this.sk.cons.find((x) => x.id === hit.id);
-        if (c && DIM_TYPES.has(c.type)) this.drag = { dim: c, start: p, lp0: c.lp ? [...c.lp] : [0, 0], moved: false, sx, sy };
+        // start from where the label is drawn (it may be drawn near its geometry instead of at a stale far position)
+        const shown = this._hitsBy?.get(this.vp.pane || this.vp)?.dims.find((x) => x.id === c?.id)?.L;
+        const lp0 = shown && c && !c.lpUser ? (() => { const a = this.dimAnchor(c); return [shown[0] - a[0], shown[1] - a[1]]; })() : c?.lp ? [...c.lp] : [0, 0];
+        if (c && DIM_TYPES.has(c.type)) this.drag = { dim: c, start: p, lp0, moved: false, sx, sy };
       }
     } else if (this.modelRefAt(p, e)) {
       // a model corner / edge was clicked: it became fixed reference geometry and was added to the selection
@@ -83,10 +102,10 @@ export class SketchTools {
     this.mouse = { p, sx, sy };
     if (this.drag) {
       const d = this.drag;
-      if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) < 3) return;
+      if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) < opt('skDragPx') - 1) return;
       if (!d.moved) { d.moved = true; this.pushUndo(); }
       if (d.dim) {
-        d.dim.lp = [d.lp0[0] + p[0] - d.start[0], d.lp0[1] + p[1] - d.start[1]];
+        d.dim.lp = [d.lp0[0] + p[0] - d.start[0], d.lp0[1] + p[1] - d.start[1]]; d.dim.lpUser = true;
         this.vp.requestRender();
         return;
       }
@@ -94,6 +113,7 @@ export class SketchTools {
       return;
     }
     if (this.box) { this.box.sx1 = sx; this.box.sy1 = sy; this.vp.requestRender(); return; }
+    if (navHeld(e)) { if (this.hover) { this.hover = null; this.vp.requestRender(); } return; }
     if (this.tool) { this.toolMove(p, sx, sy); this.vp.requestRender(); return; }
     const hit = this.pick(p, sx, sy);
     const key = hit ? hit.kind + ':' + hit.id : null;
@@ -134,6 +154,7 @@ export class SketchTools {
   }
 
   onDbl(e) {
+    if (this._dimClick === null && document.querySelector('.modify-box')) return; // already opened by onDown
     const { p, sx, sy } = this.local(e);
     if (this.tool && (this.tool.id === 'line' || this.tool.id === 'centerline')) { this.tool.pts = []; this.tool.snaps = []; this.vp.requestRender(); return; }
     if (this.tool) return;
@@ -177,6 +198,13 @@ export class SketchTools {
       const hit = this.pick(p, this.mouse.sx, this.mouse.sy, { points: t.id === 'dimension', dims: false });
       this.hover = hit ? 'geo:' + hit.id : null;
     }
+    // Smart Dimension: a model edge / corner that would be picked is highlighted (0.1.88)
+    this.modelHover = null;
+    if (t.id === 'dimension' && t.pending && t.picks?.length === 1) { // second pick: a sketch entity or a model edge
+      const hit = this.pick(p, this.mouse.sx, this.mouse.sy, { dims: false });
+      this.hover = hit && hit.id !== t.picks[0] ? 'geo:' + hit.id : null;
+    }
+    if (t.id === 'dimension' && !this.hover && (!t.pending || t.picks?.length === 1)) this.modelHover = this.modelHoverAt(p, 1);
   }
 
   toolClick(p, sx, sy, e) {

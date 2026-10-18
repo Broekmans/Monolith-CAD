@@ -20,7 +20,7 @@ const mpts = (n) => (n >= 1e6 ? fmt(n / 1e6, n >= 1e8 ? 0 : 1) + ' M' : n >= 1e3
 const secs = (s) => (s >= 90 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.round(s)} s`);
 
 export function newCloudDoc(name = 'PointCloud1') {
-  return { kind: 'cloud', version: 1, name, origin: null, clouds: [], view: { budget: opt('cloudBudget') * 1e6, edl: opt('cloudEdl'), edlStrength: 1, round: false } };
+  return { kind: 'cloud', version: 1, name, origin: null, clouds: [], view: { budget: opt('cloudBudget') * 1e6, edl: opt('cloudEdl'), edlStrength: opt('cloudEdlStrength'), round: false } };
 }
 
 export class CloudDoc {
@@ -155,7 +155,7 @@ export class CloudDoc {
   async addCloud(path) {
     const name = path.split(/[\\/]/).pop();
     if (this.doc.clouds.some((c) => c.path === path)) { toast(`${name} is already in this document`); return null; }
-    const rec = { id: 'pc' + Date.now().toString(36), name, path, visible: true, colorMode: null, pointSize: 2 };
+    const rec = { id: 'pc' + Date.now().toString(36), name, path, visible: true, colorMode: null, pointSize: opt('cloudPointSize') };
     const first = !this.layers.size;
     const layer = await this.loadLayer(rec);
     if (!layer) return null;

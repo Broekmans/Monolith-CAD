@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('monolith', {
   isTest: !!process.env.MONOLITH_TEST,
   optionsCfg: (o) => ipcRenderer.invoke('options:cfg', o),
+  trackOptions: (l) => ipcRenderer.invoke('options:track', l),
   kernel: (op, args) => ipcRenderer.invoke('kernel', op, args),
   openFile: (opts) => ipcRenderer.invoke('file:open', opts),
   saveFile: (opts) => ipcRenderer.invoke('file:save', opts),

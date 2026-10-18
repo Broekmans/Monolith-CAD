@@ -6,6 +6,7 @@ import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
@@ -92,7 +93,7 @@ export class PartCommands {
       ]);
     };
     bar.append(B('zoomFit', 'Zoom to Fit (F)', () => this.zoomFit()), B('normalTo', 'Normal To (Ctrl+8)', () => this.normalTo()),
-      B('views', 'View Orientation', viewsMenu), B('shaded', 'Display Style', dispMenu), B('section', 'Section View', () => toggleSection(this)));
+      B('views', 'View Orientation', viewsMenu), B('shaded', 'Display Style', dispMenu), B('section', 'Section View', () => toggleSection(this)), B('grid', 'Show / Hide Grid', () => this.toggleGrid()));
   }
 
   // ======================= keyboard =======================
@@ -107,7 +108,7 @@ export class PartCommands {
     if (e.ctrlKey && (k === 'y' || k === 'Y')) { this.redo(); return true; }
     if (k === 'f' && !e.ctrlKey) { this.zoomFit(); return true; }
     if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown') {
-      const a = Math.PI / 12;
+      const a = opt('arrowStep') * Math.PI / 180;
       this.vp.rotateBy(k === 'ArrowLeft' ? -a : k === 'ArrowRight' ? a : 0, k === 'ArrowUp' ? -a : k === 'ArrowDown' ? a : 0);
       return true;
     }

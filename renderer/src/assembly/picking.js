@@ -1,7 +1,7 @@
 // Assembly: picking, dragging, highlights
 // Methods are mixed into AssemblyDoc (see assembly.js); `this` is the AssemblyDoc.
 import * as THREE from 'three';
-import { Viewport } from '../viewport.js';
+import { Viewport, navHeld } from '../viewport.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
@@ -66,7 +66,7 @@ export class AsmPicking {
     el.addEventListener('pointermove', (e) => {
       if (this.drag) { this.dragMove(e); return; }
       if (this._down && Math.hypot(e.clientX - this._down.x, e.clientY - this._down.y) > 4) { this.dragStart(this._down, e); return; }
-      const p = this.pickAt(e);
+      const p = navHeld(e) ? null : this.pickAt(e);
       if ((p?.key || null) !== (this.hover?.key || null)) { this.hover = p; this.updateHighlights(); }
     });
     el.addEventListener('pointerdown', (e) => {
@@ -144,6 +144,11 @@ export class AsmPicking {
   }
 
   clearHL() { for (const v of this.views.values()) for (const o of [...v.hl.children]) { v.hl.remove(o); o.geometry?.dispose(); } }
+  // Options > Colours changed: edges + highlights (component colours stay per component)
+  applyColors() {
+    this.compGroup?.traverse((o) => { if (o.isLineSegments && !o.userData.hl) o.material.color.setHex(COLORS.edge); });
+    this.updateHighlights(); this.vp?.requestRender();
+  }
   updateHighlights() {
     this.clearHL();
     const pmItems = this.app.pm.current ? Object.values(this.app.pm.current.selboxes).flatMap((b) => b.items) : [];

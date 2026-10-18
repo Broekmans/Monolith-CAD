@@ -7,10 +7,12 @@ import { ViewSet } from '../viewset.js';
 import { h, fmt, contextMenu, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { loadPart } from '../assembly/assembly.js';
 import { SIZES, SCALES, STD, scaleText, scaleVal, projected, isOrtho, viewRect, frameRect, sheetPrims, sheetSize, drawArea, TB_FIELDS, zoneGrid } from './sheet.js';
 
-export const PAPER = '#f3e9cf'; // warm paper colour on screen (the PDF stays white)
+// warm paper colour on screen (the PDF stays white): Options > Drawings
+export const paper = () => opt('paperColor');
 import { makePdf, makePdfCompressed, EM } from './pdf.js';
 import { paintDots } from './dots.js';
 import { paintRaster, loadRaster, onRasterReady } from './raster.js';
@@ -135,7 +137,7 @@ export class DrawingDoc {
     const [W, H] = sheetSize(this.sheet);
     const a = this.S2([0, 0]), b = this.S2([W, H]);
     ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(a[0] + 4, b[1] + 4, b[0] - a[0], a[1] - b[1]);
-    ctx.fillStyle = PAPER; ctx.fillRect(a[0], b[1], b[0] - a[0], a[1] - b[1]);
+    ctx.fillStyle = paper(); ctx.fillRect(a[0], b[1], b[0] - a[0], a[1] - b[1]);
     const prims = sheetPrims(this.doc, this.sheet, { selected: this.sel, selAnn: this.selAnn?.id, preview: this.preview });
     this._annBoxes = prims.filter((q) => q.t === 'annbox' || q.t === 'annpath');
     this.paint(ctx, prims, (p) => this.S2(p, A), k);
@@ -186,7 +188,7 @@ export class DrawingDoc {
       const cv = document.createElement('canvas'); cv.width = cw; cv.height = chh;
       const ctx = cv.getContext('2d');
       ctx.fillStyle = '#dfe4ea'; ctx.fillRect(0, 0, cw, chh);
-      ctx.fillStyle = PAPER; ctx.fillRect(ox, oy - H * k, W * k, H * k);
+      ctx.fillStyle = paper(); ctx.fillRect(ox, oy - H * k, W * k, H * k);
       this.showFrames = false;
       try { this.paint(ctx, sheetPrims(this.doc, sh), (p) => [ox + p[0] * k, oy - p[1] * k], k); } finally { this.showFrames = true; }
       return cv.toDataURL('image/jpeg', 0.8);

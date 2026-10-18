@@ -5,6 +5,8 @@ import { dist, projectOnSegment, angleInArc, normAng, lineLine, lineCircle, circ
 import { sampleCurve, sketchCurves } from '../../../shared/profile.mjs';
 import { h, fmt, modifyBox, toast } from '../ui.js';
 import { icon } from '../icons.js';
+import { opt } from '../app/options.js';
+import { solveStepped } from '../part/drive.js';
 import { listFonts, loadFont, textGeometry, preferredFont } from './fonts.js';
 import { textLoops } from '../../../shared/profile.mjs';
 import { niceHeight, COL, COL_LIGHT, COL_DARK, setSketchTheme, SKETCH_TOOLS, REL_DEFS, newSketch } from './sketcher.js';
@@ -16,15 +18,20 @@ export class SketchDims {
     const hit = this.pick(p, sx, sy, { dims: false });
     if (t.pending) {
       // a second entity combines with the first instead of placing
-      if (hit && hit.kind === 'geo' && t.picks.length === 1 && hit.id !== t.picks[0] && this.canCombine(t.picks[0], hit.id)) {
-        t.picks.push(hit.id); t.pending = this.makePendingDim(t.picks, p); return;
+      let id2 = hit && hit.kind === 'geo' ? hit.id : null;
+      if (!id2 && !hit && t.picks.length === 1) { const ok = this.modelSnapHit?.(p); if (ok) { id2 = this.modelRefAt(p, e) || null; if (id2) this.sel.clear(); } }
+      if (id2 && t.picks.length === 1 && id2 !== t.picks[0] && this.canCombine(t.picks[0], id2)) {
+        t.picks.push(id2); t.pending = this.makePendingDim(t.picks, p); return;
       }
       this.placeDim(t.pending, p, e);
       t.picks = []; t.pending = null;
       return;
     }
-    if (!hit || hit.kind !== 'geo' || this.G(hit.id)?.type === 'text') return;
-    t.picks.push(hit.id);
+    let id = hit?.kind === 'geo' && this.G(hit.id)?.type !== 'text' ? hit.id : null;
+    // nothing of the sketch here: a model edge / corner becomes linked reference geometry (On Edge) to dimension to
+    if (!id && !hit) { id = this.modelRefAt(p, e) || null; if (id) this.sel.clear(); }
+    if (!id) return;
+    t.picks.push(id);
     const pd = this.makePendingDim(t.picks, p);
     if (pd) t.pending = pd;
   }
@@ -44,7 +51,14 @@ export class SketchDims {
     const ctr = (g) => (g.type === 'circle' || g.type === 'arc' ? g.c : g.id);
     if (a.type === 'line' && b.type === 'line') {
       const da = this.dirOf(a), db = this.dirOf(b);
-      if (Math.abs(cross2(da, db)) < 1e-6) return { type: 'pointLine', p: b.p1, l: a.id, lpAbs: p };
+      if (Math.abs(cross2(da, db)) < 1e-6) {
+        // parallel lines: measure from the shorter line (e.g. the sketch) to the longer one (e.g. a model edge), from
+        // the shorter line's end nearest to the click, so the dimension sits at the sketch, not at the far end of the edge
+        const len = (g) => dist(this.P(g.p1), this.P(g.p2));
+        const [sh, lg] = len(a) <= len(b) ? [a, b] : [b, a];
+        const pt = dist(this.P(sh.p1), p) <= dist(this.P(sh.p2), p) ? sh.p1 : sh.p2;
+        return { type: 'pointLine', p: pt, l: lg.id, lpAbs: p };
+      }
       return { type: 'angle', a: a.id, b: b.id, lpAbs: p };
     }
     if (a.type === 'line') [a, b] = [b, a];
@@ -129,17 +143,15 @@ export class SketchDims {
         if (!(v > 0) && !isAngle) return;
         const live = this.sk.cons.find((k) => k.id === c.id);
         if (!live) return;
-        live.value = v;
-        const r = solve(this.sk);
-        if (!r.ok) this.sk = JSON.parse(before);
+        const r = solveStepped(this.sk, live, v, { maxStep: opt('sizeStepPct') / 100 }); // big changes in steps
+        if (!r || !r.ok) this.sk = JSON.parse(before);
         this.host.onSketchChanged?.(this, true); this.vp.requestRender();
       },
       onApply: (v) => {
         if (!(v > 0) && !isAngle) { toast('Value must be positive', 'error'); this.sk = JSON.parse(before); this.resolve(true); return; }
         const live = this.sk.cons.find((k) => k.id === c.id) || c;
-        live.value = v;
-        const r = solve(this.sk);
-        if (!r.ok) { toast('That value cannot be solved with the current relations.', 'error'); this.sk = JSON.parse(before); }
+        const r = solveStepped(this.sk, live, v, { maxStep: opt('sizeStepPct') / 100 });
+        if (!r || !r.ok) { toast('That value cannot be solved with the current relations.', 'error'); this.sk = JSON.parse(before); }
         this.resolve(true);
       },
       onCancel: () => { this.sk = JSON.parse(before); this.resolve(true); },

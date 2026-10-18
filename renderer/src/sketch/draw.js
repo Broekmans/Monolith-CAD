@@ -8,7 +8,7 @@ import { icon } from '../icons.js';
 import { listFonts, loadFont, textGeometry, preferredFont } from './fonts.js';
 import { textLoops } from '../../../shared/profile.mjs';
 import { COL_DARK_FREE } from './sketcher.js';
-import { niceHeight, COL, COL_LIGHT, COL_DARK, setSketchTheme, SKETCH_TOOLS, REL_DEFS, newSketch } from './sketcher.js';
+import { niceHeight, COL, COL_LIGHT, COL_DARK, setSketchTheme, SKETCH_TOOLS, REL_DEFS, newSketch, relDef } from './sketcher.js';
 
 export class SketchDraw {
   // ---------------- panel ----------------
@@ -58,7 +58,7 @@ export class SketchDraw {
       const existing = this.sk.cons.filter((c) => !DIM_TYPES.has(c.type) && gs.some((g) => [c.a, c.b, c.p, c.l, c.c, c.e].includes(g.id)));
       panel.append(h('div', { class: 'sp-sec' }, 'Existing Relations'),
         h('div', { class: 'sp-list' }, existing.length ? existing.map((c) => h('div', { class: 'sp-item rel' },
-          h('span', { class: 'ico sm', html: icon(REL_DEFS[c.type]?.icon || 'relation') }), h('span', {}, `${REL_DEFS[c.type]?.label || c.type}${this.state.conflicting.includes(c.id) ? ' (conflict)' : ''}`),
+          h('span', { class: 'ico sm', html: icon(relDef(c)?.icon || 'relation') }), h('span', {}, `${relDef(c)?.label || c.type}${this.state.conflicting.includes(c.id) ? ' (conflict)' : ''}`),
           h('button', { class: 'x', title: 'Delete relation', onclick: () => { this.pushUndo(); this.sk.cons = this.sk.cons.filter((k) => k.id !== c.id); this.resolve(true); } }, '×'))) : h('div', { class: 'sp-empty' }, 'None')));
       const rels = this.applicableRelations();
       panel.append(h('div', { class: 'sp-sec' }, 'Add Relations'),
@@ -74,7 +74,7 @@ export class SketchDraw {
     }
     if (cs.length) {
       panel.append(h('div', { class: 'sp-sec' }, 'Selected Relations / Dimensions'),
-        h('div', { class: 'sp-list' }, cs.map((c) => h('div', { class: 'sp-item' }, DIM_TYPES.has(c.type) ? `${c.type} = ${fmt(measure(this.sk, c), 3)}${c.driving === false ? ' (driven)' : ''}` : REL_DEFS[c.type]?.label || c.type))));
+        h('div', { class: 'sp-list' }, cs.map((c) => h('div', { class: 'sp-item' }, DIM_TYPES.has(c.type) ? `${c.type} = ${fmt(measure(this.sk, c), 3)}${c.driving === false ? ' (driven)' : ''}` : relDef(c)?.label || c.type))));
       const dims = cs.filter((c) => DIM_TYPES.has(c.type));
       if (dims.length === 1) {
         const c = dims[0];
@@ -154,9 +154,11 @@ export class SketchDraw {
     }
     ctx.beginPath(); ctx.arc(o[0], o[1], 3, 0, TAU); ctx.fill();
 
-    // curves
+    // curves (model references made by clicking an edge are invisible links; drawn only while selected)
+    const hid = this.hiddenIds();
     for (const g of this.sk.geo) {
       if (g.type === 'point') continue;
+      if (hid.has(g.id) && !this.sel.has('geo:' + g.id)) continue;
       if (g.type === 'text') { this.drawText(ctx, g, scr); continue; }
       const c = this.curveOf(g);
       if (!c) continue;
@@ -170,6 +172,7 @@ export class SketchDraw {
     // points
     for (const g of this.sk.geo) {
       if (g.type !== 'point' || g.origin) continue;
+      if (hid.has(g.id) && !this.sel.has('geo:' + g.id)) continue;
       const q = scr([g.x, g.y]);
       const key = 'geo:' + g.id;
       const isolated = !this.sk.geo.some((o) => o.type !== 'point' && [o.p1, o.p2, o.c, o.s, o.e, o.p].includes(g.id));
@@ -180,12 +183,39 @@ export class SketchDraw {
       else { ctx.beginPath(); ctx.arc(q[0], q[1], r, 0, TAU); ctx.fill(); }
     }
     // dimensions and relation glyphs
-    this.dimHits = [];
-    this.glyphHits = [];
+    // label / glyph hit boxes per view pane (draw runs once per pane; the pane under the mouse is used for picking)
+    const H = { dims: [], glyphs: [] };
+    (this._hitsBy ||= new WeakMap()).set(this.vp.pane || this.vp, H);
+    this.dimHits = H.dims;
+    this.glyphHits = H.glyphs;
     for (const c of this.sk.cons) if (DIM_TYPES.has(c.type)) this.drawDim(ctx, c);
     if (this.showRelations) this.drawGlyphs(ctx);
     // tool preview
     if (this.tool) this.drawPreview(ctx);
+    // sketch entity under the mouse while Smart Dimension / Trim is active: thick solid orange on top, so also a
+    // construction / converted reference line lying on a model edge shows clearly (0.1.91)
+    if (this.tool && (this.tool.id === 'dimension' || this.tool.id === 'trim') && this.hover?.startsWith('geo:')) {
+      const g = this.G(this.hover.slice(4));
+      if (g) {
+        ctx.save(); ctx.strokeStyle = COL.hover; ctx.fillStyle = COL.hover; ctx.lineWidth = 3; ctx.setLineDash([]); ctx.beginPath();
+        if (g.type === 'line') { const a = this.scr(this.P(g.p1)), b = this.scr(this.P(g.p2)); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+        else if (g.type === 'circle' || g.type === 'arc') {
+          const c = this.P(g.c); let a0 = 0, a1 = TAU;
+          if (g.type === 'arc') { const sp = this.P(g.s), ep = this.P(g.e); a0 = Math.atan2(sp[1] - c[1], sp[0] - c[0]); a1 = Math.atan2(ep[1] - c[1], ep[0] - c[0]); if (a1 <= a0) a1 += TAU; }
+          for (let i = 0; i <= 64; i++) { const t = a0 + (a1 - a0) * i / 64, q = this.scr([c[0] + g.r * Math.cos(t), c[1] + g.r * Math.sin(t)]); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); }
+          ctx.stroke();
+        } else if (g.type === 'point') { const q = this.scr([g.x, g.y]); ctx.arc(q[0], q[1], 5, 0, TAU); ctx.fill(); }
+        ctx.restore();
+      }
+    }
+    // model edge / corner under the mouse that Smart Dimension would pick: orange like other hover highlights
+    if (this.tool && this.modelHover) {
+      const m = this.modelHover;
+      ctx.save(); ctx.strokeStyle = COL.hover; ctx.fillStyle = COL.hover; ctx.lineWidth = 3; ctx.setLineDash([]);
+      if (m.v) { const q = this.scr(m.v); ctx.beginPath(); ctx.arc(q[0], q[1], 5, 0, TAU); ctx.fill(); }
+      else { ctx.beginPath(); m.pts.forEach((pt, i) => { const q = this.scr(pt); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); }); ctx.stroke(); }
+      ctx.restore();
+    }
     // box select
     if (this.box) {
       const b = this.box;
@@ -198,7 +228,7 @@ export class SketchDraw {
   }
 
   drawGlyphs(ctx) {
-    const counts = new Map();
+    const counts = new Map(), hid = this.hiddenIds();
     const place = (anchor) => {
       const k = anchor.map((v) => Math.round(v / 6)).join(',');
       const n = counts.get(k) || 0; counts.set(k, n + 1);
@@ -206,11 +236,11 @@ export class SketchDraw {
     };
     ctx.font = '600 10px Segoe UI, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (const c of this.sk.cons) {
-      const d = REL_DEFS[c.type];
+      const d = relDef(c);
       if (!d || DIM_TYPES.has(c.type)) continue;
       if (c.type === 'coincident' || c.type === 'pointOnLine' || c.type === 'pointOnCircle') continue;
       const target = this.G(c.l || c.a || c.e || c.p || c.c);
-      if (!target) continue;
+      if (!target || hid.has(target.id)) continue;
       let anchor;
       if (target.type === 'line') { const a = this.P(target.p1), b = this.P(target.p2); anchor = this.scr([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]); }
       else if (target.type === 'point') anchor = this.scr([target.x, target.y]);
@@ -236,9 +266,28 @@ export class SketchDraw {
     ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
     const anchor = this.dimAnchor(c);
     const L = pending ? c.lpAbs : [anchor[0] + (c.lp?.[0] ?? 0), anchor[1] + (c.lp?.[1] ?? 0)];
-    const S = (p) => this.scr(p);
     const val = pending ? measure(this.sk, c) : c.driving === false ? measure(this.sk, c) : c.value;
-    let text = fmt(val, 2);
+    const type = pending ? this.autoType(c) : c.type;
+    const r = this.dimLines(ctx, pending ? { ...c, lpUser: true } : c, L, (p) => this.scr(p), type, fmt(val, 2)); // placing: label stays under the mouse
+    if (!r) return;
+    let { labelAt, text, L: Ld } = r;
+    ctx.font = '12px Segoe UI, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const w = ctx.measureText(text).width + 8;
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.fillRect(labelAt[0] - w / 2, labelAt[1] - 8, w, 16);
+    if (c.driving === false) { ctx.strokeStyle = color; ctx.strokeRect(labelAt[0] - w / 2, labelAt[1] - 8, w, 16); }
+    ctx.fillStyle = color === COL.dim ? '#101010' : color === COL.driven ? '#606060' : color; // label box is always white
+    ctx.fillText(c.driving === false ? `(${text})` : text, labelAt[0], labelAt[1]);
+    if (!pending) this.dimHits.push({ id: c.id, L: Ld, x0: labelAt[0] - w / 2, x1: labelAt[0] + w / 2, y0: labelAt[1] - 9, y1: labelAt[1] + 9 });
+  }
+
+  // Dimension geometry (extension lines, dimension line, arrows, angle arc) in the current stroke/fill colour.
+  // L = label position in sketch coords, S = sketch point → screen. Also used for dimensions shown on the model
+  // (part/picking.js drawFeatureDims) with a light adaptor (G, P, dirOf, dimAnchor). Returns {labelAt, text} or null.
+  dimLines(ctx, c, L0, S, type, txt) {
+    let L = L0;
+    let text = txt;
     const arrow = (tip, from) => {
       const a = Math.atan2(tip[1] - from[1], tip[0] - from[0]);
       ctx.beginPath(); ctx.moveTo(tip[0], tip[1]);
@@ -249,6 +298,15 @@ export class SketchDraw {
     let labelAt = S(L);
     const linear = (p1, p2, dir) => {
       const n = [-dir[1], dir[0]];
+      // keep labels near (0.1.86): a stored label position far from the measured span (geometry moved since it was
+      // placed) is drawn next to it instead; positions the user dragged (c.lpUser) are kept as they are
+      if (!c.lpUser) {
+        const ln = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]), m = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
+        if (Math.hypot(L[0] - m[0], L[1] - m[1]) > 3 * Math.max(ln, 10)) {
+          const sg = (L[0] - m[0]) * n[0] + (L[1] - m[1]) * n[1] < 0 ? -1 : 1, k = Math.max(0.3 * ln, 5);
+          L = [m[0] + n[0] * sg * k, m[1] + n[1] * sg * k];
+        }
+      }
       const off = (L[0] - p1[0]) * n[0] + (L[1] - p1[1]) * n[1];
       const q1 = [p1[0] + n[0] * off, p1[1] + n[1] * off];
       const q2 = [p2[0] + (n[0] * ((L[0] - p2[0]) * n[0] + (L[1] - p2[1]) * n[1])), p2[1] + (n[1] * ((L[0] - p2[0]) * n[0] + (L[1] - p2[1]) * n[1]))];
@@ -260,10 +318,15 @@ export class SketchDraw {
       const mid = [(q1[0] + q2[0]) / 2, (q1[1] + q2[1]) / 2];
       const along = (L[0] - mid[0]) * dir[0] + (L[1] - mid[1]) * dir[1];
       labelAt = S([mid[0] + dir[0] * along, mid[1] + dir[1] * along]);
+      // label beyond the end of the dimension line: dotted leader from the nearer arrow to the label (0.1.93)
+      const half = Math.hypot(q2[0] - q1[0], q2[1] - q1[1]) / 2;
+      if (Math.abs(along) > half + 1e-9) {
+        const end = along > 0 === ((q2[0] - mid[0]) * dir[0] + (q2[1] - mid[1]) * dir[1] > 0) ? t2 : t1;
+        ctx.save(); ctx.setLineDash([2, 3]); seg(end, labelAt); ctx.restore();
+      }
     };
-    const type = pending ? this.autoType(c) : c.type;
     try {
-      if (type === 'length' || (pending && c.type === 'length' && type === 'length')) {
+      if (type === 'length') {
         const l = this.G(c.l); const a = this.P(l.p1), b = this.P(l.p2);
         linear(a, b, this.dirOf(l));
       } else if (type === 'distance') {
@@ -281,7 +344,8 @@ export class SketchDraw {
         linear(p, pr, dir);
       } else if (type === 'radius' || type === 'diameter') {
         const g = this.G(c.c); const ctr = this.P(g.c);
-        const v = [L[0] - ctr[0], L[1] - ctr[1]]; const d = Math.hypot(v[0], v[1]) || 1;
+        let v = [L[0] - ctr[0], L[1] - ctr[1]]; let d = Math.hypot(v[0], v[1]) || 1;
+        if (!c.lpUser && d > 3 * g.r + 10) { L = [ctr[0] + v[0] / d * g.r * 1.5, ctr[1] + v[1] / d * g.r * 1.5]; v = [L[0] - ctr[0], L[1] - ctr[1]]; d = Math.hypot(v[0], v[1]) || 1; } // keep near
         const u = [v[0] / d, v[1] / d];
         const edge = [ctr[0] + u[0] * g.r, ctr[1] + u[1] * g.r];
         const s0 = type === 'diameter' ? S([ctr[0] - u[0] * g.r, ctr[1] - u[1] * g.r]) : S(ctr);
@@ -312,16 +376,8 @@ export class SketchDraw {
         text += '°';
         labelAt = S(L);
       }
-    } catch { return; }
-    ctx.font = '12px Segoe UI, sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    const w = ctx.measureText(text).width + 8;
-    ctx.fillStyle = 'rgba(255,255,255,0.88)';
-    ctx.fillRect(labelAt[0] - w / 2, labelAt[1] - 8, w, 16);
-    if (c.driving === false) { ctx.strokeStyle = color; ctx.strokeRect(labelAt[0] - w / 2, labelAt[1] - 8, w, 16); }
-    ctx.fillStyle = color === COL.dim ? '#101010' : color === COL.driven ? '#606060' : color; // label box is always white
-    ctx.fillText(c.driving === false ? `(${text})` : text, labelAt[0], labelAt[1]);
-    if (!pending) this.dimHits.push({ id: c.id, x0: labelAt[0] - w / 2, x1: labelAt[0] + w / 2, y0: labelAt[1] - 9, y1: labelAt[1] + 9 });
+    } catch { return null; }
+    return { labelAt, text, L };
   }
 
   drawPreview(ctx) {

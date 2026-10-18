@@ -1,7 +1,7 @@
 // Part: picking, highlights, overlay, double-click feature dims, tree hover
 // Methods are mixed into PartDoc (see part.js); `this` is the PartDoc.
 import * as THREE from 'three';
-import { Viewport } from '../viewport.js';
+import { Viewport, navHeld } from '../viewport.js';
 import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
@@ -13,15 +13,19 @@ import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketc
 import { circleFrom3 } from '../sketch/geom2d.js';
 import { dxfToSketch, sketchToDxf } from '../io/dxf.js';
 import { CloudManager, cloudPanel } from '../pointcloud.js';
+import { driveSize, autoDims, solveStepped } from './drive.js';
+import { drawModelDimLines } from './modeldims.js';
+import { autoKey } from './dimdrag.js';
 import { STD_PLANES, FEATURE_META, metaKey, MATERIALS, newPartDoc, COLORS, makePickData, edgeRef, frameOf, norm, to3, segDist, circle3, edgeAxis } from './part.js';
 
 export class PartPicking {
   // ======================= picking =======================
   bindViewport() {
     const el = this.vp.el;
+    this.bindDimDrag(); // drag dimension labels on the model (dimdrag.js; capture listeners run first)
     el.addEventListener('pointermove', (e) => {
       if (this.sketcher) return;
-      const p = this.pickAt(e);
+      const p = navHeld(e) ? null : this.pickAt(e);
       const key = p?.key || null;
       if (key !== (this.hover?.key || null)) {
         this.hover = p;
@@ -59,10 +63,16 @@ export class PartPicking {
   }
 
   // dimension label (shown on the model) under the mouse
+  // Label boxes are kept per view (pane): every pane draws the labels at its own screen positions; ≤ 0.1.79 one list
+  // was overwritten by each pane, so only the last-drawn view had clickable labels.
+  get _dimHits() { return this.dimHitsOf(this.vp.viewset?.active); } // active view's labels (tests, older code)
+  dimHitsOf(pane) { return this._dimHitsBy?.get(pane || this.vp.pane || this.vp) || []; }
   dimLabelAt(e) {
-    if (!this._dimHits?.length) return null;
-    const r = this.vp.el.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-    return this._dimHits.find((d) => x >= d.x0 - 2 && x <= d.x1 + 2 && y >= d.y0 - 2 && y <= d.y1 + 2) || null;
+    const pane = this.vp.viewset?.paneOf(e.target) || this.vp.pane;
+    const hits = this.dimHitsOf(pane);
+    if (!hits.length) return null;
+    const r = (pane?.el || this.vp.el).getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    return hits.find((d) => x >= d.x0 - 2 && x <= d.x1 + 2 && y >= d.y0 - 2 && y <= d.y1 + 2) || null;
   }
   clickItem(p, additive) {
     const pm = this.app.pm.current;
@@ -186,7 +196,7 @@ export class PartPicking {
     for (const it of this.hlEdges || []) {
       const ed = it.edge || this.pick?.mesh.edges.find((e) => e.id === it.id);
       if (!ed) continue;
-      ctx.strokeStyle = it.col === COLORS.hover ? '#ff9a1a' : '#1e90ff';
+      ctx.strokeStyle = it.col === COLORS.hover ? opt('hoverColor') : opt('selColor');
       ctx.lineWidth = 3.2;
       ctx.beginPath();
       for (let i = 0; i < ed.pts.length; i += 3) {
@@ -225,7 +235,7 @@ export class PartPicking {
   }
   showFeatureDims(id) {
     this.dimFeat = id && !this.sketcher ? id : null;
-    this._dimHits = [];
+    this._dimHitsBy = new WeakMap();
     if (this.dimFeat) { const f = this.F(this.dimFeat); this.app.setStatus(`${f?.name}: double-click a dimension to change it`); }
     this.updateSketchDisplay(); this.vp.requestRender();
   }
@@ -257,26 +267,53 @@ export class PartPicking {
         const a = anchor(c); if (!a) continue;
         const val = c.driving === false ? measureDim(sk, c) : c.value;
         const pre = c.type === 'diameter' ? 'Ø' : c.type === 'radius' ? 'R' : '';
-        out.push({ text: pre + fmt(val, 2) + (c.type === 'angle' ? '°' : ''), value: val, pos3: to3(fr, [a[0] + (c.lp?.[0] ?? 0), a[1] + (c.lp?.[1] ?? 0)]), kind: 'cons', sk: sk.id, cons: c.id, driven: c.driving === false });
+        out.push({ text: pre + fmt(val, 2) + (c.type === 'angle' ? '°' : ''), value: val, pos3: to3(fr, [a[0] + (c.lp?.[0] ?? 0), a[1] + (c.lp?.[1] ?? 0)]), kind: 'cons', sk: sk.id, cons: c.id, driven: c.driving === false, c, fr, skRef: sk });
       }
-      if (opt('autoDims')) for (const d of autoDims(sk)) out.push({ ...d, pos3: to3(fr, d.at), kind: 'auto', sk: sk.id });
+      if (opt('autoDims')) for (const d0 of autoDims(sk)) {
+        const lpU = sk.autoLp?.[autoKey(d0.cons)]; // dragged by the user (dimdrag.js)
+        const d = lpU ? { ...d0, lp: lpU, at: [d0.at[0] - d0.lp[0] + lpU[0], d0.at[1] - d0.lp[1] + lpU[1]] } : d0;
+        out.push({ ...d, pos3: to3(fr, d.at), kind: 'auto', sk: sk.id, c: { ...d.cons, lp: d.lp, lpUser: !!lpU }, fr, skRef: sk });
+      }
+      // depth dimension line: from the sketch plane along the extrude direction, beside the profile
+      if (f.type === 'extrude' && typeof f.depth === 'number' && (!f.end || f.end === 'blind' || f.end === 'midplane') && pts.length) {
+        // profile points only (ends of non-construction lines / arcs), not construction or converted reference lines
+        const ids = new Set(); for (const g of sk.geo) if (!g.construction && (g.type === 'line' || g.type === 'arc')) [g.p1, g.p2, g.s, g.e].forEach((x) => x && ids.add(x));
+        const pp = pts.filter((p) => ids.has(p.id)).length ? pts.filter((p) => ids.has(p.id)) : pts;
+        let side = pp[0], bd = -1; const c2 = [pp.reduce((a, p) => a + p.x, 0) / pp.length, pp.reduce((a, p) => a + p.y, 0) / pp.length];
+        for (const p of pp) { const d2 = (p.x - c2[0]) ** 2 + (p.y - c2[1]) ** 2; if (d2 > bd) { bd = d2; side = p; } }
+        let dir = fr.n.slice(); if (f.reverse) dir = dir.map((x) => -x); if (f.op === 'cut' && f.end !== 'midplane') dir = dir.map((x) => -x);
+        const at = Array.isArray(f.depthAt) ? f.depthAt : [side.x, side.y]; // f.depthAt = dragged by the user
+        const p0 = to3(fr, at), k0 = f.end === 'midplane' ? -0.5 : 0, k1 = f.end === 'midplane' ? 0.5 : 1;
+        // plane through the middle of the depth, parallel to the sketch: dragging the depth label moves the line on it
+        const om = fr.o.map((x, i) => x + dir[i] * f.depth * (k0 + k1) / 2);
+        this._depthLine = { a: p0.map((x, i) => x + dir[i] * f.depth * k0), b: p0.map((x, i) => x + dir[i] * f.depth * k1), fr: { ...fr, o: om } };
+      } else this._depthLine = null;
     }
     if (f.type !== 'sketch') {
       const P = [['depth', 'Depth', ' mm'], ['angle', 'Angle', '°'], ['radius', 'Radius', ' mm'], ['distance', 'Distance', ' mm'], ['thickness', 'Thickness', ' mm'], ['spacing', 'Spacing', ' mm'], ['count', 'Count', '']];
       const base = ctr || this.dimFaceC || [0, 0, 0];
       let k = 0;
-      for (const [key, lab, u] of P) if (typeof f[key] === 'number' && !(f.type === 'extrude' && f.end && f.end !== 'blind' && key === 'depth')) out.push({ text: `${lab} ${fmt(f[key], 2)}${u}`, value: f[key], pos3: base, dy: 22 * k++, kind: 'feat', key });
+      for (const [key, lab, u] of P) if (typeof f[key] === 'number' && !(f.type === 'extrude' && f.end && f.end !== 'blind' && key === 'depth')) {
+        const line = key === 'depth' && this._depthLine && sk ? this._depthLine : null;
+        out.push({ text: `${lab} ${fmt(f[key], 2)}${u}`, value: f[key], pos3: line ? line.b : base, dy: line ? 0 : 22 * k++, kind: 'feat', key, ...(line ? { line, lineFr: line.fr } : {}) });
+      }
     }
     return out;
   }
   drawFeatureDims(ctx) {
-    this._dimHits = [];
+    const hits = [];
+    (this._dimHitsBy ||= new WeakMap()).set(this.vp.pane || this.vp, hits);
     if (!this.dimFeat || this.sketcher) return;
     const dark = document.body.classList.contains('dark');
     ctx.font = '13px Segoe UI, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    const lines = opt('modelDimLines');
     for (const d of this.featureDims()) {
-      const s = this.vp.toScreen(d.pos3);
-      const x = s[0] + (d.kind === 'feat' ? 14 : 0), y = s[1] + (d.dy || 0);
+      let s = this.vp.toScreen(d.pos3);
+      // dimension lines like in the sketch (Options > Dimensions); the label then sits on its dimension line
+      const lc = d.kind === 'feat' ? '#c06000' : d.driven ? '#888' : (dark ? '#6fa8ff' : '#1e5fbf');
+      const at = lines && (d.c || d.line) ? drawModelDimLines(ctx, this.vp, d, lc, d.kind === 'auto') : null;
+      if (at) s = at;
+      const x = s[0] + (d.kind === 'feat' && !at ? 14 : 0), y = s[1] + (d.dy || 0);
       const w = ctx.measureText(d.text).width + 10;
       ctx.fillStyle = dark ? 'rgba(30,34,40,0.92)' : 'rgba(255,255,255,0.92)';
       ctx.strokeStyle = d.kind === 'feat' ? '#c06000' : '#1e5fbf'; ctx.lineWidth = 1;
@@ -285,7 +322,7 @@ export class PartPicking {
       ctx.strokeRect(x - w / 2, y - 10, w, 20); ctx.setLineDash([]);
       ctx.fillStyle = d.driven ? '#888' : d.kind === 'feat' ? (dark ? '#ffb060' : '#a04f00') : (dark ? '#8fbfff' : '#1e4fa0');
       ctx.fillText(d.text, x - w / 2 + 5, y);
-      this._dimHits.push({ ...d, x0: x - w / 2, x1: x + w / 2, y0: y - 10, y1: y + 10 });
+      hits.push({ ...d, x0: x - w / 2, x1: x + w / 2, y0: y - 10, y1: y + 10 });
     }
   }
   // double-click a dimension shown on the model: its label becomes an edit box right there (no window).
@@ -320,19 +357,27 @@ export class PartPicking {
       if (num <= 0) { toast('Invalid value', 'error'); this.commit(); return; }
       const sk = this.F(d.sk);
       sk.next = sk.next || 1;
-      const c = { id: 'c' + sk.next++, ...d.cons, value: num, lp: d.lp };
+      const c = { id: 'c' + sk.next++, ...d.cons, value: num, lp: d.lp, ...(sk.autoLp?.[autoKey(d.cons)] ? { lpUser: true } : {}) };
+      if (sk.autoLp) delete sk.autoLp[autoKey(d.cons)];
       sk.cons.push(c);
       const r = solveSketch(sk);
       const bad = (list) => (list || []).some((id) => id === c.id || String(id).startsWith(c.id + '#'));
       if (!r || r.ok === false || bad(r.conflicting) || bad(r.redundant)) {
+        // the size already follows from other dimensions/relations: change the dimension that drives it instead
+        // (the sketch keeps its dimensioning, only that value changes)
         sk.cons.splice(sk.cons.indexOf(c), 1); solveSketch(sk);
-        toast('This size is already fixed by other relations in the sketch, so it cannot be set here. Edit the sketch instead.', 'warn', 5000);
+        const dr = driveSize(sk, { ...d.cons, value: num }, r, { maxStep: opt('sizeStepPct') / 100 });
+        if (!dr.cons && dr.fixed && sk.geo.some((g) => g.onEdge)) { this.applyUpstream(sk, { ...d.cons, value: num }, dr.reason); return; } // follows linked edges: change the sketch that made them
+        if (dr.cons) {
+          const ln = dr.cons.type === 'radius' ? 'R' : dr.cons.type === 'diameter' ? 'Ø' : '';
+          this.app.setStatus(this._statusAfter = `${sk.name}: dimension ${ln}${fmt(dr.old, 3)} → ${ln}${fmt(dr.value, 3)} (it drives this size, now ${fmt(num, 3)})`);
+          try { window.__lithLog?.('DRIVE', sk.name, dr.cons.id, dr.old, '->', dr.value, 'size', num); } catch {}
+        } else toast(dr.reason, 'warn', 6000);
       } else this.app.setStatus(`Dimension ${fmt(num, 3)} added to ${sk.name}`);
     } else {
       const sk = this.F(d.sk), c = sk.cons.find((x) => x.id === d.cons);
-      const old = c.value; c.value = num;
-      const r = solveSketch(sk);
-      if (r && r.ok === false) { c.value = old; solveSketch(sk); toast('The sketch cannot be solved with this value', 'error'); }
+      const r = solveStepped(sk, c, num, { maxStep: opt('sizeStepPct') / 100 }); // big changes in steps
+      if (r && r.ok === false) toast('The sketch cannot be solved with this value', 'error');
     }
     this.commit();
     this.renderTree(); this.updateSketchDisplay();
@@ -353,37 +398,4 @@ export class PartPicking {
 
 }
 
-// Sizes of a sketch that have no dimension yet (shown dashed on the model, editable like real ones; typing a value
-// adds the dimension). Lines without a length/distance dimension (a parallel line of the same length that already
-// shows a size is skipped, so a rectangle gets one width + one height), circles (Ø) and arcs (R) without one.
-export function autoDims(sk) {
-  const G = new Map(sk.geo.map((g) => [g.id, g])), P = (id) => { const p = G.get(id); return p ? [p.x, p.y] : null; };
-  const cons = (sk.cons || []).filter((c) => DIM_TYPES.has(c.type));
-  const pts = sk.geo.filter((g) => g.type === 'point');
-  const ctr = pts.length ? [pts.reduce((a, p) => a + p.x, 0) / pts.length, pts.reduce((a, p) => a + p.y, 0) / pts.length] : [0, 0];
-  const lines = sk.geo.filter((g) => g.type === 'line' && !g.construction).map((g) => {
-    const a = P(g.p1), b = P(g.p2); if (!a || !b) return null;
-    const L = Math.hypot(b[0] - a[0], b[1] - a[1]); if (L < 1e-6) return null;
-    return { g, a, b, L, u: [(b[0] - a[0]) / L, (b[1] - a[1]) / L] };
-  }).filter(Boolean);
-  const same = (x, y) => Math.abs(x.u[0] * y.u[1] - x.u[1] * y.u[0]) < 0.02 && Math.abs(x.L - y.L) < 1e-4 * Math.max(1, x.L);
-  const dimmed = (ln) => cons.some((c) => (c.type === 'length' && c.l === ln.g.id) || (['distance', 'hdist', 'vdist'].includes(c.type) && ((c.a === ln.g.p1 && c.b === ln.g.p2) || (c.a === ln.g.p2 && c.b === ln.g.p1))));
-  const shown = lines.filter(dimmed), size = Math.max(1, ...lines.map((l) => l.L)), off = size * 0.06;
-  const out = [];
-  for (const ln of lines) {
-    if (dimmed(ln) || shown.some((x) => same(x, ln))) continue;
-    shown.push(ln);
-    const m = [(ln.a[0] + ln.b[0]) / 2, (ln.a[1] + ln.b[1]) / 2];
-    let n = [-ln.u[1], ln.u[0]]; if ((m[0] - ctr[0]) * n[0] + (m[1] - ctr[1]) * n[1] < 0) n = [-n[0], -n[1]];
-    const lp = [n[0] * off, n[1] * off];
-    out.push({ text: fmt(ln.L, 2), value: ln.L, at: [m[0] + lp[0], m[1] + lp[1]], lp, cons: { type: 'length', l: ln.g.id } });
-  }
-  for (const g of sk.geo) {
-    if ((g.type !== 'circle' && g.type !== 'arc') || g.construction) continue;
-    if (cons.some((c) => (c.type === 'radius' || c.type === 'diameter') && c.c === g.id)) continue;
-    const c = P(g.c); if (!c || !(g.r > 0)) continue;
-    const full = g.type === 'circle', v = full ? 2 * g.r : g.r, lp = [g.r * 0.7, g.r * 0.7];
-    out.push({ text: (full ? 'Ø' : 'R') + fmt(v, 2), value: v, at: [c[0] + lp[0], c[1] + lp[1]], lp, cons: { type: full ? 'diameter' : 'radius', c: g.id } });
-  }
-  return out;
-}
+export { driveSize, autoDims } from './drive.js';

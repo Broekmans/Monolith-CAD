@@ -77,6 +77,23 @@ console.log('6a cut dialog, sketch offered:', await win.evaluate(() => { const d
 await win.evaluate(() => { const i = lithApp.doc.app.pm.current.inputs.reverse; if (i && !i.checked) i.click(); }); await idle(); await W(300);
 console.log('6b cut ghost:', JSON.stringify(await ghost()));
 await shot('ghost-cut');
+// 0.1.82: Through All cut — the model shows the real result (hole), the ghost is only the removed volume, yellow
+await win.evaluate(() => { const pm = lithApp.doc.app.pm.current, sel = pm.inputs.end; if (sel) { sel.value = 'throughAll'; sel.dispatchEvent(new Event('change')); } }); await idle(); await W(400);
+console.log('6d through all cut:', JSON.stringify(await win.evaluate(() => { const d = lithApp.doc, g = d.ghost;
+  const bb = (pos) => { let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; for (let i = 0; i < pos.length; i++) { lo[i % 3] = Math.min(lo[i % 3], pos[i]); hi[i % 3] = Math.max(hi[i % 3], pos[i]); } return hi.map((x, i) => +(x - lo[i]).toFixed(1)); };
+  return { op: g?.op, toolBox: g?.tool && bb(g.tool.positions), bodyBox: bb(d.mesh.positions), bodyIsResult: d.mesh === g?.result, faces: d.mesh.faces.length,
+    col: d.ghostGroup.children.find((o) => o.isMesh)?.material.color.getHexString() }; })));
+await win.keyboard.press('Escape'); await idle();
+const hole = await win.evaluate(async () => { const d = lithApp.doc, sk1 = d.doc.features.find((x) => x.type === 'sketch');
+  const sk = { id: 'fH', type: 'sketch', name: 'SketchH', plane: sk1.plane, planeName: sk1.planeName, next: 5, geo: [{ id: 'O', type: 'point', x: 0, y: 0, fixed: true, origin: true }, { id: 'g1', type: 'point', x: 10, y: 5 }, { id: 'g2', type: 'circle', c: 'g1', r: 10 }], cons: [] };
+  const cut = { id: 'fC', type: 'extrude', name: 'Cut-H', op: 'cut', sketch: 'fH', end: 'throughAll', depth: 10, reverse: false, bothSides: true };
+  const res = await d.regen([...d.doc.features, sk, cut], { ghost: true }); const g = d.ghost;
+  const bb = (pos) => { let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9]; for (let i = 0; i < pos.length; i++) { lo[i % 3] = Math.min(lo[i % 3], pos[i]); hi[i % 3] = Math.max(hi[i % 3], pos[i]); } return hi.map((x, i) => +(x - lo[i]).toFixed(1)); };
+  return { toolBox: g?.tool && bb(g.tool.positions), bodyBox: bb(d.mesh.positions), shownIsResult: d.mesh === res.mesh, faces: d.mesh.faces.length, col: d.ghostGroup.children.find((o) => o.isMesh)?.material.color.getHexString() }; });
+await win.evaluate(() => lithApp.doc.zoomFit?.()); await W(300);
+console.log('6e Ø20 Through All hole ghost (tool = removed volume only, ~20×25×20; model = result with hole):', JSON.stringify(hole));
+await shot('ghost-cut-through');
+await win.evaluate(() => { lithApp.doc.clearGhost(); return lithApp.doc.regen(); }); await idle();
 await win.keyboard.press('Escape'); await idle();
 console.log('6c after cancel: ghost cleared', JSON.stringify(await win.evaluate(() => ({ ghost: lithApp.doc.ghost, objs: lithApp.doc.ghostGroup.children.length }))));
 // middle click (no drag) = Zoom to Fit

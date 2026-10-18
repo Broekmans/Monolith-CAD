@@ -217,11 +217,12 @@ export class App {
     t.doc?.vp?.requestRender?.(); t.doc?.vp3?.requestRender?.();
     t.doc?.onActivate?.();
     t.syncViewportMenu();
+    requestAnimationFrame(() => t.doc?.viewSet?.placeHud()); // view toolbar under the active view's cube
   }
   // Viewport menu (main process) shows the active document's layout + grid
   syncViewportMenu() {
     const d = this.root.active?.doc;
-    api.setViewportMenu(d?.viewSet ? { layout: d.viewSet.layout, grid: d.toggleGrid ? !!d.gridOn : null, multi: d.viewSet.panes.length > 1, max: !!d.viewSet.max } : null);
+    api.setViewportMenu(d?.viewSet ? { layout: d.viewSet.layout, grid: d.toggleGrid ? !!d.gridOn : null, multi: d.viewSet.visible().length > 1 || !!d.viewSet.max, max: !!d.viewSet.max, mins: d.viewSet.minimized().length } : null);
   }
   cycleTab(dir) {
     const app = this.root, list = [app, ...app.tabs];
@@ -372,6 +373,8 @@ export class App {
       case 'reset-views': d?.resetViews?.(); break;
       case 'max-view': { const s = d?.viewSet; if (s) (s.max ? s.restoreViews() : s.maximize()); break; }
       case 'close-view': d?.viewSet?.closePane(); break;
+      case 'min-view': d?.viewSet?.minimize(); break;
+      case 'restore-mins': d?.viewSet?.restoreMinimized(); break;
       case 'doc-grid': if (d?.toggleGrid && d.gridOn !== !!arg) d.toggleGrid(); this.syncViewportMenu(); break;
       case 'ui-scale': this.uiScaleDialog(); break;
       case 'options': this.optionsDialog(); break;

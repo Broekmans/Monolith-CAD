@@ -17,6 +17,7 @@ export const api = {
   logDump: (n, t) => bridge.logDump?.(n, t),
   draftStd: (s) => bridge.draftStd?.(s),
   optionsCfg: (o) => bridge.optionsCfg?.(o),
+  trackOptions: (l) => bridge.trackOptions?.(l),
   log: (lines) => bridge.log?.(lines),
   logCfg: (c) => bridge.logCfg?.(c),
   logDir: () => bridge.logDir?.(),

@@ -126,6 +126,87 @@ await win.evaluate(() => { document.querySelector('.left').style.width = '470px'
 const a1 = await win.evaluate(() => [lithApp.doc.vp.scale, lithApp.doc.vp.width]);
 console.log('20 panel wider: width', a0[1], '→', a1[1], 'scale ratio', (a1[0] / a0[0]).toFixed(3), 'expect', (a0[1] / a1[1]).toFixed(3));
 await win.evaluate(() => { document.querySelector('.left').style.width = ''; }); await W(300);
+// ---- 0.1.78 ----
+await win.evaluate(() => lithApp.onMenu('layout', 'four')); await win.evaluate(() => lithApp.onMenu('reset-views')); await W(600);
+// 21: the cube is drawn where its hit area is (pane buttons push the hit area 24 px down): pixels inside the FRONT face
+const pix = async (i) => {
+  const r = await win.evaluate((i) => { const p = lithApp.doc.viewSet.panes[i]; p.setView('front', false); p.requestRender(); const b = p.viewCube.el.getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height }; }, i);
+  await W(400);
+  const png = (await win.screenshot({ clip: r })).toString('base64');
+  return win.evaluate(async (png) => {
+    const im = new Image(); im.src = 'data:image/png;base64,' + png; await im.decode();
+    const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+    const k = im.width / 104, at = (x, y) => [...g.getImageData(Math.round(x * k), Math.round(y * k), 1, 1).data.slice(0, 3)];
+    return { up: at(52, 32), down: at(52, 72), below: at(52, 100) };
+  }, png);
+};
+console.log('21 cube pixels pane 0 (face ≈ 233,238,245 at up+down):', JSON.stringify(await pix(0)));
+console.log('21 cube pixels pane 3:', JSON.stringify(await pix(3)));
+// real click on the cube's FRONT face of pane 3 in iso view
+await win.evaluate(() => lithApp.doc.viewSet.panes[3].setView('iso', false)); await W(300);
+const fp = await win.evaluate(async () => { const THREE = await import('three').catch(() => null); const p = lithApp.doc.viewSet.panes[3], c = p.viewCube; const v = c.cam.position.clone().set(0, -0.15, 0.5).project(c.cam); const b = c.el.getBoundingClientRect(); return [b.left + (v.x + 1) / 2 * b.width, b.top + (1 - v.y) / 2 * b.height]; }).catch(() => null);
+if (fp) { await win.mouse.move(fp[0], fp[1]); await win.mouse.down(); await win.mouse.up(); await W(900); }
+console.log('21 click FRONT on pane 3 cube → dir', (await info()).dirs[3]);
+// 22: heads-up toolbar under the active pane's cube
+const hud = async () => win.evaluate(() => { const s = lithApp.doc.viewSet, h = document.querySelector('.headsup').getBoundingClientRect(), a = s.active.viewCube.arrows.getBoundingClientRect(), r = s.active.el.getBoundingClientRect(); return { active: s.panes.indexOf(s.active), below: Math.round(h.top - a.bottom), rightGap: Math.round(r.right - h.right), insidePane: h.left >= r.left && h.right <= r.right }; });
+console.log('22 hud:', JSON.stringify(await hud()));
+const [x0b, y0b, w0b, h0b] = await rect(0);
+await win.mouse.click(x0b + 60, y0b + h0b - 40); await W(300);
+console.log('22 hud after clicking pane 0:', JSON.stringify(await hud()));
+// 23: minimize pane 1 (button) → dock tab, then back in its place
+const cols = () => win.evaluate(() => JSON.stringify(lithApp.doc.viewSet.cols.map((c) => c.rows.map((r) => lithApp.doc.viewSet.panes.indexOf(r.pane)))));
+const c0 = await cols();
+await win.locator('.viewport').nth(1).hover(); await win.evaluate(() => lithApp.doc.viewSet.panes[1]._vsBtns.querySelector('.vs-min').click()); await W(400);
+console.log('23 minimized 1:', await cols(), 'tabs', JSON.stringify(await win.locator('.vs-tab').allTextContents()), 'shown', await win.evaluate(() => lithApp.doc.viewSet.visible().length));
+await win.locator('.vs-tab').first().click(); await W(400);
+console.log('23 restored:', await cols(), 'same as before', (await cols()) === c0, 'tabs', await win.locator('.vs-tab').count());
+// minimize pane 0 → it swaps with another pane (pane 0 stays on screen), view kept in the tab
+const d0 = (await info()).dirs[0];
+await win.evaluate(() => lithApp.doc.viewSet.minimize(lithApp.doc.viewSet.panes[0])); await W(400);
+const mi = await win.evaluate(() => { const s = lithApp.doc.viewSet; const m = s.minimized()[0]; return { idx: s.panes.indexOf(m), p0shown: s.panes[0].el.style.display !== 'none', dir: m.viewDir().toArray().map((v) => Math.round(v * 100) / 100).join() }; });
+console.log('23 minimize pane 0:', JSON.stringify(mi), 'kept view', mi.dir === d0, 'tab', JSON.stringify(await win.locator('.vs-tab').allTextContents()));
+console.log('23 menu items:', JSON.stringify(await win.evaluate(() => lithApp.doc.viewSet.menuItems().filter((x) => x.label).map((x) => x.label))));
+// 24: save / restore with a minimized view
+const s3 = await win.evaluate(() => { lithApp.doc.beforeSave(); return lithApp.doc.doc.viewLayout; });
+await win.evaluate(() => lithApp.onMenu('layout', 'single')); await W(300);
+await win.evaluate((s) => lithApp.doc.viewSet.restore(s), s3); await W(400);
+console.log('24 restored with min:', JSON.stringify(s3.min), '→ tabs', await win.locator('.vs-tab').count(), 'shown', await win.evaluate(() => lithApp.doc.viewSet.visible().length));
+await win.evaluate(() => lithApp.onMenu('restore-mins')); await W(400);
+console.log('24 Restore Minimized Views:', await cols(), 'tabs', await win.locator('.vs-tab').count());
+// 25: no face highlight while the middle button is held
+await win.evaluate(() => lithApp.onMenu('layout', 'single')); await win.evaluate(() => lithApp.doc.zoomFit()); await W(500);
+const [xs, ys, ws, hs] = await rect(0);
+const fpt = await win.evaluate(([x0, y0, w, h]) => { for (let j = 1; j < 20; j++) for (let i = 1; i < 20; i++) { const x = x0 + w * i / 20, y = y0 + h * j / 20; if (lithApp.doc.pickAt({ clientX: x, clientY: y })?.kind === 'face') return [x, y]; } return null; }, [xs, ys, ws, hs]);
+await win.mouse.move(fpt[0] - 3, fpt[1]); await win.mouse.move(fpt[0], fpt[1], { steps: 2 }); await W(200);
+const hov0 = await win.evaluate(() => lithApp.doc.hover?.kind || null);
+await win.mouse.down({ button: 'middle' }); await win.mouse.move(fpt[0] + 4, fpt[1] + 3, { steps: 5 }); await W(200);
+const hov1 = await win.evaluate(() => lithApp.doc.hover?.kind || null);
+await win.mouse.up({ button: 'middle' }); await W(200);
+console.log('25 hover plain:', hov0, '| while middle-drag:', hov1);
+// ---- 0.1.79 ----
+// 26: view cube size follows the view: small panes → minimum, maximized → maximum (or % of the view)
+await win.evaluate(() => lithApp.onMenu('layout', 'four')); await W(500);
+const cubeInfo = () => win.evaluate(() => lithApp.doc.viewSet.panes.map((p) => [p.viewCube.S, p.viewCube.el.offsetWidth, Math.min(p.width, p.height)]));
+console.log('26 four views cube S / DOM / short side:', JSON.stringify(await cubeInfo()));
+await win.evaluate(() => lithApp.doc.viewSet.maximize(lithApp.doc.viewSet.panes[1])); await W(400);
+console.log('26 maximized pane 1:', JSON.stringify((await cubeInfo())[1]));
+await win.evaluate(() => lithApp.doc.viewSet.restoreViews()); await W(300);
+// shrink the bottom row of the right column → small pane: cube at the minimum, toolbar still inside the pane
+await win.evaluate(() => { const s = lithApp.doc.viewSet; s.cols[1].rows[0].h = 0.82; s.cols[1].rows[1].h = 0.18; s.place(); s.setActive(s.panes[3]); }); await W(400);
+console.log('26 small pane 3 cube:', JSON.stringify((await cubeInfo())[3]));
+console.log('26 hud in small pane:', JSON.stringify(await win.evaluate(() => { const s = lithApp.doc.viewSet, hu = document.querySelector('.headsup'), h = hu.getBoundingClientRect(), r = s.active.el.getBoundingClientRect(); return { pos: hu.dataset.pos, inside: h.left >= r.left && h.right <= r.right && h.top >= r.top && h.bottom <= r.bottom }; })));
+// cube picture = hit area also at another size
+console.log('26 pixels pane 0 after resize:', JSON.stringify(await (async () => { const r = await win.evaluate(() => { const p = lithApp.doc.viewSet.panes[0]; p.setView('front', false); const b = p.viewCube.el.getBoundingClientRect(); return { x: b.left, y: b.top, width: b.width, height: b.height }; }); await W(300); const png = (await win.screenshot({ clip: r })).toString('base64'); return win.evaluate(async (png) => { const im = new Image(); im.src = 'data:image/png;base64,' + png; await im.decode(); const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const g = c.getContext('2d'); g.drawImage(im, 0, 0); const at = (fx, fy) => [...g.getImageData(Math.round(fx * im.width), Math.round(fy * im.height), 1, 1).data.slice(0, 3)]; return { up: at(0.5, 0.3), down: at(0.5, 0.7) }; }, png); })()));
+// 27: options change the cube + toolbar live
+await win.evaluate(() => lithApp.applyOptions({ cubeMin: 40, cubePct: 10, hudPos: 'top' })); await W(400);
+console.log('27 cubeMin 40 / 10 %:', JSON.stringify((await cubeInfo()).map((c) => c[0])), 'hud', await win.evaluate(() => document.querySelector('.headsup').dataset.pos));
+await win.evaluate(() => lithApp.applyOptions({ cubeMin: 64, cubePct: 22, hudPos: 'cube', dividerW: 8 })); await W(400);
+console.log('27 divider width 8:', await win.evaluate(() => document.querySelector('.vs-split.v').offsetWidth));
+await win.evaluate(() => lithApp.applyOptions({ dividerW: 4 }));
+// 28: setting changes are recorded (OK in the Options window)
+const tr = await win.evaluate(() => lithApp.trackOptions({ rotateSpeed: 100, cubeMax: 128 }, { rotateSpeed: 150, cubeMax: 128 }));
+console.log('28 tracked keys:', JSON.stringify(tr));
+await win.evaluate(() => lithApp.onMenu('layout', 'four')); await shot('hud');
 await win.evaluate(() => lithApp.onMenu('theme', true)); await win.evaluate(() => lithApp.onMenu('layout', 'four')); await shot('dark');
 await win.evaluate(() => lithApp.onMenu('theme', false));
 console.log('ERRORS:', logs.length ? logs.join('\n') : 'none');

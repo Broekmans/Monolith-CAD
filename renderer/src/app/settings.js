@@ -4,10 +4,10 @@ import { cacheKey, packMesh } from '../meshcache.js';
 import { h, CommandManager, PropertyManager, toast, dialog } from '../ui.js';
 import { icon } from '../icons.js';
 import { api } from '../api.js';
-import { OPTIONS_DEF, OPT_CATS, opt, allOpts, setOpts, setOpt, factory, myDefaults, setMine, hasStored, clean } from './options.js';
+import { OPTIONS_DEF, OPT_CATS, opt, allOpts, setOpts, setOpt, factory, factoryOf, myDefaults, setMine, hasStored, clean } from './options.js';
 import { initActionLog, askLogConsentOnce } from '../actionlog.js';
 import { initSolver } from '../sketch/solver.js';
-import { setSketchTheme } from '../sketch/sketcher.js';
+import { setSketchTheme, applySketchColours } from '../sketch/sketcher.js';
 import { PartDoc, newPartDoc } from '../part/part.js';
 import { PlanDoc, newPlanDoc } from '../plan/plan.js';
 import { AssemblyDoc, newAssemblyDoc, partSaved, partCache } from '../assembly/assembly.js';
@@ -63,7 +63,11 @@ export class AppSettings {
     const before = allOpts(), changed = setOpts(o);
     const keys = changedOnly ? changed : Object.keys(clean(o));
     for (const k of keys) { const d = OPTIONS_DEF.find((x) => x.key === k); if (d?.apply && before[k] !== undefined) d.apply(this, opt(k)); }
-    for (const t of this.root?.tabs || this.tabs || []) { t.doc?.refreshGhost?.(); t.doc?.vp?.requestRender?.(); t.doc?.updateSketchDisplay?.(); }
+    applySketchColours();
+    for (const t of this.root?.tabs || this.tabs || []) {
+      t.doc?.refreshGhost?.(); t.doc?.applyColors?.(); t.doc?.vp?.requestRender?.(); t.doc?.updateSketchDisplay?.();
+      t.doc?.viewSet?.place?.(); // view cube size, divider width, view toolbar position
+    }
     return changed;
   }
 
@@ -84,6 +88,10 @@ export class AppSettings {
       if (d.type === 'bool') { const i = h('input', { type: 'checkbox', checked: v }); i.addEventListener('change', () => set(d.key, i.checked)); i.dataset.key = d.key; return i; }
       if (d.type === 'color') { const i = h('input', { type: 'color', value: v }); i.addEventListener('input', () => set(d.key, i.value)); i.dataset.key = d.key; return i; }
       if (d.type === 'button') return h('button', { class: 'opt-btn', onclick: () => d.run(this) }, d.text);
+      if (d.type === 'select') {
+        const s = h('select', { class: 'opt-sel' }, ...d.choices.map(([c, l]) => h('option', { value: c, selected: c === v }, l)));
+        s.dataset.key = d.key; s.addEventListener('change', () => set(d.key, s.value)); return s;
+      }
       if (d.type === 'info') return h('span', { class: 'opt-info' }, d.text);
       const i = h('input', { type: 'number', value: String(v), min: d.min, max: d.max, step: d.step || 1 });
       i.dataset.key = d.key;
@@ -92,9 +100,27 @@ export class AppSettings {
       i.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } e.stopPropagation(); });
       return h('span', { class: 'opt-num' }, i, h('span', { class: 'unit' }, d.type === 'pct' ? '%' : d.unit || ''));
     };
+    // rows of one category with sub-headings (row.group); a search shows matching rows of every category
+    const search = h('input', { class: 'opt-search', type: 'search', placeholder: 'Search settings…' });
+    search.addEventListener('input', () => show());
+    search.addEventListener('keydown', (e) => e.stopPropagation());
+    const rowsOf = (defs, withCat) => {
+      const out = []; let g = null;
+      for (const d of defs) {
+        const head = withCat ? d.cat + (d.group ? ' · ' + d.group : '') : d.group || null;
+        if (head !== g) { g = head; if (head) out.push(h('div', { class: 'opt-group' }, head)); }
+        const changed = 'def' in d && opt(d.key) !== factoryOf(d.key);
+        out.push(h('div', { class: 'opt-row' + (changed ? ' changed' : ''), title: changed ? 'Changed (factory: ' + factoryOf(d.key) + ')' : '' }, h('label', {}, d.label), control(d)));
+      }
+      return out;
+    };
     const show = () => {
-      list.replaceChildren(...OPT_CATS.map((c) => h('button', { class: 'opt-cat' + (c === cat ? ' on' : ''), onclick: () => { cat = c; try { localStorage.setItem('monolith.optionsCat', c); } catch {} show(); } }, c)));
-      rows.replaceChildren(h('div', { class: 'opt-head' }, cat), ...OPTIONS_DEF.filter((d) => d.cat === cat).map((d) => h('div', { class: 'opt-row' }, h('label', {}, d.label), control(d))));
+      const q = search.value.trim().toLowerCase();
+      list.replaceChildren(search, ...OPT_CATS.map((c) => h('button', { class: 'opt-cat' + (c === cat && !q ? ' on' : ''), onclick: () => { cat = c; search.value = ''; try { localStorage.setItem('monolith.optionsCat', c); } catch {} show(); } }, c)));
+      if (q) {
+        const hits = OPTIONS_DEF.filter((d) => (d.label + ' ' + d.cat + ' ' + (d.group || '') + ' ' + d.key).toLowerCase().includes(q));
+        rows.replaceChildren(h('div', { class: 'opt-head' }, `Search: ${hits.length} setting${hits.length === 1 ? '' : 's'}`), ...rowsOf(hits, true));
+      } else rows.replaceChildren(h('div', { class: 'opt-head' }, cat), ...rowsOf(OPTIONS_DEF.filter((d) => d.cat === cat), false));
     };
     const load = (o, text) => { this.applyOptions(o); show(); msg.textContent = text; };
     const exportJson = async () => {
@@ -122,7 +148,18 @@ export class AppSettings {
     const body = h('div', { class: 'opt-body' }, h('div', { class: 'opt-main' }, list, rows), foot, msg);
     const r = await dialog({ title: 'Options', body, buttons: [{ label: 'Cancel', value: 'cancel' }, { label: 'OK', value: 'ok', primary: true }] });
     if (r !== 'ok' && !closeOptions.forced) this.applyOptions(start); // Cancel / Esc / × : back to the values before
+    else if (r === 'ok') this.trackOptions(start, allOpts());
     closeOptions.forced = false;
+  }
+
+  // Your setting changes (OK in Options): action log line per setting + Logs\option-changes.json summary
+  // (per key: factory value, your value, number of changes, last date). Claude reads it to propose new factory defaults.
+  trackOptions(before, after) {
+    const ch = Object.keys(after).filter((k) => after[k] !== before[k] && !k.startsWith('_'));
+    if (!ch.length) return [];
+    for (const k of ch) { try { window.__lithLog?.('OPTION', k, JSON.stringify(before[k]), '->', JSON.stringify(after[k]), 'factory', JSON.stringify(factoryOf(k))); } catch {} }
+    if (opt('trackOptions')) Promise.resolve(api.trackOptions?.(ch.map((k) => ({ key: k, from: before[k], to: after[k], factory: factoryOf(k), label: OPTIONS_DEF.find((d) => d.key === k)?.label })))).catch(() => {});
+    return ch;
   }
 
   uiScaleDialog() {

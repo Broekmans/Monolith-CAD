@@ -3,6 +3,7 @@
 // height, every 5th line heavier), drawn by one shader quad so it costs nothing; fades towards the view
 // edges and when the plane is seen edge-on. Faces lying on the plane win (polygon offset).
 import * as THREE from 'three';
+import { opt } from './app/options.js';
 
 // minor / major spacing for a view of the given half height (world units)
 export function gridStep(half) {
@@ -18,13 +19,13 @@ const TOP = { o: [0, 0, 0], x: [1, 0, 0], y: [0, 0, -1], n: [0, 1, 0] }, FRONT =
 
 const VS = `varying vec2 vUv; uniform vec3 uO, uX, uY; uniform float uSize; uniform vec2 uC;
 void main() { vUv = uC + position.xy * uSize; vec3 p = uO + uX * vUv.x + uY * vUv.y; gl_Position = projectionMatrix * viewMatrix * vec4(p, 1.0); }`;
-const FS = `varying vec2 vUv; uniform float uMinor, uMajor, uFade, uR; uniform vec2 uC; uniform vec3 uCMin, uCMaj, uCX, uCY;
+const FS = `varying vec2 vUv; uniform float uMinor, uMajor, uFade, uR, uAMin, uAMaj; uniform vec2 uC; uniform vec3 uCMin, uCMaj, uCX, uCY;
 float lineAt(vec2 c, float s, float w) { vec2 g = c / s; vec2 d = abs(fract(g - 0.5) - 0.5) / fwidth(g); return 1.0 - min(min(d.x, d.y) / w, 1.0); }
 void main() {
   float mi = lineAt(vUv, uMinor, 1.0), ma = lineAt(vUv, uMajor, 1.1);
   vec2 aw = abs(vUv) / fwidth(vUv); float ax = 1.0 - min(aw.y / 1.3, 1.0), ay = 1.0 - min(aw.x / 1.3, 1.0);
-  vec3 col = uCMin; float a = mi * 0.6;
-  if (ma > 0.0) { col = mix(col, uCMaj, ma); a = max(a, ma * 0.85); }
+  vec3 col = uCMin; float a = mi * uAMin;
+  if (ma > 0.0) { col = mix(col, uCMaj, ma); a = max(a, ma * uAMaj); }
   if (ax > 0.0) { col = mix(col, uCX, ax); a = max(a, ax); }
   if (ay > 0.0) { col = mix(col, uCY, ay); a = max(a, ay); }
   float r = length(vUv - uC) / uR;
@@ -36,7 +37,7 @@ void main() {
 export class Grid {
   constructor() {
     const u = { uO: { value: new THREE.Vector3() }, uX: { value: new THREE.Vector3() }, uY: { value: new THREE.Vector3() }, uSize: { value: 1 }, uC: { value: new THREE.Vector2() },
-      uMinor: { value: 10 }, uMajor: { value: 50 }, uFade: { value: 1 }, uR: { value: 1 }, uCMin: { value: new THREE.Color() }, uCMaj: { value: new THREE.Color() }, uCX: { value: new THREE.Color() }, uCY: { value: new THREE.Color() } };
+      uMinor: { value: 10 }, uMajor: { value: 50 }, uAMin: { value: 0.6 }, uAMaj: { value: 0.85 }, uFade: { value: 1 }, uR: { value: 1 }, uCMin: { value: new THREE.Color() }, uCMaj: { value: new THREE.Color() }, uCX: { value: new THREE.Color() }, uCY: { value: new THREE.Color() } };
     this.mat = new THREE.ShaderMaterial({ uniforms: u, vertexShader: VS, fragmentShader: FS, transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 8, extensions: { derivatives: true } });
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat);
     this.mesh.frustumCulled = false; this.mesh.raycast = () => {};
@@ -63,7 +64,7 @@ export class Grid {
     const reach = R / Math.max(k, 0.25);
     const [mi, ma] = gridStep(half);
     U.uO.value.copy(o); U.uX.value.copy(X); U.uY.value.copy(Y); U.uC.value.set(cu, cv); U.uSize.value = reach; U.uR.value = reach;
-    U.uMinor.value = mi; U.uMajor.value = ma; U.uFade.value = THREE.MathUtils.smoothstep(k, 0.04, 0.3);
+    U.uMinor.value = mi; U.uMajor.value = ma; U.uAMin.value = opt('gridMinor') / 100; U.uAMaj.value = opt('gridMajor') / 100; U.uFade.value = THREE.MathUtils.smoothstep(k, 0.04, 0.3);
     const C = GRID_COL[document.body.classList.contains('dark') ? 'dark' : 'light'];
     U.uCMin.value.setHex(C.minor); U.uCMaj.value.setHex(C.major); // axis lines in the colour of the world axis they run along (X red, Y green, Z blue)
     const ax = (v) => C.axes[[0, 1, 2].reduce((b, i) => (Math.abs(v[i]) > Math.abs(v[b]) ? i : b), 0)];

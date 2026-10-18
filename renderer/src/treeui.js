@@ -5,7 +5,7 @@ import { icon } from './icons.js';
 
 const CHEVRON = '<svg viewBox="0 0 10 10" width="10" height="10"><path d="M3 1.5L7 5 3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-// o: { icon, label, depth, sel, dim, err, tip, editing, count, twisty (true open / false closed / undefined none),
+// o: { icon, label, depth, sel, dim, err, warn (orange ⚠), tip, editing, count, twisty (true open / false closed / undefined none),
 //      onTwisty, eye (true visible / false hidden / undefined none), onEye, onClick, onDbl, onMenu, onEnter, onLeave, data {k: v} }
 export function treeRow(o) {
   const cls = ['tr-row'];
@@ -22,7 +22,7 @@ export function treeRow(o) {
     h('span', { class: 'ico sm', html: icon(o.icon) }),
     h('span', { class: 'tr-label' }, o.label),
     o.count !== undefined ? h('span', { class: 'tr-count' }, `(${o.count})`) : null,
-    o.err ? h('span', { class: 'tr-err', title: o.err }, '⚠') : null,
+    o.err ? h('span', { class: 'tr-err', title: o.err }, '⚠') : o.warn ? h('span', { class: 'tr-err tr-warn', title: o.warn }, '⚠') : null,
     o.eye !== undefined ? h('button', {
       class: 'tr-eye' + (o.eye ? '' : ' off'), title: o.eye ? 'Hide' : 'Show', html: icon(o.eye ? 'eye' : 'eyeOff'),
       onclick: (e) => { e.stopPropagation(); o.onEye?.(); }, ondblclick: (e) => e.stopPropagation(),

@@ -1,12 +1,10 @@
 # Linux build of MonoLith (secondary platform; Windows stays the main one).
-# Runs by itself when PUBLISH-GITHUB.bat pushes a version tag (v0.1.76 …): builds LibreDWG (static, cached),
+# Started by PUBLISH-GITHUB.bat / BUILD-LINUX.bat (gh workflow run … -f tag=v<ver>): builds LibreDWG (static, cached),
 # packs MonoLith as AppImage + tar.gz, runs the smoke test on the packed app and publishes a SEPARATE release
 # "MonoLith <ver> for Linux" (tag v<ver>-linux, never marked as latest).
 # Manual run: Actions > Linux release > Run workflow (version tag, e.g. v0.1.76).
 name: Linux release
 on:
-  push:
-    tags: ['v*', '!v*-linux']
   workflow_dispatch:
     inputs:
       tag: { description: 'Version tag to build (e.g. v0.1.76)', required: true }
@@ -21,7 +19,7 @@ jobs:
       - name: Version
         id: v
         run: |
-          T="${{ github.event.inputs.tag || github.ref_name }}"
+          T="${{ github.event.inputs.tag }}"
           echo "tag=$T" >> "$GITHUB_OUTPUT"; echo "ver=${T#v}" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with: { ref: '${{ steps.v.outputs.tag }}' }

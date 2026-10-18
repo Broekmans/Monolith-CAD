@@ -5,6 +5,7 @@
 import { sketchCurves, findRegions, arcSweep } from '../shared/profile.mjs';
 import { oc, PR, add, sub, mul, dot, len, norm, planeFrame, to3, P, V, Dir, ptArr, checkValid, unify, transformed, bbox, diag, listEdges, planeOfFace, listFaces } from './core.mjs';
 import { readStepText } from './exchange.mjs';
+import { faceOwners } from './mesh.mjs';
 export * from './core.mjs';
 export * from './mesh.mjs';
 export * from './exchange.mjs';
@@ -225,6 +226,8 @@ function boolCut(a, b) {
   if (!op.IsDone()) throw new Error('Boolean cut failed');
   return unify(op.Shape());
 }
+// feature preview of a cut: only the volume really removed from the body (not the whole Through All tool)
+export function removedVolume(body, tool) { return boolCommon(body, tool); }
 function boolCommon(a, b) {
   const op = new oc.BRepAlgoAPI_Common_3(a, b, PR());
   op.Build(PR());
@@ -244,26 +247,78 @@ function expectedPos(ref, p, bb) {
   }
   return out;
 }
+// second guess (0.1.83): same distance from the nearest side of the bounding box (a 5 mm rim stays 5 mm when the part grows)
+function anchoredPos(ref, p, bb) {
+  if (!ref.bb || !bb) return p;
+  const out = [];
+  for (let k = 0; k < 3; k++) {
+    const lo = p[k] - ref.bb.min[k], hi = ref.bb.max[k] - p[k];
+    out.push(lo <= hi ? bb.min[k] + lo : bb.max[k] - hi);
+  }
+  return out;
+}
 function edgeDir(e) {
   if (e.type !== 'line') return null;
   const a = ptArr(e.adaptor.Value(e.f)), b = ptArr(e.adaptor.Value(e.l));
   return norm(sub(b, a));
 }
-function matchEdges(shape, refs) {
+// Edges with the features that own their faces (`owners` = sorted feature ids joined by '+'), 0.1.83: a fillet / chamfer
+// edge on a pocket that moved far (camera slot 43 mm) is found again as the same edge of that pocket's edge group.
+function edgeGroups(shape, stages, edges) {
+  const own = faceOwners(stages, shape);
+  const fmap = new oc.TopTools_IndexedMapOfShape_1(); oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE, fmap);
+  const anc = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
+  oc.TopExp.MapShapesAndAncestors(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_FACE, anc);
+  for (const e of edges) {
+    const keys = new Set();
+    try {
+      const i = anc.FindIndex(e.edge);
+      if (i > 0) { const l = anc.FindFromIndex(i); if (l.Size() > 0) for (const f of [l.First_1(), l.Last_1()]) { const fi = fmap.FindIndex(f); if (fi > 0 && own[fi - 1]) keys.add(own[fi - 1]); } }
+    } catch { /* no owners */ }
+    e.owners = [...keys].sort().join('+');
+  }
+  return edges;
+}
+const groupOf = (edges, e) => edges.filter((x) => x.owners === e.owners && x.type === e.type);
+const centroid = (list) => mul(list.reduce((a, x) => add(a, x.mid), [0, 0, 0]), 1 / Math.max(1, list.length));
+// ctx (optional) = {stages, info: []}: info[k] = the edge group record for ref k ({owners, off, n}) so the renderer can
+// store it in the reference; a ref with `grp` that is not found near its old position is looked up in its group.
+function matchEdges(shape, refs, ctx = null) {
   const edges = listEdges(shape);
   const bb = bbox(shape);
   const tol = Math.max(0.5, diag(bb) * 0.04);
   const res = [];
-  for (const r of refs) {
-    const exp = expectedPos(r, r.mid, bb);
+  if (ctx) ctx.bb = bb;
+  let grouped = false;
+  const groups = () => { if (!grouped && ctx?.stages) { edgeGroups(shape, ctx.stages, edges); grouped = true; } return grouped; };
+  const record = (k, e) => {
+    if (!ctx || !groups()) return;
+    const g = groupOf(edges, e);
+    ctx.info[k] = { owners: e.owners, off: sub(e.mid, centroid(g)), n: g.length, mid: e.mid, bb: ctx.bb };
+  };
+  for (let k = 0; k < refs.length; k++) {
+    const r = refs[k];
+    const exp = expectedPos(r, r.mid, bb), anc = anchoredPos(r, r.mid, bb);
     let best = null, bd = Infinity;
     for (const e of edges) {
       if (r.type && e.type !== r.type) continue;
       if (r.dir && e.type === 'line') { const d = edgeDir(e); if (d && Math.abs(dot(d, r.dir)) < 0.995) continue; }
-      const d = Math.min(len(sub(e.mid, r.mid)), len(sub(e.mid, exp)));
+      const d = Math.min(len(sub(e.mid, r.mid)), len(sub(e.mid, exp)), len(sub(e.mid, anc)));
       if (d < bd) { bd = d; best = e; }
     }
+    if ((!best || bd > tol) && r.grp && groups()) { // moved far: the same edge of its group (same owning features)
+      const cand = edges.filter((e) => e.owners === r.grp.owners && (!r.type || e.type === r.type));
+      if (cand.length) {
+        const want = add(centroid(cand), r.grp.off);
+        best = null; bd = Infinity;
+        for (const e of cand) {
+          if (r.dir && e.type === 'line') { const d = edgeDir(e); if (d && Math.abs(dot(d, r.dir)) < 0.995) continue; }
+          const d = len(sub(e.mid, want)); if (d < bd) { bd = d; best = e; }
+        }
+      }
+    }
     if (!best || bd > tol) throw new Error('A referenced edge is missing after rebuild - edit the feature and reselect');
+    record(k, best); // always: the reference follows the edge from rebuild to rebuild (0.1.89)
     if (!res.includes(best.edge)) res.push(best.edge);
   }
   return res;
@@ -275,11 +330,11 @@ function matchFaces(shape, refs) {
   const tol = Math.max(0.5, diag(bb) * 0.06);
   const res = [];
   for (const r of refs) {
-    const exp = expectedPos(r, r.c, bb);
+    const exp = expectedPos(r, r.c, bb), anc = anchoredPos(r, r.c, bb);
     let best = null, bd = Infinity;
     for (const f of faces) {
       if (r.n && (!f.plane || dot(norm(r.n), f.plane.normal) < 0.999)) continue;
-      const d = Math.min(len(sub(f.c, r.c)), len(sub(f.c, exp)));
+      const d = Math.min(len(sub(f.c, r.c)), len(sub(f.c, exp)), len(sub(f.c, anc)));
       if (d < bd) { bd = d; best = f; }
     }
     if (!best || bd > tol) throw new Error('A referenced face is missing after rebuild - edit the feature and reselect');
@@ -416,6 +471,7 @@ export function regenerate(features, opts = {}) {
       status.push({ id: f.id, state: 'ok' });
       continue;
     }
+    const refCtx = { stages, info: [] };
     try {
       let tool = null, op = f.op || 'boss';
       switch (f.type) {
@@ -436,7 +492,7 @@ export function regenerate(features, opts = {}) {
         case 'fillet': {
           if (!body) throw new Error('No body to fillet');
           const mk = new oc.BRepFilletAPI_MakeFillet(body, oc.ChFi3d_FilletShape.ChFi3d_Rational);
-          for (const e of matchEdges(body, f.edges || [])) mk.Add_2(Number(f.radius), e);
+          for (const e of matchEdges(body, f.edges || [], refCtx)) mk.Add_2(Number(f.radius), e);
           mk.Build(PR());
           if (!mk.IsDone()) throw new Error('Fillet failed - try a smaller radius');
           body = checkValid(mk.Shape(), 'Fillet');
@@ -445,7 +501,7 @@ export function regenerate(features, opts = {}) {
         case 'chamfer': {
           if (!body) throw new Error('No body to chamfer');
           const mk = new oc.BRepFilletAPI_MakeChamfer(body);
-          for (const e of matchEdges(body, f.edges || [])) mk.Add_2(Number(f.distance), e);
+          for (const e of matchEdges(body, f.edges || [], refCtx)) mk.Add_2(Number(f.distance), e);
           mk.Build(PR());
           if (!mk.IsDone()) throw new Error('Chamfer failed - try a smaller distance');
           body = checkValid(mk.Shape(), 'Chamfer');
@@ -513,13 +569,36 @@ export function regenerate(features, opts = {}) {
       if (cache.size > 200) cache.clear();
       cache.set(key, { body, tool: toolRec });
       if (body) stages.push({ id: f.id, body });
-      status.push({ id: f.id, state: 'ok' });
+      status.push({ id: f.id, state: 'ok', ...(refCtx.info.length ? { refs: refCtx.info } : {}) });
     } catch (err) {
       failed = true;
       status.push({ id: f.id, state: 'error', error: String(err.message || err) });
     }
   }
   return { body, status, stages, tools };
+}
+
+// ---------- linked Convert Entities (On Edge) ----------
+// Model edges of the body just before sketch `index` (exact geometry: line ends, circle centre / radius / axis) and the
+// sketch's resolved plane (it follows its face). The renderer moves linked converted geometry onto these edges.
+export function edgeInfo(shape) {
+  if (!shape) return [];
+  return listEdges(shape).map((e) => {
+    const a = ptArr(e.adaptor.Value(e.f)), b = ptArr(e.adaptor.Value(e.l));
+    const o = { type: e.type, mid: e.mid, a, b };
+    if (e.type === 'circle') {
+      try {
+        const c = e.adaptor.Circle(), ax = c.Axis().Direction();
+        o.c = ptArr(c.Location()); o.r = c.Radius(); o.n = [ax.X(), ax.Y(), ax.Z()]; o.closed = Math.abs(e.l - e.f) > 2 * Math.PI - 1e-6;
+      } catch { o.type = 'curve'; }
+    }
+    return o;
+  });
+}
+export function linkBase(features, index) {
+  const r = regenerate(features, { upTo: index + 1 });
+  const st = r.status[index];
+  return { plane: st?.plane || null, warn: st?.state === 'warn' ? st.error : null, bbox: r.body ? bbox(r.body) : null, edges: edgeInfo(r.body) };
 }
 
 // ---------- plan (architecture) model ----------

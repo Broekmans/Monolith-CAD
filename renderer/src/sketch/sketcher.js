@@ -6,6 +6,7 @@ import { dist, projectOnSegment, angleInArc, normAng, lineLine, lineCircle, circ
 import { sampleCurve, sketchCurves } from '../../../shared/profile.mjs';
 import { h, fmt, modifyBox, toast } from '../ui.js';
 import { icon } from '../icons.js';
+import { opt } from '../app/options.js';
 import { listFonts, loadFont, textGeometry, preferredFont } from './fonts.js';
 import { textLoops } from '../../../shared/profile.mjs';
 import { SketchTools } from './tools.js';
@@ -26,7 +27,9 @@ export const COL_LIGHT = { ...COL };
 export const COL_DARK = { ...COL, origin: '#ff5050' };
 // Dark mode, sketch NOT lying on a part face (empty plane on the dark background): light colours.
 export const COL_DARK_FREE = { defined: '#eef2f8', under: '#7fa8ff', over: '#ff5a5a', construction: '#98a8bf', dim: '#e8ecf2', driven: '#a8a8a8' };
-export function setSketchTheme(dark) { Object.assign(COL, dark ? COL_DARK : COL_LIGHT); }
+export function setSketchTheme(dark) { Object.assign(COL, dark ? COL_DARK : COL_LIGHT); applySketchColours(); }
+// selection / hover / preview colours from Options > Colours
+export function applySketchColours() { COL.sel = opt('skSel'); COL.hover = opt('skHover'); COL.preview = opt('skHover'); }
 
 export const SKETCH_TOOLS = [
   { id: 'line', label: 'Line', icon: 'line', key: 'L' },
@@ -62,7 +65,10 @@ export const REL_DEFS = {
   collinear: { label: 'Collinear', icon: 'collinear', glyph: '/' },
   symmetric: { label: 'Symmetric', icon: 'symmetric', glyph: '⇹' },
   fix: { label: 'Fix', icon: 'fix', glyph: '⚓' },
+  onEdge: { label: 'On Edge', icon: 'fix', glyph: '⊏' },
 };
+// relation shown in lists / glyphs: a Fix made by Convert Entities that is linked to the model reads "On Edge"
+export const relDef = (c) => (c.type === 'fix' && c.onEdge ? REL_DEFS.onEdge : REL_DEFS[c.type]);
 
 export function newSketch(id, name, plane, planeName) {
   return { id, type: 'sketch', name, plane, planeName, geo: [{ id: 'O', type: 'point', x: 0, y: 0, fixed: true, origin: true }], cons: [], next: 1 };
@@ -164,11 +170,21 @@ export class Sketcher {
   scr(p) { return this.vp.toScreen(this.to3(p)); }
   get px() { return this.vp.scale; }
 
+  // Model references made by clicking a model edge / corner (refKey): invisible links, not sketch entities to pick
+  // (0.1.92). Their end / centre points are hidden too.
+  hiddenIds() {
+    const s = new Set();
+    for (const g of this.sk.geo) if (g.refKey) { s.add(g.id); for (const k of ['p1', 'p2', 'c', 's', 'e']) if (g[k]) s.add(g[k]); }
+    return s;
+  }
   pick(p, sx, sy, { points = true, curves = true, dims = true, exclude = new Set() } = {}) {
-    const thr = 7 * this.px;
+    const thr = (opt('skPickPx') - 1) * this.px;
+    const hid = this.hiddenIds();
+    if (hid.size) exclude = new Set([...exclude, ...hid]);
     if (dims) {
-      for (const d of this.dimHits) if (sx >= d.x0 && sx <= d.x1 && sy >= d.y0 && sy <= d.y1) return { kind: 'cons', id: d.id };
-      for (const d of this.glyphHits) if (sx >= d.x0 && sx <= d.x1 && sy >= d.y0 && sy <= d.y1) return { kind: 'cons', id: d.id };
+      const H = this._hitsBy?.get(this.vp.pane || this.vp); // hit boxes of the pane under the mouse (several views)
+      for (const d of H?.dims || this.dimHits) if (sx >= d.x0 && sx <= d.x1 && sy >= d.y0 && sy <= d.y1) return { kind: 'cons', id: d.id };
+      for (const d of H?.glyphs || this.glyphHits) if (sx >= d.x0 && sx <= d.x1 && sy >= d.y0 && sy <= d.y1) return { kind: 'cons', id: d.id };
     }
     if (points) {
       let best = null, bd = thr;
@@ -207,7 +223,7 @@ export class Sketcher {
 
   // Inference snapping while drawing: returns point and the relation to add.
   snap(p, { from = null, exclude = new Set() } = {}) {
-    const thr = 8 * this.px;
+    const thr = opt('skPickPx') * this.px;
     // existing points
     let best = null, bd = thr;
     for (const g of this.sk.geo) {
@@ -252,7 +268,7 @@ export class Sketcher {
     if (from) {
       const dx = p[0] - from[0], dy = p[1] - from[1];
       const ang = Math.abs(Math.atan2(dy, dx) * 180 / Math.PI);
-      if (Math.hypot(dx, dy) > 4 * this.px) {
+      if (Math.hypot(dx, dy) > opt('skDragPx') * this.px) {
         if (ang < 4 || ang > 176) return { pt: [p[0], from[1]], hv: 'h' };
         if (Math.abs(ang - 90) < 4) return { pt: [from[0], p[1]], hv: 'v' };
       }
@@ -271,6 +287,15 @@ export class Sketcher {
       const all = mesh.edges.map((e) => { const q = []; for (let i = 0; i + 2 < e.pts.length; i += 3) q.push(loc(e.pts[i], e.pts[i + 1], e.pts[i + 2])); return { e, q }; }).filter((x) => x.q.length >= 2);
       const inPlane = all.filter((x) => x.q.every((q) => Math.abs(q[2]) < 1e-3));
       const use = inPlane.length ? inPlane : all;
+      // every model edge projected on the sketch plane, for picking an edge to dimension / relate to (0.1.93: also
+      // edges off the plane, e.g. the side of a filleted rim; in-plane and front-most edges win when they overlap)
+      geo.pickEdges = [];
+      for (const { e, q } of all) {
+        const pts = q.map((v) => [v[0], v[1]]);
+        let len = 0; for (let i = 1; i < pts.length; i++) len += dist(pts[i - 1], pts[i]);
+        if (len < 1e-6) continue;
+        geo.pickEdges.push({ e, pts, inPlane: q.every((v) => Math.abs(v[2]) < 1e-3), depth: q.reduce((a, v) => a + v[2], 0) / q.length });
+      }
       const key = (v) => Math.round(v[0] * 1e4) + ',' + Math.round(v[1] * 1e4);
       const seen = new Set();
       const addV = (arr, v) => { if (!seen.has(key(v) + arr.tag)) { seen.add(key(v) + arr.tag); arr.push(v); } };
@@ -297,22 +322,49 @@ export class Sketcher {
   }
   // Select-mode click on a model corner or edge: create (or reuse) fixed construction reference
   // geometry for it and add it to the selection, so relations like Coincident / Midpoint can be added.
+  // is there a model corner / edge under p (without making reference geometry)? Smart Dimension's second pick
+  modelSnapHit(p) { return !!this.modelHoverAt(p, 1); }
+  // model corner ({v}) or edge ({pts}) under p, same distances as modelRefAt (× f); used for the hover highlight
+  modelHoverAt(p, f = 1) {
+    const M = this.modelSnapGeo(), thr = opt('skPickPx') * this.px * f;
+    let bv = null, bd = thr;
+    for (const v of M.verts) { const d = dist(p, v); if (d < bd) { bd = d; bv = v; } }
+    if (bv) return { v: bv };
+    const be = this.pickModelEdge(p, thr * 0.8);
+    return be ? { pts: be.pts } : null;
+  }
+  // nearest model edge to p within thr (in-plane edges preferred, then the one nearest the viewer)
+  pickModelEdge(p, thr) {
+    const M = this.modelSnapGeo(), list = M.pickEdges || M.edges;
+    let be = null, bs = Infinity;
+    for (const ed of list) {
+      let d = Infinity; for (let i = 1; i < ed.pts.length; i++) d = Math.min(d, dist(p, projectOnSegment(p, ed.pts[i - 1], ed.pts[i]).pt));
+      if (d >= thr) continue;
+      const score = d + (ed.inPlane === false ? 0.3 * thr : 0) - (ed.depth || 0) * 1e-6;
+      if (score < bs) { bs = score; be = ed; }
+    }
+    return be;
+  }
   modelRefAt(p, e) {
-    const M = this.modelSnapGeo(), thr = 8 * this.px;
+    const M = this.modelSnapGeo(), thr = opt('skPickPx') * this.px;
     const key = (v) => Math.round(v[0] * 1e3) + ',' + Math.round(v[1] * 1e3);
     let id = null;
     let bv = null, bd = thr;
     for (const v of M.verts) { const d = dist(p, v); if (d < bd) { bd = d; bv = v; } }
     if (bv) {
       const k = 'v:' + key(bv);
-      id = this.sk.geo.find((g) => g.refKey === k)?.id;
-      if (!id) { this.pushUndo(); id = this.addPoint(bv[0], bv[1], { refKey: k }); this.addCons({ type: 'fix', e: id }); }
+      id = this.sk.geo.find((g) => g.refKey === k || (g.refKey && g.type === 'point' && dist([g.x, g.y], bv) < 1e-4))?.id;
+      if (!id) { this.pushUndo(); id = this.addPoint(bv[0], bv[1], { refKey: k }); this.fixOnModel(id, bv); }
     } else {
-      let be = null; bd = thr * 0.8;
-      for (const ed of M.edges) for (let i = 1; i < ed.pts.length; i++) { const d = dist(p, projectOnSegment(p, ed.pts[i - 1], ed.pts[i]).pt); if (d < bd) { bd = d; be = ed; } }
+      const be = this.pickModelEdge(p, thr * 0.8);
       if (!be) return false;
       const k = 'e:' + key(be.pts[0]) + ':' + key(be.pts[be.pts.length - 1]) + ':' + key(be.pts[Math.floor(be.pts.length / 2)]);
-      id = this.sk.geo.find((g) => g.refKey === k)?.id;
+      // an existing reference on this edge (its key may be stale after the model moved): reuse it
+      const onEdge = (q) => { for (let i = 1; i < be.pts.length; i++) if (dist(q, projectOnSegment(q, be.pts[i - 1], be.pts[i]).pt) < 1e-4 * Math.max(1, this.px * 100)) return true; return false; };
+      const P2 = (pid) => { const g = this.sk.geo.find((x) => x.id === pid); return g ? [g.x, g.y] : null; };
+      id = this.sk.geo.find((g) => g.refKey === k)?.id
+        || this.sk.geo.find((g) => g.refKey && g.type === 'line' && be.e.type === 'line' && onEdge(P2(g.p1)) && onEdge(P2(g.p2)))?.id
+        || this.sk.geo.find((g) => g.refKey && (g.type === 'circle' || g.type === 'arc') && be.e.type === 'circle' && onEdge(P2(g.s) || [P2(g.c)[0] + g.r, P2(g.c)[1]]))?.id;
       if (!id) {
         const before = new Set(this.sk.geo.map((g) => g.id));
         this.convertEdge(be.e, { construction: true });
@@ -325,13 +377,23 @@ export class Sketcher {
     const sk = 'geo:' + id;
     this.sel.add(sk); // a model reference always adds to the current selection
     this.resolve(true);
-    return true;
+    return id; // the reference geometry (Smart Dimension uses it)
+  }
+  // Fix a point on a model corner; linked (On Edge) so it follows the corner when the model changes (Options > Sketch)
+  fixOnModel(pid, p2) {
+    const g = this.sk.geo.find((x) => x.id === pid), mesh = this.host?.mesh;
+    if (g && p2 && mesh && opt('linkConvert')) { g.onEdge = { type: 'vertex', p: this.to3(p2), bb: mesh.bbox }; this.addCons({ type: 'fix', e: pid, onEdge: true }); }
+    else this.addCons({ type: 'fix', e: pid });
   }
   // Apply the snap relation to a newly created point.
   applySnap(pid, snap) {
     if (!snap?.ref) return;
     const r = snap.ref;
-    if (r.kind === 'model') { if (r.what !== 'edge') this.addCons({ type: 'fix', e: pid }); return; }
+    if (r.kind === 'model') {
+      if (r.what === 'vertex') { const p = this.sk.geo.find((g) => g.id === pid); this.fixOnModel(pid, p ? [p.x, p.y] : null); } // corner: linked
+      else if (r.what !== 'edge') this.addCons({ type: 'fix', e: pid });
+      return;
+    }
     if (r.kind === 'point') this.addCons({ type: 'coincident', a: r.id, b: pid });
     else if (r.kind === 'mid') this.addCons({ type: 'midpoint', p: pid, l: r.id });
     else if (r.kind === 'onLine') this.addCons({ type: 'pointOnLine', p: pid, l: r.id });

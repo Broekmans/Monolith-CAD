@@ -8,6 +8,8 @@ import { treeRow } from './treeui.js';
 import { h, toast, contextMenu, promptText } from './ui.js';
 import { icon } from './icons.js';
 import { worldGeo } from '../../shared/mates.mjs';
+import { secHandleAt } from './section/handles.js';
+import { opt } from './app/options.js';
 
 const NORMALS = { Front: [0, 0, 1], Top: [0, 1, 0], Right: [1, 0, 0] };
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -45,7 +47,7 @@ function applySec(doc, s) {
   ensureHandlers(doc);
 }
 
-// ---------- drag / scroll the red cut face ----------
+// ---------- drag / scroll the red cut face, the dotted lines or the arrow (section/handles.js) ----------
 function capHit(doc, e) {
   const vp = doc.vp, sec = vp.section;
   if (!sec) return null;
@@ -66,12 +68,21 @@ function ensureHandlers(doc) {
   if (doc._secHandlers) return;
   const vp = doc.vp, el = vp.el;
   let drag = null;
-  const step = () => { const b = sceneBox(doc); return b.isEmpty() ? 1 : Math.max(0.1, r2(b.getSize(new THREE.Vector3()).length() / 100)); };
+  const step = () => { const b = sceneBox(doc); return b.isEmpty() ? 1 : Math.max(0.1, r2(b.getSize(new THREE.Vector3()).length() * opt('secStepPct') / 100)); };
+  const paneOf = (e) => vp.viewset?.paneOf(e.target) || vp.pane || vp;
+  const handleAt = (e) => { const pn = paneOf(e), r = pn.el.getBoundingClientRect(); return secHandleAt(pn, [e.clientX - r.left, e.clientY - r.top]); };
+  let hovPane = null;
+  const setHover = (pn, k) => {
+    if (hovPane && (hovPane !== pn || hovPane._secHover !== k)) { hovPane._secHover = null; hovPane.requestRender(); }
+    if (pn && pn._secHover !== k) { pn._secHover = k; pn.requestRender(); }
+    hovPane = k ? pn : null;
+  };
   const move = (s, delta) => { s.offset = r2((Number(s.offset) || 0) + delta); applySec(doc, s); doc.app.pm.current?.setValue?.('offset', s.offset); doc.app.setStatus(`${s.name}: offset ${s.offset} mm`); };
   const cur = () => (doc._secPM ? doc._secDraft : activeSec(doc));
   const down = (e) => {
     if (e.button !== 0 || e.altKey || doc._secDraw || !vp.section || !cur()) return;
-    if (!capHit(doc, e)) return;
+    const handle = handleAt(e);
+    if (!handle && !capHit(doc, e)) return;
     e.stopPropagation(); e.preventDefault();
     const s = cur();
     const { n } = planeOf(s);
@@ -79,28 +90,38 @@ function ensureHandlers(doc) {
     const ctr = sceneBox(doc).getCenter(new THREE.Vector3()).toArray();
     const a = vp.toScreen(ctr), b = vp.toScreen(ctr.map((v, i) => v + n[i]));
     const sd = [b[0] - a[0], b[1] - a[1]];
-    drag = { s, x: e.clientX, y: e.clientY, off0: Number(s.offset) || 0, sd, len2: sd[0] ** 2 + sd[1] ** 2, k };
+    const pn = paneOf(e);
+    drag = { s, x: e.clientX, y: e.clientY, off0: Number(s.offset) || 0, sd, len2: sd[0] ** 2 + sd[1] ** 2, k, pn, handle, scale: pn.scale };
     el.setPointerCapture?.(e.pointerId);
     el.style.cursor = 'grabbing';
+    if (handle) setHover(pn, handle);
   };
   const mv = (e) => {
     if (drag) {
       e.stopPropagation();
-      if (drag.len2 < 1e-6) return; // looking straight along the normal: use the wheel
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-      drag.s.offset = drag.off0; move(drag.s, (dx * drag.sd[0] + dy * drag.sd[1]) / drag.len2);
+      // looking (almost) straight along the normal: mouse up/down moves the plane (1 px = 1 screen pixel in mm)
+      const delta = drag.len2 < 4 ? -dy * drag.scale * (drag.s.flip ? -1 : 1) : (dx * drag.sd[0] + dy * drag.sd[1]) / drag.len2;
+      drag.s.offset = drag.off0; move(drag.s, delta);
+      const r = drag.pn.el.getBoundingClientRect();
+      drag.pn._secLabel = [e.clientX - r.left, e.clientY - r.top, `${drag.s.offset} mm`];
       return;
     }
-    if (vp.section && cur() && !doc._secDraw) el.style.cursor = capHit(doc, e) ? 'grab' : '';
+    if (vp.section && cur() && !doc._secDraw && !e.buttons) {
+      const k = handleAt(e);
+      setHover(paneOf(e), k);
+      el.style.cursor = k ? 'move' : capHit(doc, e) ? 'grab' : '';
+    }
   };
   const up = (e) => {
     if (!drag) return;
     e.stopPropagation();
+    drag.pn._secLabel = null; drag.pn.requestRender();
     drag = null; el.style.cursor = '';
     if (!doc._secPM) { dirty(doc); doc.renderTree?.(); }
   };
   const wheel = (e) => {
-    if (!vp.section || !cur() || !capHit(doc, e)) return;
+    if (!vp.section || !cur() || (!handleAt(e) && !capHit(doc, e))) return;
     e.stopPropagation(); e.preventDefault();
     const s = cur();
     move(s, (e.deltaY < 0 ? 1 : -1) * step() * (e.shiftKey ? 0.1 : 1) * (s.flip ? -1 : 1));
@@ -148,7 +169,7 @@ function openPM(doc, st, orig) {
     st.custom = custom; st.plane = 'Custom'; st.offset = 0;
     const pm = doc.app.pm.current;
     pm?.setValue('plane', 'Custom'); pm?.setValue('offset', 0);
-    pm?.setMessage(`Plane: ${custom.label}. Drag or scroll the red cut face to move it.`);
+    pm?.setMessage(`Plane: ${custom.label}. Drag the red lines / arrow or the cut face to move it.`);
     apply();
   };
   const endDraw = () => {
@@ -214,7 +235,7 @@ function openPM(doc, st, orig) {
       { key: 'plane', type: 'select', label: 'Section plane', options: [{ value: 'Front', label: 'Front Plane' }, { value: 'Top', label: 'Top Plane' }, { value: 'Right', label: 'Right Plane' }, { value: 'Custom', label: 'Face / drawn line' }] },
       { key: 'offset', type: 'number', label: 'Offset', unit: 'mm', step: 1 },
       { key: 'flip', type: 'check', label: 'Flip side' },
-      { type: 'info', text: 'Drag the red cut face, or scroll the mouse wheel over it, to move the section. It is saved under "Saved Views" in the tree.' },
+      { type: 'info', text: 'Drag the red dotted lines, the red arrow or the cut face (or scroll the mouse wheel over them) to move the section. It is saved under "Saved Views" in the tree.' },
     ],
     onChange: (v, key) => {
       if (key === 'name') { st.name = v.name || st.name; return; }

@@ -16,6 +16,7 @@ export function sketchCurves(sketch, { includeConstruction = false } = {}) {
   for (const g of sketch.geo) {
     if (g.type === 'point') continue;
     if (g.construction && !includeConstruction) continue;
+    if (g.refKey) continue; // invisible link to a model edge (clicked in the sketch), never drawn or used as a profile
     if (g.type === 'text') {
       const a = pts.get(g.p);
       if (!a || !g.outline) continue;

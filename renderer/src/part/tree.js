@@ -81,7 +81,7 @@ export class PartTree {
       const vis = isSk ? (f.visible ?? !consumed.has(f.id)) : undefined;
       add({
         icon: FEATURE_META[metaKey(f)]?.icon || 'sketch', label: f.name, depth: depth + 1,
-        sel: selKeys.has(key), dim: i >= roll || f.suppressed, err: s?.state === 'error' ? s.error : null,
+        sel: selKeys.has(key), dim: i >= roll || f.suppressed, err: s?.state === 'error' ? s.error : null, warn: s?.state === 'warn' ? s.error : null,
         editing: f.id === editingSketch || f.id === this.editingId,
         eye: vis, onEye: () => this.toggleSketchVisible(f),
         twisty: children.length ? isOpen : undefined, onTwisty: () => { if (isOpen) this.expanded.delete(f.id); else this.expanded.add(f.id); this.renderTree(); },

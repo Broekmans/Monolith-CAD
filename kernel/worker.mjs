@@ -26,7 +26,10 @@ const ops = {
       // feature preview: the body before the last feature + the last feature's tool (extruded / revolved profile)
       const last = features[features.length - 1], t = last && r.tools?.get(last.id);
       const prevBody = r.stages.filter((st) => st.id !== last?.id).pop()?.body || null;
-      g = { id: last?.id, op: t?.op || null, prev: prevBody ? K.tessellate(prevBody) : null, tool: t ? K.tessellate(t.shape) : null };
+      // cut: show only the volume that is removed (the tool of Through All reaches far outside the part)
+      let toolShape = t?.shape || null;
+      if (t?.op === 'cut' && prevBody && toolShape) { try { toolShape = K.removedVolume(prevBody, toolShape); } catch { /* keep the tool */ } }
+      g = { id: last?.id, op: t?.op || null, prev: prevBody ? K.tessellate(prevBody) : null, tool: toolShape ? K.tessellate(toolShape) : null };
       for (const m of [g.prev, g.tool]) if (m) transfer.push(...meshTransfer(m));
     }
     return { result: { status: r.status, mesh, ghost: g }, transfer };
@@ -54,6 +57,7 @@ const ops = {
     const shape = bodies.length === 1 && isIdent(bodies[0].m) ? bodies[0].body : K.assemblyShape(bodies);
     return { result: views.map((v) => (v.plane ? sectionView(shape, v.plane, v.dir, v.xDir, !!v.hidden) : hlrView(shape, v.dir, v.xDir, !!v.hidden))) };
   },
+  linkBase({ features, index }) { return { result: K.linkBase(features, index) }; },
   ping() { return { result: 'pong' }; },
 };
 
