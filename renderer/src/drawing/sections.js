@@ -4,16 +4,17 @@
 // depth (cloudview.js panel). The section is recomputed after each change.
 import { h, fmt, toast } from '../ui.js';
 import { viewXf, viewScale } from './sheet.js';
+import { opt } from '../app/options.js';
 
 export class DrawingSections {
-  // section view whose cutting line (on its parent, this sheet) is within 6 px of p
+  // section view whose cutting line (on its parent, this sheet) is within drPickPx of p
   cutAt(p) {
-    const tol = 6 / Math.max(1e-6, Math.abs(this.affine().ex[0]));
+    const tol = opt('drPickPx') / Math.max(opt('geomEps'), Math.abs(this.affine().ex[0])), over = opt('drCutPickOver');
     for (const c of this.doc.views.filter((q) => q.cut && q.parent)) {
       const par = this.V(c.parent); if (!par || par.sheet !== this.sheetId || !par.geom) continue;
       const { f } = viewXf(par, this.sheetOf(par)), A = f(...c.cut.a), B = f(...c.cut.b);
       const d = [B[0] - A[0], B[1] - A[1]], l2 = d[0] ** 2 + d[1] ** 2 || 1, t = ((p[0] - A[0]) * d[0] + (p[1] - A[1]) * d[1]) / l2;
-      if (t < -0.15 || t > 1.15) continue;
+      if (t < -over || t > 1 + over) continue;
       const e = Math.hypot(p[0] - (A[0] + d[0] * t), p[1] - (A[1] + d[1] * t));
       if (e <= tol) return c;
     }
@@ -35,7 +36,7 @@ export class DrawingSections {
     const ok = await this.run('Updating the section', async () => { for (const [src, arr] of bySrc) { const g = await this.computeViews(src, arr); arr.forEach((v, i) => { v.geom = g[i]; }); } return true; });
     if (ok) { this.app.setDirty(true); this.renderTree(); this.vp.requestRender(); }
   }
-  setCutOffset(v, off) { const shift = off - (v.cut.off || 0); if (Math.abs(shift) < 1e-6) return; this.change(() => this.shiftCut(v, shift)); this.recomputeViews([v]); }
+  setCutOffset(v, off) { const shift = off - (v.cut.off || 0); if (Math.abs(shift) < opt('geomEps')) return; this.change(() => this.shiftCut(v, shift)); this.recomputeViews([v]); }
   flipSection(v) {
     this.change(() => {
       v.dir = v.dir.map((c) => -c || 0); v.x = v.x.map((c) => -c || 0);

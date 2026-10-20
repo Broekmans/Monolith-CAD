@@ -23,7 +23,7 @@ export class ViewSetPanes {
   }
 
   // ---- maximize / restore / close ----
-  maximize(p = this.active) {
+  maximize(p = this.focus) {
     if (this.visible().length < 2 || this.max === p || p._min) return;
     this.max = p; this.active = p;
     this.place();
@@ -40,7 +40,7 @@ export class ViewSetPanes {
   }
 
   // the view's space goes to its neighbours in the column (or, for a last row, to the neighbouring columns)
-  closePane(p = this.active) {
+  closePane(p = this.focus) {
     if (this.panes.length < 2) return;
     if (!p._min && this.visible().length < 2 && !this.max) return; // keep at least one view on screen
     this.max = null;
@@ -68,7 +68,7 @@ export class ViewSetPanes {
   }
 
   // Minimize: out of the layout (like Close) but kept; its tab in the dock brings it back in the same place
-  minimize(p = this.active) {
+  minimize(p = this.focus) {
     if (p._min || this.visible().length < 2 && !this.max) return;
     this.max = null;
     if (p === this.primary) { // pane 0 must stay on screen (it owns the renderer): it swaps view + place with another pane
@@ -139,7 +139,7 @@ export class ViewSetPanes {
   }
 
   // items for the right-click menu on empty space in a pane (empty with one view)
-  menuItems(p = this.active) {
+  menuItems(p = this.focus) {
     const items = [];
     if (this.visible().length > 1 || this.max) {
       items.push(this.max ? { label: 'Restore Views', icon: 'views', run: () => this.restoreViews() } : { label: 'Maximize View', icon: 'views', run: () => this.maximize(p) },
@@ -147,6 +147,7 @@ export class ViewSetPanes {
         { label: 'Close View', icon: 'cancel', run: () => this.closePane(p) });
     }
     if (this.minimized().length) items.push({ label: 'Restore Minimized Views', icon: 'views', run: () => this.restoreMinimized() });
+    if (this.displayItems && this.visible().length > 1) items.push('-', ...this.displayItems(p)); // display style of this view (0.1.95)
     if (items.length) items.push('-');
     return items;
   }

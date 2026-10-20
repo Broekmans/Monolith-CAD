@@ -407,8 +407,11 @@ body.dark .viewport.paper.drawing { background: #2a2d32; }
 .feat-grip:hover { background: rgba(40,110,220,.4); }
 
 /* view cube 90° arrows */
-.vc-arrow { position: absolute; width: 16px; height: 16px; padding: 1px; border: 0; background: none; cursor: pointer; pointer-events: auto; color: #7d8aa0; fill: currentColor; stroke: currentColor; opacity: .55; transition: opacity .12s, color .12s; }
-.vc-arrow svg { width: 14px; height: 14px; display: block; }
+.vc-arrow { position: absolute; width: 16px; height: 16px; padding: 1px; border: 0; background: none; cursor: pointer; pointer-events: auto; color: #7d8aa0; fill: currentColor; stroke: currentColor; opacity: .75; transition: opacity .12s, color .12s; }
+.vc-arrow svg { width: 14px; height: 14px; display: block; overflow: visible; filter: drop-shadow(0 0 0.6px rgba(20,24,32,.9)); }
+/* 0.1.94: outline on the triangles so they stay visible over sketches and model edges */
+.vc-arrow svg path.tri { stroke: #1b2029; stroke-width: 1.1px; stroke-linejoin: round; paint-order: stroke; }
+body.dark .vc-arrow svg path.tri { stroke: #11151b; }
 .viewport:hover .vc-arrow { opacity: .9; }
 .vc-arrow:hover { color: #3a88ee; opacity: 1; }
 body.dark .vc-arrow { color: #9aa6b8; }
@@ -530,3 +533,15 @@ body.dark .dlg, body.dark .panel.pmroot.pm-float, body.dark .ann-props, body.dar
 .hu-btn { width: 26px; height: 24px; padding: 2px; }
 .hu-btn svg { width: 17px; height: 17px; }
 .headsup.vertical { flex-direction: column; }
+/* 0.1.95: windows move by their title strip */
+.pm-float .pm-header, .modify-box .mb-title { cursor: move; user-select: none; }
+/* 0.1.95: the tree row of the feature / sketch being edited = theme blue, like the active input box of a dialog */
+.tr-row.editing { background: var(--pop-input); border-color: var(--pop-ok); box-shadow: 0 0 0 1px var(--pop-ok); }
+.tr-row.editing .tr-label { color: var(--pop-ok); font-weight: 600; }
+body.dark .tr-row.editing { background: #22324a; }
+body.dark .tr-row.editing .tr-label { color: #8ec0ff; }
+/* the main value of a feature dialog is the highlighted (active) field */
+.pm-numrow input.pm-main { border-color: var(--pop-ok) !important; box-shadow: 0 0 0 1px var(--pop-ok); }
+/* 0.1.97 Offset Entities: offset not possible */
+.feat-val.err { border-color: #e0403a; }
+.feat-grip.err { background: rgba(224,64,58,.2); border-color: rgba(224,64,58,.8); }

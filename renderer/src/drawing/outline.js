@@ -8,11 +8,12 @@ import { fmt, dialog } from '../ui.js';
 import { annValue } from './dims.js';
 import { viewScale } from './sheet.js';
 import { joinAcross } from './fit.js';
+import { opt } from '../app/options.js';
 
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
 const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1];
-const unit = (a) => { const l = Math.hypot(a[0], a[1]); return l > 1e-9 ? [a[0] / l, a[1] / l] : null; };
+const unit = (a) => { const l = Math.hypot(a[0], a[1]); return l > opt('geomEpsTiny') ? [a[0] / l, a[1] / l] : null; };
 const cross = (a, b) => a[0] * b[1] - a[1] * b[0];
 const signedArea = (P) => P.reduce((s, p, i) => s + p[0] * P[(i + 1) % P.length][1] - P[(i + 1) % P.length][0] * p[1], 0) / 2;
 
@@ -28,11 +29,11 @@ export function edgeNormal(P, i) {
 export function moveEdge(P, i, t) {
   const n = P.length, Q = P.map((p) => p.slice()), N = edgeNormal(P, i);
   if (!N) return Q;
-  const a = i, b = (i + 1) % n, d = unit(sub(P[b], P[a]));
+  const a = i, b = (i + 1) % n, d = unit(sub(P[b], P[a])), par = opt('drParallelCross');
   const slide = (k, other) => {
     // corner k is shared with the neighbour edge running from/to `other`
     const nd = unit(sub(P[other], P[k]));
-    if (!nd || Math.abs(cross(nd, d)) < 0.02) { Q[k] = [P[k][0] + N[0] * t, P[k][1] + N[1] * t]; return; }
+    if (!nd || Math.abs(cross(nd, d)) < par) { Q[k] = [P[k][0] + N[0] * t, P[k][1] + N[1] * t]; return; }
     const s = t / dot(nd, N); // along the neighbour, so that the normal component is t
     Q[k] = [P[k][0] + nd[0] * s, P[k][1] + nd[1] * s];
   };
@@ -54,10 +55,10 @@ export function moveCorner(P, i, m) {
 // moves straight across. Returns a new array.
 export function makeAxis(P, i, axis) {
   const n = P.length, a = i, b = (i + 1) % n, M = [(P[a][0] + P[b][0]) / 2, (P[a][1] + P[b][1]) / 2], d = axis === 0 ? [1, 0] : [0, 1];
-  const Q = P.map((p) => p.slice());
+  const Q = P.map((p) => p.slice()), par = opt('drParallelCross');
   const put = (k, other) => {
     const nd = unit(sub(P[other], P[k]));
-    if (!nd || Math.abs(cross(nd, d)) < 0.02) { Q[k] = axis === 0 ? [P[k][0], M[1]] : [M[0], P[k][1]]; return; }
+    if (!nd || Math.abs(cross(nd, d)) < par) { Q[k] = axis === 0 ? [P[k][0], M[1]] : [M[0], P[k][1]]; return; }
     // P[k] + nd·s lies on the new line: its cross-axis coordinate equals M's
     const c = 1 - axis, s = (M[c] - P[k][c]) / nd[c];
     Q[k] = [P[k][0] + nd[0] * s, P[k][1] + nd[1] * s];
@@ -69,15 +70,15 @@ export function makeAxis(P, i, axis) {
 export class DrawingOutline {
   // the selected annotation when it is an editable outline
   outlineAnn() { const s = this.selAnn; if (!s) return null; const a = this.ann(s.view, s.id); return a?.type === 'area' && a.pts?.length >= 3 ? { a, v: this.V(s.view) } : null; }
-  // grip under sheet point p: corner (6 px) before wall (5 px from the line)
+  // grip under sheet point p: corner (Options drGripPickPx) before wall (drOutlinePickPx from the line)
   outlineGripAt(p) {
     const o = this.outlineAnn(); if (!o || this.tool) return null;
-    const k = Math.max(1e-6, Math.abs(this.affine().ex[0])), S = o.a.pts.map((q) => this.toSheetPt(o.v, q)), n = S.length;
-    for (let i = 0; i < n; i++) if (Math.hypot(S[i][0] - p[0], S[i][1] - p[1]) * k <= 7) return { ...o, kind: 'corner', i };
+    const k = Math.max(opt('geomEps'), Math.abs(this.affine().ex[0])), S = o.a.pts.map((q) => this.toSheetPt(o.v, q)), n = S.length, gp = opt('drGripPickPx'), wp = opt('drOutlinePickPx'), z = opt('geomEpsZero');
+    for (let i = 0; i < n; i++) if (Math.hypot(S[i][0] - p[0], S[i][1] - p[1]) * k <= gp) return { ...o, kind: 'corner', i };
     for (let i = 0; i < n; i++) {
-      const A = S[i], B = S[(i + 1) % n], AB = sub(B, A), l2 = dot(AB, AB); if (l2 < 1e-12) continue;
+      const A = S[i], B = S[(i + 1) % n], AB = sub(B, A), l2 = dot(AB, AB); if (l2 < z) continue;
       const t = Math.max(0, Math.min(1, dot(sub(p, A), AB) / l2)), F = [A[0] + AB[0] * t, A[1] + AB[1] * t];
-      if (Math.hypot(F[0] - p[0], F[1] - p[1]) * k <= 5) return { ...o, kind: 'edge', i, t };
+      if (Math.hypot(F[0] - p[0], F[1] - p[1]) * k <= wp) return { ...o, kind: 'edge', i, t };
     }
     return null;
   }
@@ -85,19 +86,21 @@ export class DrawingOutline {
   drawOutlineGrips(ctx) {
     const o = this.outlineAnn(); if (!o || this.tool) return;
     const S = o.a.pts.map((q) => this.S2(this.toSheetPt(o.v, q))), n = S.length;
-    ctx.save(); ctx.setLineDash([]); ctx.lineWidth = 1.2; ctx.strokeStyle = '#2a6fd6'; ctx.fillStyle = '#fff';
+    const lw = opt('drGripLineW'), wMin = opt('drWallGripMinPx'), wh = opt('drWallGripHalfPx'), ww = opt('drWallGripW'), cg = opt('drCornerGripPx'), ch = cg / 2;
+    ctx.save(); ctx.setLineDash([]); ctx.lineWidth = lw; ctx.strokeStyle = opt('drHandleColor'); ctx.fillStyle = opt('drGripFill');
     for (let i = 0; i < n; i++) {
       const A = S[i], B = S[(i + 1) % n], L = Math.hypot(B[0] - A[0], B[1] - A[1]);
-      if (L > 30) { const m = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2], u = [(B[0] - A[0]) / L, (B[1] - A[1]) / L]; ctx.beginPath(); ctx.moveTo(m[0] - u[0] * 8, m[1] - u[1] * 8); ctx.lineTo(m[0] + u[0] * 8, m[1] + u[1] * 8); ctx.lineWidth = 4; ctx.stroke(); ctx.lineWidth = 1.2; }
+      if (L > wMin) { const m = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2], u = [(B[0] - A[0]) / L, (B[1] - A[1]) / L]; ctx.beginPath(); ctx.moveTo(m[0] - u[0] * wh, m[1] - u[1] * wh); ctx.lineTo(m[0] + u[0] * wh, m[1] + u[1] * wh); ctx.lineWidth = ww; ctx.stroke(); ctx.lineWidth = lw; }
     }
-    for (const q of S) { ctx.fillRect(q[0] - 3.5, q[1] - 3.5, 7, 7); ctx.strokeRect(q[0] - 3.5, q[1] - 3.5, 7, 7); }
-    // snap marker while dragging (magenta, like Smart Dimension), dotted guide for H/V alignment
+    for (const q of S) { ctx.fillRect(q[0] - ch, q[1] - ch, cg, cg); ctx.strokeRect(q[0] - ch, q[1] - ch, cg, cg); }
+    // snap marker while dragging (orange = will be, 0.1.99), dotted guide for H/V alignment
     const sn = this._outSnap;
     if (sn) {
-      ctx.strokeStyle = '#d81bd8'; ctx.lineWidth = 1.5;
-      for (const gd of [sn.guide, sn.guide2]) if (gd) { const A = this.S2(this.toSheetPt(o.v, gd[0])), B = this.S2(this.toSheetPt(o.v, gd[1])); ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); ctx.setLineDash([]); }
-      if (sn.line) { const A = this.S2(this.toSheetPt(o.v, sn.line[0])), B = this.S2(this.toSheetPt(o.v, sn.line[1])); ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); ctx.lineWidth = 1.5; }
-      if (sn.q) { const C = this.S2(this.toSheetPt(o.v, sn.q)); ctx.beginPath(); ctx.arc(C[0], C[1], 6, 0, Math.PI * 2); ctx.stroke(); }
+      const sw = opt('drOutSnapLineW');
+      ctx.strokeStyle = opt('drSnapColor'); ctx.lineWidth = sw;
+      for (const gd of [sn.guide, sn.guide2]) if (gd) { const A = this.S2(this.toSheetPt(o.v, gd[0])), B = this.S2(this.toSheetPt(o.v, gd[1])); ctx.setLineDash(opt('drOutSnapGuideDash')); ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); ctx.setLineDash([]); }
+      if (sn.line) { const A = this.S2(this.toSheetPt(o.v, sn.line[0])), B = this.S2(this.toSheetPt(o.v, sn.line[1])); ctx.lineWidth = opt('drOutSnapEdgeW'); ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); ctx.lineWidth = sw; }
+      if (sn.q) { const C = this.S2(this.toSheetPt(o.v, sn.q)); ctx.beginPath(); ctx.arc(C[0], C[1], opt('drOutSnapR'), 0, Math.PI * 2); ctx.stroke(); }
     }
     ctx.restore();
   }
@@ -126,15 +129,15 @@ export class DrawingOutline {
   // other room / area outlines in the same view (model mm)
   otherOutlines(v, a) { return (v.anns || []).filter((b) => b !== a && b.type === 'area' && b.pts?.length >= 3).map((b) => ({ b, P: b.pts })); }
   // corner snap, model point T → {q, label, guide?, line?} or null. Only room / area outlines (never the scan):
-  // corners of other rooms (8 px), walls of other rooms (6 px), H/V alignment with any other corner (6 px)
+  // corners of other rooms (snapVertexPx), walls of other rooms and H/V alignment with any other corner (snapEdgePx)
   snapCorner(v, a, i, T, P0 = a.pts, ctrl = false) {
-    const s = viewScale(v, this.sheetOf(v)), px = 1 / (this.pxMm() * s), tc = 8 * px, te = 6 * px;
+    const s = viewScale(v, this.sheetOf(v)), px = 1 / (this.pxMm() * s), tc = opt('snapVertexPx') * px, te = opt('snapEdgePx') * px, eps = opt('geomEpsTiny');
     const others = this.otherOutlines(v, a), nm = (b) => b.label || 'area';
     let best = null;
     for (const { b, P } of others) for (const q of P) { const d = Math.hypot(q[0] - T[0], q[1] - T[1]); if (d <= tc && (!best || d < best.d)) best = { q: q.slice(), d, label: `${nm(b)} corner` }; }
     if (best) return best;
     for (const { b, P } of others) for (let k = 0; k < P.length; k++) {
-      const A = P[k], B = P[(k + 1) % P.length], AB = sub(B, A), l2 = dot(AB, AB); if (l2 < 1e-9) continue;
+      const A = P[k], B = P[(k + 1) % P.length], AB = sub(B, A), l2 = dot(AB, AB); if (l2 < eps) continue;
       const u = Math.max(0, Math.min(1, dot(sub(T, A), AB) / l2)), F = [A[0] + AB[0] * u, A[1] + AB[1] * u], d = Math.hypot(F[0] - T[0], F[1] - T[1]);
       if (d <= te && (!best || d < best.d)) best = { q: F, d, label: `${nm(b)} wall`, line: [A, B] };
     }
@@ -149,13 +152,13 @@ export class DrawingOutline {
     const q = [bx ? bx.q[0] : T[0], by ? by.q[1] : T[1]], src = bx?.q || by?.q;
     return { q, d: Math.min(bx?.d ?? Infinity, by?.d ?? Infinity), label: bx && by ? 'in line with two corners' : bx ? 'vertical with a corner' : 'horizontal with a corner', guide: [src, q], guide2: bx && by ? [by.q, q] : null };
   }
-  // wall snap: offset t of edge i → {t, label, line} for a parallel wall of another room (6 px); not the scan
+  // wall snap: offset t of edge i → {t, label, line} for a parallel wall of another room (snapEdgePx); not the scan
   snapWallT(v, a, P, i, t) {
-    const s = viewScale(v, this.sheetOf(v)), te = 6 / (this.pxMm() * s), n = P.length, A = P[i], B = P[(i + 1) % n], N = edgeNormal(P, i), d = unit(sub(B, A));
+    const s = viewScale(v, this.sheetOf(v)), te = opt('snapEdgePx') / (this.pxMm() * s), par = opt('drParallelCross'), n = P.length, A = P[i], B = P[(i + 1) % n], N = edgeNormal(P, i), d = unit(sub(B, A));
     if (!N || !d) return null;
     let best = null;
     for (const { b, P: Q } of this.otherOutlines(v, a)) for (let k = 0; k < Q.length; k++) {
-      const C = Q[k], D = Q[(k + 1) % Q.length], e = unit(sub(D, C)); if (!e || Math.abs(cross(e, d)) > 0.02) continue;
+      const C = Q[k], D = Q[(k + 1) % Q.length], e = unit(sub(D, C)); if (!e || Math.abs(cross(e, d)) > par) continue;
       const tt = dot(sub(C, A), N); if (Math.abs(tt - t) <= te && (!best || Math.abs(tt - t) < best.dd)) best = { t: tt, dd: Math.abs(tt - t), label: `${b.label || 'area'} wall`, line: [C, D] };
     }
     if (best) return best;
@@ -169,8 +172,8 @@ export class DrawingOutline {
     if (g.kind === 'edge') {
       const P = a.pts, A = P[g.i], B = P[(g.i + 1) % P.length];
       const axis = (k, label) => ({ label, run: () => this.change(() => { a.pts = makeAxis(a.pts, g.i, k); a.edited = true; }) });
-      if (Math.abs(A[1] - B[1]) > 0.01) items.push(axis(0, 'Make horizontal'));
-      if (Math.abs(A[0] - B[0]) > 0.01) items.push(axis(1, 'Make vertical'));
+      if (Math.abs(A[1] - B[1]) > opt('drAxisEditTol')) items.push(axis(0, 'Make horizontal'));
+      if (Math.abs(A[0] - B[0]) > opt('drAxisEditTol')) items.push(axis(1, 'Make vertical'));
     }
     if (g.kind === 'corner' && a.pts.length > 3) items.push({ label: 'Remove corner', run: () => this.change(() => { a.pts.splice(g.i, 1); a.edited = true; }) });
     if (a.edited && a.room) items.push({ label: 'Back to detected outline', run: () => this.resetOutline(g.v, a) });
@@ -190,8 +193,8 @@ export class DrawingOutline {
 // union of closed outlines with only horizontal / vertical walls (rooms from the rectangle method, hand
 // edits without Ctrl corners). Coordinate grid of all wall positions, cells inside any outline, outer
 // boundary traced. Returns the outline, or null when an outline has slanted walls or the result falls apart
-// into separate pieces (spaces that do not touch). Wall positions within `snap` mm are merged.
-export function unionOrtho(polys, snap = 50, tol = 1) {
+// into separate pieces (spaces that do not touch). Wall positions within `snap` mm are merged (Options drRoomMergeTol).
+export function unionOrtho(polys, snap = opt('drRoomMergeTol'), tol = opt('drRoomAxisTol')) {
   for (const P of polys) for (let i = 0; i < P.length; i++) { const A = P[i], B = P[(i + 1) % P.length]; if (Math.abs(A[0] - B[0]) > tol && Math.abs(A[1] - B[1]) > tol) return null; }
   // wall positions closer than `snap` mm become one (the mean): no 10 mm slivers where two rooms meet
   const uniq = (v) => { v.sort((a, b) => a - b); const g = []; for (const x of v) { const c = g[g.length - 1]; if (c && x - c[c.length - 1] <= snap) c.push(x); else g.push([x]); } return g.map((c) => c.reduce((s, x) => s + x, 0) / c.length); };
@@ -229,14 +232,14 @@ export function unionOrtho(polys, snap = 50, tol = 1) {
   loops.sort((a, b) => area(b) - area(a));
   const pts = loops[0].map(([i, j]) => [xs[i], ys[j]]);
   // drop points in the middle of a straight wall
-  const out = pts.filter((p, i) => { const a = pts[(i - 1 + pts.length) % pts.length], b = pts[(i + 1) % pts.length]; return Math.abs((p[0] - a[0]) * (b[1] - p[1]) - (p[1] - a[1]) * (b[0] - p[0])) > 1e-6; });
+  const eps = opt('geomEps'), out = pts.filter((p, i) => { const a = pts[(i - 1 + pts.length) % pts.length], b = pts[(i + 1) % pts.length]; return Math.abs((p[0] - a[0]) * (b[1] - p[1]) - (p[1] - a[1]) * (b[0] - p[0])) > eps; });
   return out.length >= 4 ? out : null;
 }
 
 // two spaces of one room: overlapping / touching → union; on both sides of a wall (≤ maxGap mm) → union
 // through the doorway(s) found in that wall. {poly, doors?} or {reason: 'slanted' | 'far' | 'closed'}
 export function joinRooms(P, Q, d, maxGap = 400) {
-  const slanted = (R) => R.some((A, i) => { const B = R[(i + 1) % R.length]; return Math.abs(A[0] - B[0]) > 1 && Math.abs(A[1] - B[1]) > 1; });
+  const at = opt('drRoomAxisTol'), slanted = (R) => R.some((A, i) => { const B = R[(i + 1) % R.length]; return Math.abs(A[0] - B[0]) > at && Math.abs(A[1] - B[1]) > at; });
   if (slanted(P) || slanted(Q)) return { reason: 'slanted' };
   const U = unionOrtho([P, Q]);
   if (U) return { poly: U };

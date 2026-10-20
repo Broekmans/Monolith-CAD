@@ -3,6 +3,7 @@
 // f.depthAt for the extrude depth line) so the open sketch shows it there too. Short move = click (double-click still
 // edits), Esc during a drag = back. One undo step per drag. Methods are mixed into PartDoc; `this` is the PartDoc.
 import { sketchView } from './modeldims.js';
+import { opt } from '../app/options.js';
 
 export const autoKey = (cons) => cons.type + ':' + (cons.l || cons.c || '');
 
@@ -19,7 +20,7 @@ export class PartDimDrag {
     const move = (e) => {
       const dd = this._dimDrag; if (!dd) return;
       if (!dd.started) {
-        if (Math.hypot(e.clientX - dd.x0, e.clientY - dd.y0) <= 3) return;
+        if (Math.hypot(e.clientX - dd.x0, e.clientY - dd.y0) <= opt('modelDimDragPx')) return;
         dd.started = true; this.beginChange(); dd.undo = this._last;
         this._downAt = null; // no click / selection at the end
       }

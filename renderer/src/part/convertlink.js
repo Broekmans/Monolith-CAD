@@ -47,10 +47,10 @@ export class PartConvertLink {
   // applyShownDim for a dashed size that follows linked edges (called after beginChange)
   async applyUpstream(sk, want, reason) {
     const best = opt('driveUpstream') ? await this.driveUpstream(sk, want).catch((e) => { console.warn(e); return null; }) : null;
-    if (!best) { this._last = null; toast(reason, 'warn', 6000); return false; }
+    if (!best) { this._last = null; toast(reason, 'warn', opt('toastWarnMs')); return false; }
     const pre = best.type === 'radius' ? 'R' : best.type === 'diameter' ? 'Ø' : '';
     this.commit('drive upstream');
-    this.app.setStatus(this._statusAfter = `${best.sk}: dimension ${pre}${fmt(best.old, 3)} → ${pre}${fmt(best.value, 3)} (drives this size in ${sk.name}, now ${fmt(want.value, 3)})`);
+    this.app.setStatus(this._statusAfter = `${best.sk}: dimension ${pre}${fmt(best.old, opt('partReportDecimals'))} → ${pre}${fmt(best.value, opt('partReportDecimals'))} (drives this size in ${sk.name}, now ${fmt(want.value, opt('partReportDecimals'))})`);
     try { window.__lithLog?.('DRIVE', best.sk, best.id, best.old, '->', best.value, 'size', want.value, 'in', sk.name); } catch { /* log optional */ }
     this.renderTree(); this.updateSketchDisplay();
     if (this.featUI) this.featUI.preview(); else this.regen();

@@ -10,13 +10,15 @@ export class ViewSetLayout {
     const n = LAYOUTS[name].n;
     this.max = null;
     for (const p of this.panes) p._min = null; // minimized views come back into the standard layout
-    if (n < this.panes.length && this.active !== this.primary) copyCam(this.active, this.primary);
+    const keep = this.focus; // the clicked view's camera survives when views are removed
+    if (n < this.panes.length && keep !== this.primary) copyCam(keep, this.primary);
     while (this.panes.length > n) { const p = this.panes.pop(); p.dispose(); }
     const fresh = [];
     while (this.panes.length < n) fresh.push(this.addPane());
     this.layout = name;
     this.cols = STD_COLS[name].map((rows) => ({ w: 1 / STD_COLS[name].length, rows: rows.map((i) => ({ h: 1 / rows.length, pane: this.panes[i] })) }));
     if (!this.panes.includes(this.active)) this.active = this.primary;
+    if (!this.panes.includes(this._focus)) this._focus = this.active;
     this.build();
     const views = this.opts.mode === 'plan' ? DEFAULT_VIEWS[name].map(() => 'top') : DEFAULT_VIEWS[name];
     this.panes.forEach((p, i) => {
@@ -107,11 +109,11 @@ export class ViewSetLayout {
   // saved in the document: columns/rows (pane indices + sizes), maximized pane and each pane's view
   toJSON() {
     const ix = (p) => this.panes.indexOf(p);
-    return { layout: this.layout, split: [...this.split], active: ix(this.active),
+    return { layout: this.layout, split: [...this.split], active: ix(this.focus || this.active),
       cols: this.cols.map((c) => ({ w: r6(c.w), rows: c.rows.map((r) => ({ h: r6(r.h), i: ix(r.pane) })) })),
       max: this.max ? ix(this.max) : -1,
       min: this.minimized().map((p) => ({ i: ix(p), ...p._min })),
-      views: this.panes.map((p) => ({ q: p.camera.quaternion.toArray().map(r6), t: p.target.toArray().map(r6), s: r6(p.scale) })) };
+      views: this.panes.map((p) => ({ q: p.camera.quaternion.toArray().map(r6), t: p.target.toArray().map(r6), s: r6(p.scale), ...(p.displayMode ? { d: p.displayMode } : {}) })) };
   }
 
   restore(s) {
@@ -142,6 +144,7 @@ export class ViewSetLayout {
     (s.views || []).forEach((v, i) => {
       const p = this.panes[i]; if (!p || !v?.q) return;
       p.anim = null; p.target.fromArray(v.t); p.scale = v.s || p.scale; p._applyQuat(new THREE.Quaternion().fromArray(v.q));
+      if (v.d) p.displayMode = v.d; else delete p.displayMode;
     });
     this.setActive(this.panes[s.active] || this.primary);
     this.onLayout?.();

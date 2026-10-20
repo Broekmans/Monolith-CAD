@@ -51,7 +51,7 @@ export class SketchDims {
     const ctr = (g) => (g.type === 'circle' || g.type === 'arc' ? g.c : g.id);
     if (a.type === 'line' && b.type === 'line') {
       const da = this.dirOf(a), db = this.dirOf(b);
-      if (Math.abs(cross2(da, db)) < 1e-6) {
+      if (Math.abs(cross2(da, db)) < opt('geomEps')) {
         // parallel lines: measure from the shorter line (e.g. the sketch) to the longer one (e.g. a model edge), from
         // the shorter line's end nearest to the click, so the dimension sits at the sketch, not at the far end of the edge
         const len = (g) => dist(this.P(g.p1), this.P(g.p2));
@@ -73,7 +73,7 @@ export class SketchDims {
     const a = this.P(pd.a), b = this.P(pd.b), m = pd.lpAbs;
     const xmin = Math.min(a[0], b[0]), xmax = Math.max(a[0], b[0]), ymin = Math.min(a[1], b[1]), ymax = Math.max(a[1], b[1]);
     const inX = m[0] > xmin && m[0] < xmax, inY = m[1] > ymin && m[1] < ymax;
-    if (Math.abs(a[1] - b[1]) < 1e-9 || Math.abs(a[0] - b[0]) < 1e-9) return pd.type;
+    if (Math.abs(a[1] - b[1]) < opt('geomEpsTiny') || Math.abs(a[0] - b[0]) < opt('geomEpsTiny')) return pd.type;
     if (inX && !inY) return 'hdist';
     if (inY && !inX) return 'vdist';
     return pd.type;
@@ -85,6 +85,7 @@ export class SketchDims {
       case 'length': { const l = this.G(c.l); const a = P(l.p1), b = P(l.p2); return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
       case 'distance': case 'hdist': case 'vdist': { const a = P(c.a), b = P(c.b); return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
       case 'pointLine': return P(c.p);
+      case 'offset': { const a = this.G(c.a); if (a.type !== 'line') return P(a.c); const p = P(a.p1), q = P(a.p2); return [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2]; }
       case 'radius': case 'diameter': return P(this.G(c.c).c);
       case 'angle': {
         const la = this.G(c.a), lb = this.G(c.b);
@@ -122,14 +123,15 @@ export class SketchDims {
     const bad = (list) => (list || []).some((id) => id === added.id || id.startsWith(added.id + '#'));
     if (!r.ok || bad(r.conflicting) || bad(r.redundant) || (r.conflicting.length && !this.state.conflicting.length)) {
       added.driving = false;
-      toast('This dimension would over-define the sketch, so it was added as a driven (reference) dimension.', 'warn', 5000);
+      toast('This dimension would over-define the sketch, so it was added as a driven (reference) dimension.', 'warn', opt('dimDrivenToastMs'));
       this.resolve(true);
       return;
     }
     this.resolve(true);
     const [sx, sy] = this.scr(p);
     const rect = this.vp.el.getBoundingClientRect();
-    this.editDim(added, rect.left + sx + 12, rect.top + sy + 12, true);
+    const eo = opt('dimEditOffsetPx');
+    this.editDim(added, rect.left + sx + eo, rect.top + sy + eo, true);
   }
 
   editDim(c, x, y, fresh = false) {

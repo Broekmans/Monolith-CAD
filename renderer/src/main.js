@@ -1,7 +1,7 @@
 // Application shell: layout, tabs, welcome screen, menus and keyboard routing.
 // File management (open/save/import) -> app/files.js, program settings (theme, UI scale) -> app/settings.js.
 import { cacheKey, packMesh } from './meshcache.js';
-import { h, CommandManager, PropertyManager, toast, dialog, promptText } from './ui.js';
+import { h, CommandManager, PropertyManager, toast, dialog, promptText, makeDraggable } from './ui.js';
 import { icon } from './icons.js';
 import { api } from './api.js';
 import { initActionLog, askLogConsentOnce } from './actionlog.js';
@@ -140,8 +140,10 @@ export class App {
   floatPM(on) {
     const pm = this.el.pm;
     pm.classList.toggle('pm-float', !!on);
-    if (on) { const r = this.el.views.getBoundingClientRect(); Object.assign(pm.style, { left: r.left + 8 + 'px', top: r.top + 8 + 'px', maxHeight: Math.max(200, r.height - 16) + 'px' }); }
-    else Object.assign(pm.style, { left: '', top: '', maxHeight: '' });
+    const d = makeDraggable(pm, '.pm-header', 'monolith.dlgPos.pm'); // drag by its title strip, place remembered (0.1.95)
+    d.off = !on;
+    if (on) { const r = this.el.views.getBoundingClientRect(); Object.assign(pm.style, { left: r.left + 8 + 'px', top: r.top + 8 + 'px', maxHeight: Math.max(200, r.height - 16) + 'px' }); d.apply(); }
+    else { Object.assign(pm.style, { left: '', top: '', maxHeight: '' }); d.reset(); }
   }
   renderLeftTabs() {
     if (!this.isActive()) return;
@@ -155,12 +157,14 @@ export class App {
     }
   }
   setConfirmCorner(c) {
+    this._corner = c;
     const el = this.el.corner;
     el.innerHTML = '';
     if (!c) { el.style.display = 'none'; if (['part', 'assembly'].includes(this.doc?.doc.kind) && !this.doc.sketcher && !this.pm.open) this.showPanel('tree'); return; }
     el.style.display = 'flex';
     el.append(h('button', { class: 'cc ok', title: c.okTip || 'OK', html: icon(c.okTip === 'Exit Sketch' ? 'exitSketch' : 'check'), onclick: c.ok }),
       h('button', { class: 'cc cancel', title: c.cancelTip || 'Cancel', html: icon('cancel'), onclick: c.cancel }));
+    this.doc?.viewSet?.placeCorner?.();
   }
   showCommandLine(on, handler) { this.cmdOn = on; this.cmdHandler = handler; if (this.isActive()) this.el.cmdline.style.display = on ? '' : 'none'; }
   setPrompt(t) { this.el.cmdPrompt.textContent = t; }
@@ -181,8 +185,19 @@ export class App {
   cur() { return this.root.active; }
   wrapPM(t) {
     const pm = t.pm, pmShow = pm.show.bind(pm), pmClose = pm.close.bind(pm);
-    pm.show = (...a) => { const r = pmShow(...a); t.showPanel('pm'); return r; };
-    pm.close = (...a) => { const r = pmClose(...a); t.floatPM(false); if (t.panel === 'pm') t.showPanel(t.doc?.sketcher ? 'props' : 'tree'); else t.showPanel(t.panel); return r; };
+    // every dialog with OK also gets the OK / Cancel buttons in the view (0.1.95); the previous ones (Exit Sketch)
+    // come back when it closes
+    pm.show = (...a) => {
+      const o = a[0] || {};
+      const r = pmShow(...a); t.showPanel('pm'); // (show closes a previous dialog first: its buttons are restored then)
+      if (o.onOk && !/^close$/i.test(o.okLabel || '')) { const now = t._corner; t._cornerPrev = now && !now._pm ? now : null; t.setConfirmCorner({ ok: () => pm.ok(), cancel: () => pm.cancel(), _pm: true }); }
+      return r;
+    };
+    pm.close = (...a) => {
+      const r = pmClose(...a); t.floatPM(false);
+      if (t._corner?._pm) { const back = t._cornerPrev; t._cornerPrev = null; t.setConfirmCorner(back && t.doc?.sketcher ? back : null); }
+      if (t.panel === 'pm') t.showPanel(t.doc?.sketcher ? 'props' : 'tree'); else t.showPanel(t.panel); return r;
+    };
   }
   newTab() {
     const app = this.root;

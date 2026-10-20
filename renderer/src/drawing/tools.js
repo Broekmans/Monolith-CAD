@@ -62,23 +62,23 @@ export class DrawingTools {
     const q = this.toModel(v, p);
     if (this._free) return { kind: 'pt', v, q, S: p.slice(), d: 0, free: true };
     const d = fitData(v.geom.fit); if (!d) return null;
-    const s = viewScale(v, this.sheetOf(v)), R = Math.max(12 / this.pxMm() / s, 60);
+    const s = viewScale(v, this.sheetOf(v)), R = Math.max(opt('drFitSearchPx') / this.pxMm() / s, opt('drFitSearchMin'));
     let r = fitAt(d, q, R, this.doc.snapMode || 'first');
     // stick to the wall we are on: keep the last fitted line while the cursor stays in its band and
     // along its stretch, unless a corner shows up (no jumping between neighbouring bands)
     const last = this._lastFit;
     if (last && last.v === v.id && r && !r.corner && r.line !== last.line) {
-      const L = last.line, inBand = lineDist(L, q) <= Math.max(3 * L.sigma + d.cell, R * 0.35);
+      const L = last.line, inBand = lineDist(L, q) <= Math.max(opt('drStickSigma') * L.sigma + d.cell, R * opt('drStickBandK'));
       const t = (q[0] - L.a[0]) * L.dir[0] + (q[1] - L.a[1]) * L.dir[1], len0 = (L.b[0] - L.a[0]) * L.dir[0] + (L.b[1] - L.a[1]) * L.dir[1];
-      const better = lineDist(r.line, q) < 0.5 * lineDist(L, q) - d.cell;
+      const better = lineDist(r.line, q) < opt('drStickBetter') * lineDist(L, q) - d.cell;
       if (inBand && t >= -R && t <= len0 + R && !better) { const e = (q[0] - L.c[0]) * L.nrm[0] + (q[1] - L.c[1]) * L.nrm[1]; r = { line: L, foot: [q[0] - L.nrm[0] * e, q[1] - L.nrm[1] * e], corner: null }; }
     }
     this._lastFit = r && !r.corner ? { v: v.id, line: r.line } : null;
     // the fitted wall has no points at the foot: the cursor is in an opening
-    if (r && !r.corner && near(d, r.foot, Math.max(4 * d.cell, 40)).length === 0) r = null;
+    if (r && !r.corner && near(d, r.foot, Math.max(opt('drOpenCheckCell') * d.cell, opt('drOpenCheckMin'))).length === 0) r = null;
     if (!r) {
       // in a gap of a wall: door / window opening between the two wall ends
-      const o = openingAt(d, q, R, Math.max(1500, 40 / this.pxMm() / s));
+      const o = openingAt(d, q, R, Math.max(opt('drOpenSearch'), opt('drOpenSearchPx') / this.pxMm() / s));
       if (!o) return null;
       const f = { sigma: o.line.sigma, n: o.line.n };
       return { kind: 'edge', v, q, S: p.slice(), d: 0, e: { type: 'line', pts: [...o.a, ...o.b], fit: { ...f, c: o.line.c, dir: o.line.dir, nrm: o.line.nrm }, opening: { a: o.a, b: o.b, width: o.width } } };
@@ -89,13 +89,15 @@ export class DrawingTools {
   }
   hoverMark(sn) {
     if (!sn) return [];
-    const seg = (l, P) => { const A = this.toSheetPt(sn.v, l.a), B = this.toSheetPt(sn.v, l.b), u = nrm(sub(B, A)), r = 14 / this.pxMm(); return { t: 'line', pts: [P[0] - u[0] * r, P[1] - u[1] * r, P[0] + u[0] * r, P[1] + u[1] * r], w: 0.5, color: '#d81bd8', screen: true }; };
-    if (sn.corner) return [seg(sn.corner.l1, sn.S), seg(sn.corner.l2, sn.S), { t: 'circle', c: sn.S, r: 4 / this.pxMm(), w: 0.4, color: '#d81bd8', screen: true }];
-    if (sn.kind === 'edge' && sn.e.fit && !sn.e.opening) { const l = { a: [sn.e.pts[0], sn.e.pts[1]], b: [sn.e.pts[2], sn.e.pts[3]] }, P = this.toSheetPt(sn.v, sn.q), k = this.pxMm(); return [seg(l, P), { t: 'circle', c: P, r: 3 / k, w: 0.4, color: '#d81bd8', screen: true }, { t: 'text', x: P[0] + 6 / k, y: P[1] + 6 / k, size: 2.2, text: `±${fmt(sn.e.fit.sigma, 1)} mm (${sn.e.fit.n})`, align: 'l', color: '#d81bd8', screen: true }]; }
-    if (sn.kind === 'edge' && sn.e.opening) { const o = sn.e.opening, A = this.toSheetPt(sn.v, o.a), B = this.toSheetPt(sn.v, o.b); return [{ t: 'line', pts: [...A, ...B], w: 0.5, dash: [1.5, 1], color: '#d81bd8', screen: true }, { t: 'circle', c: A, r: 1, w: 0.4, color: '#d81bd8', screen: true }, { t: 'circle', c: B, r: 1, w: 0.4, color: '#d81bd8', screen: true }, { t: 'text', x: (A[0] + B[0]) / 2 + 1.5, y: (A[1] + B[1]) / 2 + 1.5, size: 2.2, text: `opening ${fmt(o.width, 0)} mm`, align: 'l', color: '#d81bd8', screen: true }]; }
-    if (sn.kind === 'edge' && sn.e.fit) { const P = this.toSheetPt(sn.v, sn.q); return [...this.hoverMark({ ...sn, e: { ...sn.e, fit: null } }), { t: 'text', x: P[0] + 2, y: P[1] + 2, size: 2.2, text: `±${fmt(sn.e.fit.sigma, 1)} mm (${sn.e.fit.n})`, align: 'l', color: '#d81bd8', screen: true }]; }
-    if (sn.kind === 'edge') { const pts = []; const { f } = viewXf(sn.v, this.sheetOf(sn.v)); for (let i = 0; i < sn.e.pts.length; i += 2) pts.push(...f(sn.e.pts[i], sn.e.pts[i + 1])); return [{ t: 'line', pts, w: 0.6, color: '#d81bd8', screen: true }]; }
-    return [{ t: 'circle', c: sn.S, r: 1.4, w: 0.4, color: '#d81bd8', screen: true }];
+    // snap marker look: Options drSnap* (colour drSnapColor: orange = what will be)
+    const c = opt('drSnapColor'), lw = opt('drSnapLineW'), mw = opt('drSnapMarkW'), th = opt('drSnapTextH'), sd = opt('drInfoDecMm');
+    const seg = (l, P) => { const A = this.toSheetPt(sn.v, l.a), B = this.toSheetPt(sn.v, l.b), u = nrm(sub(B, A)), r = opt('drSnapMarkLenPx') / this.pxMm(); return { t: 'line', pts: [P[0] - u[0] * r, P[1] - u[1] * r, P[0] + u[0] * r, P[1] + u[1] * r], w: lw, color: c, screen: true }; };
+    if (sn.corner) return [seg(sn.corner.l1, sn.S), seg(sn.corner.l2, sn.S), { t: 'circle', c: sn.S, r: opt('drSnapCornerPx') / this.pxMm(), w: mw, color: c, screen: true }];
+    if (sn.kind === 'edge' && sn.e.fit && !sn.e.opening) { const l = { a: [sn.e.pts[0], sn.e.pts[1]], b: [sn.e.pts[2], sn.e.pts[3]] }, P = this.toSheetPt(sn.v, sn.q), k = this.pxMm(), to = opt('drSnapTextPx'); return [seg(l, P), { t: 'circle', c: P, r: opt('drSnapDotPx') / k, w: mw, color: c, screen: true }, { t: 'text', x: P[0] + to / k, y: P[1] + to / k, size: th, text: `±${fmt(sn.e.fit.sigma, sd)} mm (${sn.e.fit.n})`, align: 'l', color: c, screen: true }]; }
+    if (sn.kind === 'edge' && sn.e.opening) { const o = sn.e.opening, A = this.toSheetPt(sn.v, o.a), B = this.toSheetPt(sn.v, o.b), er = opt('drSnapEndR'), tg = opt('drSnapTextGap'); return [{ t: 'line', pts: [...A, ...B], w: lw, dash: opt('drSnapOpenDash'), color: c, screen: true }, { t: 'circle', c: A, r: er, w: mw, color: c, screen: true }, { t: 'circle', c: B, r: er, w: mw, color: c, screen: true }, { t: 'text', x: (A[0] + B[0]) / 2 + tg, y: (A[1] + B[1]) / 2 + tg, size: th, text: `opening ${fmt(o.width, 0)} mm`, align: 'l', color: c, screen: true }]; }
+    if (sn.kind === 'edge' && sn.e.fit) { const P = this.toSheetPt(sn.v, sn.q), tg = opt('drSnapTextGapPt'); return [...this.hoverMark({ ...sn, e: { ...sn.e, fit: null } }), { t: 'text', x: P[0] + tg, y: P[1] + tg, size: th, text: `±${fmt(sn.e.fit.sigma, sd)} mm (${sn.e.fit.n})`, align: 'l', color: c, screen: true }]; }
+    if (sn.kind === 'edge') { const pts = []; const { f } = viewXf(sn.v, this.sheetOf(sn.v)); for (let i = 0; i < sn.e.pts.length; i += 2) pts.push(...f(sn.e.pts[i], sn.e.pts[i + 1])); return [{ t: 'line', pts, w: opt('drSnapEdgeW'), color: c, screen: true }]; }
+    return [{ t: 'circle', c: sn.S, r: opt('drSnapPtR'), w: mw, color: c, screen: true }];
   }
   startTool(tool) {
     this.endTool();
@@ -136,27 +138,27 @@ export class DrawingTools {
     this.startTool({
       move: (p) => {
         const r = sub(p, par.pos), a = Math.atan2(r[1], r[0]);
-        if (len(r) < 10) { cur = null; this.setPreview(null); return; }
+        if (len(r) < opt('drProjDeadMm')) { cur = null; this.setPreview(null); return; }
         const oct = Math.round(a / (Math.PI / 4));
         const k = { 0: 'right', 1: 'ur', 2: 'above', 3: 'ul', 4: 'left', '-4': 'left', '-3': 'dl', '-2': 'below', '-1': 'dr' }[oct];
         const g = geoms[keys.indexOf(k)], w = (g.box[2] - g.box[0]) * s, hh = (g.box[3] - g.box[1]) * s;
-        let pos = p.slice();
-        if (k === 'right') pos = [Math.max(p[0], pr[2] + w / 2 + 5), par.pos[1]];
-        if (k === 'left') pos = [Math.min(p[0], pr[0] - w / 2 - 5), par.pos[1]];
-        if (k === 'above') pos = [par.pos[0], Math.max(p[1], pr[3] + hh / 2 + 5)];
-        if (k === 'below') pos = [par.pos[0], Math.min(p[1], pr[1] - hh / 2 - 5)];
+        let pos = p.slice(); const mg = opt('drProjMinGap');
+        if (k === 'right') pos = [Math.max(p[0], pr[2] + w / 2 + mg), par.pos[1]];
+        if (k === 'left') pos = [Math.min(p[0], pr[0] - w / 2 - mg), par.pos[1]];
+        if (k === 'above') pos = [par.pos[0], Math.max(p[1], pr[3] + hh / 2 + mg)];
+        if (k === 'below') pos = [par.pos[0], Math.min(p[1], pr[1] - hh / 2 - mg)];
         cur = { k, g, pos };
         const ghost = { pos, geom: g, scale: par.scale, sheet: par.sheet };
-        const { f } = viewXf(ghost, sh), prims = [];
-        for (const e of g.edges) { if (e.cls !== 'v') continue; const q = []; for (let i = 0; i < e.pts.length; i += 2) q.push(...f(e.pts[i], e.pts[i + 1])); prims.push({ t: 'line', pts: q, w: 0.3, color: '#2a6fd6', screen: true }); }
-        const rr = viewRect(ghost, sh);
-        prims.push({ t: 'sel', on: true, pts: [rr[0] - 4, rr[1] - 4, rr[2] + 4, rr[1] - 4, rr[2] + 4, rr[3] + 4, rr[0] - 4, rr[3] + 4, rr[0] - 4, rr[1] - 4] });
+        const { f } = viewXf(ghost, sh), prims = [], pc = opt('drPreviewColor'), pw = opt('drPreviewW');
+        for (const e of g.edges) { if (e.cls !== 'v') continue; const q = []; for (let i = 0; i < e.pts.length; i += 2) q.push(...f(e.pts[i], e.pts[i + 1])); prims.push({ t: 'line', pts: q, w: pw, color: pc, screen: true }); }
+        const rr = viewRect(ghost, sh), fm = opt('drFrameMargin');
+        prims.push({ t: 'sel', on: true, pts: [rr[0] - fm, rr[1] - fm, rr[2] + fm, rr[1] - fm, rr[2] + fm, rr[3] + fm, rr[0] - fm, rr[3] + fm, rr[0] - fm, rr[1] - fm] });
         this.setPreview(prims);
       },
       click: () => {
         if (!cur) return;
         const snap = this.snapshot(), d = dirs[cur.k], ortho = ['right', 'left', 'above', 'below'].includes(cur.k);
-        const nm = Object.entries(STD).find(([kk, q]) => kk !== 'iso' && q.dir.every((c, i) => Math.abs(c - d.dir[i]) < 1e-9) && q.x.every((c, i) => Math.abs(c - d.x[i]) < 1e-9));
+        const eps = opt('geomEpsTiny'), nm = Object.entries(STD).find(([kk, q]) => kk !== 'iso' && q.dir.every((c, i) => Math.abs(c - d.dir[i]) < eps) && q.x.every((c, i) => Math.abs(c - d.x[i]) < eps));
         const v = { id: uid('v'), sheet: par.sheet, name: ortho ? (nm ? nm[1].label[0] + nm[1].label.slice(1).toLowerCase() : `Projected ${this.doc.views.length + 1}`) : 'Isometric', src: par.src, srcName: par.srcName, dir: d.dir, x: d.x, pos: cur.pos, hidden: ortho ? par.hidden : false, scale: par.scale ? par.scale.slice() : null, geom: cur.g, ...(par.cloud ? { cloud: { ...par.cloud, clip: { ...par.cloud.clip, on: false } } } : {}), ...(ortho ? { parent: par.id, side: cur.k } : {}) };
         this.doc.views.push(v);
         this.pushUndo(snap); this.app.setDirty(true); this.renderTree();
@@ -170,11 +172,11 @@ export class DrawingTools {
     this.app.pm.show({ title: 'Section View', iconName: 'section', fields: [{ type: 'info', key: 'msg', text: 'Click two points across a view for the cutting line (it snaps to horizontal / vertical and to model points). Then move the mouse to the side you look from and click to place the section.' }], onCancel: () => this.endTool() });
     const st = { a: null, par: null };
     const msg = (t) => { const el = this.app.pm.current?.inputs?.msg; if (el) el.textContent = t; };
-    const pick = (p) => { let sn = this.snapAt(p, st.par?.id); if (sn && !isOrtho(sn.v)) sn = null; const v = st.par || (sn && isOrtho(sn.v) ? sn.v : null) || this.viewNear(p, 25, isOrtho); return { sn, v, P: sn && sn.kind !== 'edge' ? sn.S : p }; };
+    const pick = (p) => { let sn = this.snapAt(p, st.par?.id); if (sn && !isOrtho(sn.v)) sn = null; const v = st.par || (sn && isOrtho(sn.v) ? sn.v : null) || this.viewNear(p, opt('drSectionStartMm'), isOrtho); return { sn, v, P: sn && sn.kind !== 'edge' ? sn.S : p }; };
     const second = (P) => {
-      // snap the line to horizontal / vertical within 5°
-      const d = sub(P, st.a), ang = Math.atan2(d[1], d[0]);
-      for (const t of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) { let x = ang - t; x = Math.atan2(Math.sin(x), Math.cos(x)); if (Math.abs(x) < (5 * Math.PI) / 180) { const l = len(d); return [st.a[0] + l * Math.cos(t), st.a[1] + l * Math.sin(t)]; } }
+      // snap the line to horizontal / vertical within drCutSnapDeg (5°)
+      const d = sub(P, st.a), ang = Math.atan2(d[1], d[0]), lim = (opt('drCutSnapDeg') * Math.PI) / 180;
+      for (const t of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) { let x = ang - t; x = Math.atan2(Math.sin(x), Math.cos(x)); if (Math.abs(x) < lim) { const l = len(d); return [st.a[0] + l * Math.cos(t), st.a[1] + l * Math.sin(t)]; } }
       return P;
     };
     this.startTool({
@@ -182,7 +184,7 @@ export class DrawingTools {
         if (st.place) { this.sectionPreview(st, p); return; }
         const { sn, P } = pick(p);
         const prims = this.hoverMark(sn);
-        if (st.a) { const B = second(P); prims.push({ t: 'line', pts: [...st.a, ...B], w: 0.35, dash: [6, 1.5, 1, 1.5], color: '#2a6fd6', screen: true }); }
+        if (st.a) { const B = second(P); prims.push({ t: 'line', pts: [...st.a, ...B], w: opt('drPreviewCutW'), dash: opt('drPreviewCutDash'), color: opt('drPreviewColor'), screen: true }); }
         this.setPreview(prims);
       },
       click: async (p) => {
@@ -193,7 +195,7 @@ export class DrawingTools {
           st.a = P; st.par = v; msg('Now click the second point of the cutting line.'); return;
         }
         const B = second(P);
-        if (len(sub(B, st.a)) < 2) return;
+        if (len(sub(B, st.a)) < opt('drCutMinLen')) return;
         st.b = B;
         await this.prepareSection(st);
         if (st.geoms) msg('Move the mouse to the side you look from, then click to place the section view.');
@@ -208,7 +210,7 @@ export class DrawingTools {
     const p3 = lin3(X, a[0], Y, a[1]);
     // frame of each side: horizontal-ish cut -> keep x along the cut, else keep y along the cut
     // point clouds cut on a plan (top / bottom view): height stays up in the section (building sections)
-    const upright = !!par.cloud && Math.abs(N[1]) > 0.9;
+    const upright = !!par.cloud && Math.abs(N[1]) > opt('drPlanViewDot');
     const frame = (m) => {
       if (upright) return { dir: m, x: n3(cross3([0, 1, 0], m)), free: true };
       const dir = m, horiz = Math.abs(d2[0]) >= Math.abs(d2[1]);
@@ -226,18 +228,20 @@ export class DrawingTools {
   sectionPos(st, side, p) {
     const par = st.par, sh = this.sheetOf(par), s = viewScale(par, sh), g = side.g, w = (g.box[2] - g.box[0]) * s, hh = (g.box[3] - g.box[1]) * s, pr = viewRect(par, sh), m = side.m2;
     if (side.free) return { pos: p.slice(), sideName: 'free' };
-    if (Math.abs(m[0]) > 0.999) return { pos: [m[0] > 0 ? Math.max(p[0], pr[2] + w / 2 + 5) : Math.min(p[0], pr[0] - w / 2 - 5), par.pos[1]], sideName: m[0] > 0 ? 'right' : 'left' };
-    if (Math.abs(m[1]) > 0.999) return { pos: [par.pos[0], m[1] > 0 ? Math.max(p[1], pr[3] + hh / 2 + 5) : Math.min(p[1], pr[1] - hh / 2 - 5)], sideName: m[1] > 0 ? 'above' : 'below' };
+    const ax = opt('drSideAxisDot'), mg = opt('drProjMinGap');
+    if (Math.abs(m[0]) > ax) return { pos: [m[0] > 0 ? Math.max(p[0], pr[2] + w / 2 + mg) : Math.min(p[0], pr[0] - w / 2 - mg), par.pos[1]], sideName: m[0] > 0 ? 'right' : 'left' };
+    if (Math.abs(m[1]) > ax) return { pos: [par.pos[0], m[1] > 0 ? Math.max(p[1], pr[3] + hh / 2 + mg) : Math.min(p[1], pr[1] - hh / 2 - mg)], sideName: m[1] > 0 ? 'above' : 'below' };
     return { pos: p.slice(), sideName: 'free' };
   }
   sectionPreview(st, p) {
     const side = this.sectionSide(st, p), { pos } = this.sectionPos(st, side, p), sh = this.sheetOf(st.par);
     const ghost = { pos, geom: side.g, scale: st.par.scale, sheet: st.par.sheet }, { f } = viewXf(ghost, sh), prims = [];
-    if (!side.g.edges.length) { const r = viewRect(ghost, sh); prims.push({ t: 'line', pts: [r[0], r[1], r[2], r[1], r[2], r[3], r[0], r[3], r[0], r[1]], w: 0.3, color: '#2a6fd6', dash: [2, 1.5], screen: true }); }
-    for (const e of side.g.edges) { if (e.cls !== 'v') continue; const q = []; for (let i = 0; i < e.pts.length; i += 2) q.push(...f(e.pts[i], e.pts[i + 1])); prims.push({ t: 'line', pts: q, w: 0.3, color: '#2a6fd6', screen: true }); }
-    prims.push({ t: 'line', pts: [...st.a, ...st.b], w: 0.35, dash: [6, 1.5, 1, 1.5], color: '#2a6fd6', screen: true });
+    const pc = opt('drPreviewColor'), pw = opt('drPreviewW'), cw = opt('drPreviewCutW'), al = opt('drPreviewArrowLen');
+    if (!side.g.edges.length) { const r = viewRect(ghost, sh); prims.push({ t: 'line', pts: [r[0], r[1], r[2], r[1], r[2], r[3], r[0], r[3], r[0], r[1]], w: pw, color: pc, dash: opt('drPreviewEmptyDash'), screen: true }); }
+    for (const e of side.g.edges) { if (e.cls !== 'v') continue; const q = []; for (let i = 0; i < e.pts.length; i += 2) q.push(...f(e.pts[i], e.pts[i + 1])); prims.push({ t: 'line', pts: q, w: pw, color: pc, screen: true }); }
+    prims.push({ t: 'line', pts: [...st.a, ...st.b], w: cw, dash: opt('drPreviewCutDash'), color: pc, screen: true });
     const mid = [(st.a[0] + st.b[0]) / 2, (st.a[1] + st.b[1]) / 2];
-    prims.push({ t: 'line', pts: [...mid, mid[0] - side.m2[0] * 8, mid[1] - side.m2[1] * 8], w: 0.35, color: '#2a6fd6', screen: true });
+    prims.push({ t: 'line', pts: [...mid, mid[0] - side.m2[0] * al, mid[1] - side.m2[1] * al], w: cw, color: pc, screen: true });
     this.setPreview(prims);
   }
   placeSection(st, p) {
@@ -263,22 +267,22 @@ export class DrawingTools {
   }
   cmdDimension() {
     const st = { items: [], v: null };
-    const opt = { mode: 'auto', circle: 'dia', chain: false, total: true };
+    const so = { mode: 'auto', circle: 'dia', chain: false, total: true }; // tool settings (not the Options)
     const pm = this.app.pm.show({
-      title: 'Smart Dimension', iconName: 'dimension', values: opt,
+      title: 'Smart Dimension', iconName: 'dimension', values: so,
       fields: [{ type: 'info', key: 'msg', text: 'Click a line (length), two points, two lines (angle) or a circle / arc (diameter or radius). Then click where the dimension goes. Esc ends.' },
         { key: 'mode', type: 'select', label: 'Length', options: [{ value: 'auto', label: 'Automatic (by mouse position)' }, { value: 'h', label: 'Horizontal' }, { value: 'v', label: 'Vertical' }, { value: 'aligned', label: 'Aligned (true length)' }] },
         { key: 'circle', type: 'select', label: 'Circles and arcs', options: [{ value: 'dia', label: 'Diameter Ø' }, { value: 'rad', label: 'Radius R' }] },
         { key: 'chain', type: 'check', label: 'Chain: click points / walls / openings in a row, Enter or right click, then place' },
         { key: 'total', type: 'check', label: 'Chain: add the overall dimension' }],
-      onChange: (v) => Object.assign(opt, v),
+      onChange: (v) => Object.assign(so, v),
       onCancel: () => this.endTool(),
     });
     void pm;
     const build = (p) => {
       const it = st.items, v = st.v; if (!v || !it.length) return null;
       const at = this.toModel(v, p);
-      if (it.length === 1 && it[0].kind === 'circle') return { type: opt.circle, c: it[0].c, r: it[0].r, at };
+      if (it.length === 1 && it[0].kind === 'circle') return { type: so.circle, c: it[0].c, r: it[0].r, at };
       if (it.length === 1 && it[0].kind === 'opening') return withFit({ type: 'len', a: it[0].a, b: it[0].b, mode: 'aligned', at }, it);
       let A, B;
       if (it.length === 1 && it[0].kind === 'line') [A, B] = [it[0].a, it[0].b];
@@ -291,10 +295,11 @@ export class DrawingTools {
         return withFit({ type: 'len', a: P.q, b: footOn(L, P.q), mode: 'aligned', at }, it);
       }
       if (!A) return null;
-      let mode = opt.mode;
+      let mode = so.mode;
       if (mode === 'auto') {
         const d = sub(B, A);
-        if (Math.abs(d[0]) < 1e-6 * (Math.abs(d[1]) + 1) || Math.abs(d[1]) < 1e-6 * (Math.abs(d[0]) + 1)) mode = 'aligned';
+        const eps = opt('geomEps');
+        if (Math.abs(d[0]) < eps * (Math.abs(d[1]) + 1) || Math.abs(d[1]) < eps * (Math.abs(d[0]) + 1)) mode = 'aligned';
         else { const xin = at[0] > Math.min(A[0], B[0]) && at[0] < Math.max(A[0], B[0]), yin = at[1] > Math.min(A[1], B[1]) && at[1] < Math.max(A[1], B[1]); mode = xin && !yin ? 'h' : yin && !xin ? 'v' : 'aligned'; }
       }
       return { type: 'len', a: A, b: B, mode, at };
@@ -314,21 +319,21 @@ export class DrawingTools {
       const P = chainPts(); if (P.length < 2 || !st.v) return [];
       const D = nrm(sub(P[P.length - 1], P[0])), at = this.toModel(st.v, p);
       const S = P.slice().sort((a, b) => (a[0] - P[0][0]) * D[0] + (a[1] - P[0][1]) * D[1] - ((b[0] - P[0][0]) * D[0] + (b[1] - P[0][1]) * D[1]));
-      const mode = opt.mode !== 'auto' ? opt.mode : Math.abs(D[0]) > 0.985 ? 'h' : Math.abs(D[1]) > 0.985 ? 'v' : 'aligned';
+      const ca = opt('drChainAxisDot'), eps = opt('geomEps'), mode = so.mode !== 'auto' ? so.mode : Math.abs(D[0]) > ca ? 'h' : Math.abs(D[1]) > ca ? 'v' : 'aligned';
       const out = [];
-      for (let i = 0; i + 1 < S.length; i++) if (len(sub(S[i + 1], S[i])) > 1e-6) out.push(withFit({ type: 'len', a: S[i], b: S[i + 1], mode, at: at.slice(), chain: i }, st.items));
-      if (opt.total && out.length > 1) {
-        const n = [-D[1], D[0]], side = Math.sign((at[0] - S[0][0]) * n[0] + (at[1] - S[0][1]) * n[1]) || 1, k = 8 / viewScale(st.v, this.sheetOf(st.v));
+      for (let i = 0; i + 1 < S.length; i++) if (len(sub(S[i + 1], S[i])) > eps) out.push(withFit({ type: 'len', a: S[i], b: S[i + 1], mode, at: at.slice(), chain: i }, st.items));
+      if (so.total && out.length > 1) {
+        const n = [-D[1], D[0]], side = Math.sign((at[0] - S[0][0]) * n[0] + (at[1] - S[0][1]) * n[1]) || 1, k = opt('drChainTotalGap') / viewScale(st.v, this.sheetOf(st.v));
         out.push(withFit({ type: 'len', a: S[0], b: S[S.length - 1], mode, at: [at[0] + n[0] * side * k, at[1] + n[1] * side * k] }, st.items));
       }
       return out;
     };
-    const chainMarks = () => (st.v ? chainPts().map((q) => ({ t: 'circle', c: this.toSheetPt(st.v, q), r: 1, w: 0.4, color: '#2a6fd6', screen: true })) : []);
+    const chainMarks = () => (st.v ? chainPts().map((q) => ({ t: 'circle', c: this.toSheetPt(st.v, q), r: opt('drPreviewMarkR'), w: opt('drSnapMarkW'), color: opt('drPreviewColor'), screen: true })) : []);
     this.startTool({
       move: (p) => {
         const sn = this.snapAt(p, st.v?.id);
         const mark = this.hoverMark(sn);
-        if (opt.chain) {
+        if (so.chain) {
           if (st.place) this.setPreview([...chainAnns(p).map((a, i) => ({ t: 'annprev', view: st.v.id, ann: { ...a, id: '__c' + i } }))]);
           else this.setPreview([...mark, ...chainMarks()]);
           return;
@@ -339,7 +344,7 @@ export class DrawingTools {
       click: (p) => {
         const sn = this.snapAt(p, st.v?.id);
         const it = sn && item(sn);
-        if (opt.chain) {
+        if (so.chain) {
           if (st.place) {
             const anns = chainAnns(p);
             if (anns.length) { const snap = this.snapshot(); for (const a of anns) { a.id = uid('a'); (st.v.anns ||= []).push(a); } this.pushUndo(snap); this.app.setDirty(true); this.renderTree(); this.app.setStatus(`Chain of ${anns.length} dimensions placed`); }
@@ -354,19 +359,19 @@ export class DrawingTools {
           if (it.kind === 'line' && st.items[0].kind === 'line' && sameLine(st.items[0], it)) { toast('That is the same line: click a second line, or click where the length goes'); return; }
           st.items.push(it); return;
         }
-        if (ready()) { const a = build(p); if (a) { this.addAnn(st.v, a); this.app.setStatus(`${a.type === 'ang' ? 'Angle' : a.type === 'len' ? 'Length' : a.type === 'dia' ? 'Diameter' : 'Radius'}: ${fmt(annValue(a), 3)}${a.type === 'ang' ? '°' : ' mm'}${a.fit ? `  (fitted planes, scatter ±${fmt(a.fit.sigma, 1)} mm)` : ''}`); } st.items = []; st.v = null; this.setPreview(null); return; }
+        if (ready()) { const a = build(p); if (a) { this.addAnn(st.v, a); this.app.setStatus(`${a.type === 'ang' ? 'Angle' : a.type === 'len' ? 'Length' : a.type === 'dia' ? 'Diameter' : 'Radius'}: ${fmt(annValue(a), 3)}${a.type === 'ang' ? '°' : ' mm'}${a.fit ? `  (fitted planes, scatter ±${fmt(a.fit.sigma, opt('drInfoDecMm'))} mm)` : ''}`); } st.items = []; st.v = null; this.setPreview(null); return; }
         if (!it) return;
         if (!st.items.length) st.v = sn.v;
         st.items.push(it);
       },
-      context: () => { if (opt.chain && chainPts().length >= 2) { st.place = true; this.app.setStatus('Click where the chain goes'); } return true; },
-      key: (e) => { if (opt.chain && e.key === 'Enter' && chainPts().length >= 2) { st.place = true; this.app.setStatus('Click where the chain goes'); return true; } if (e.key === 'Backspace' && st.items.length) { st.items.pop(); if (!st.items.length) st.v = null; this.setPreview(null); return true; } return false; },
+      context: () => { if (so.chain && chainPts().length >= 2) { st.place = true; this.app.setStatus('Click where the chain goes'); } return true; },
+      key: (e) => { if (so.chain && e.key === 'Enter' && chainPts().length >= 2) { st.place = true; this.app.setStatus('Click where the chain goes'); return true; } if (e.key === 'Backspace' && st.items.length) { st.items.pop(); if (!st.items.length) st.v = null; this.setPreview(null); return true; } return false; },
     });
   }
   angleAnn(l1, l2, at) {
     // intersection of the two (infinite) lines
     const p = l1.a, r = sub(l1.b, l1.a), q = l2.a, s2 = sub(l2.b, l2.a), rxs = r[0] * s2[1] - r[1] * s2[0];
-    if (Math.abs(rxs) < 1e-12) return null;
+    if (Math.abs(rxs) < opt('geomEpsZero')) return null;
     const t = ((q[0] - p[0]) * s2[1] - (q[1] - p[1]) * s2[0]) / rxs, X = [p[0] + r[0] * t, p[1] + r[1] * t];
     // rays towards the mouse side
     const w = sub(at, X);
@@ -384,7 +389,7 @@ export class DrawingTools {
       move: (p) => {
         if (st.place) { this.annPreview(st.v, ann(p)); return; }
         const sn = this.snapAt(p, st.v?.id), prims = this.hoverMark(sn);
-        if (st.pts.length) { const q = st.pts.flatMap((m) => this.toSheetPt(st.v, m)); const cur = sn && sn.kind !== 'edge' ? sn.S : p; prims.push({ t: 'line', pts: [...q, ...cur], w: 0.3, color: '#2a6fd6', screen: true }); }
+        if (st.pts.length) { const q = st.pts.flatMap((m) => this.toSheetPt(st.v, m)); const cur = sn && sn.kind !== 'edge' ? sn.S : p; prims.push({ t: 'line', pts: [...q, ...cur], w: opt('drPreviewW'), color: opt('drPreviewColor'), screen: true }); }
         this.setPreview(prims);
       },
       click: (p) => {
@@ -394,7 +399,7 @@ export class DrawingTools {
         const v = st.v || sn?.v || this.viewAt(p); if (!v) return;
         st.v = v;
         const q = sn && sn.kind !== 'edge' ? sn.q : this.toModel(v, p);
-        if (st.pts.length >= 3 && len(sub(this.toSheetPt(v, st.pts[0]), this.toSheetPt(v, q))) < 8 / this.pxMm()) { close(); return; }
+        if (st.pts.length >= 3 && len(sub(this.toSheetPt(v, st.pts[0]), this.toSheetPt(v, q))) < opt('drCloseLoopPx') / this.pxMm()) { close(); return; }
         st.pts.push(q);
       },
       key: (e) => { if (e.key === 'Enter') { close(); return true; } if (e.key === 'Backspace') { st.pts.pop(); return true; } return false; },
@@ -413,21 +418,21 @@ export class DrawingTools {
         if (!v?.geom?.fit) { toast('Click inside a room on a point cloud view'); return; }
         const q = this.toModel(v, p);
         let r;
-        try { r = await this.roomCompute(v, q, styleOf(this.doc, null), null); } catch (e) { console.error('room slice', e); toast('Could not make the floor plan slice: ' + e.message, 'error', 5000); return; }
+        try { r = await this.roomCompute(v, q, styleOf(this.doc, null), null); } catch (e) { console.error('room slice', e); toast('Could not make the floor plan slice: ' + e.message, 'error', opt('drToastInfoMs')); return; }
         const poly = r.poly;
         if (!poly) {
-          const elev = Math.abs(v.dir?.[1] || 0) < 0.99;
-          toast(elev ? (v.plane && v.cloud?.depth > 0 ? 'No room found: this section looks past the cut (View depth ' + v.cloud.depth + ' m), so the walls behind fill the openings. Set View depth to 0 (slice only), or use a floor plan.' : 'No room found here: in a side view or elevation the walls behind fill the openings. Use a floor plan (top view or horizontal section) or a section with View depth 0.') : 'No closed room found here. Click inside a room on a floor plan (a wall may be missing in the slice).', 'info', 7000);
+          const elev = Math.abs(v.dir?.[1] || 0) < opt('drTopViewDot');
+          toast(elev ? (v.plane && v.cloud?.depth > 0 ? 'No room found: this section looks past the cut (View depth ' + v.cloud.depth + ' m), so the walls behind fill the openings. Set View depth to 0 (slice only), or use a floor plan.' : 'No room found here: in a side view or elevation the walls behind fill the openings. Use a floor plan (top view or horizontal section) or a section with View depth 0.') : 'No closed room found here. Click inside a room on a floor plan (a wall may be missing in the slice).', 'info', opt('drToastLongMs'));
           return;
         }
         const B = v.geom.box;
         try { window.__lithLog?.('ROOM', v.name, 'click', q.map(Math.round), 'slices', r.fits.length, 'area', poly ? (annValue({ type: 'area', pts: poly }) / 1e6).toFixed(3) : '-', 'n', poly ? poly.length : 0, 'opts', JSON.stringify(roomOpts(styleOf(this.doc, null)))); window.__lithLog?.('ROOMPTS', JSON.stringify(poly ? poly.map((p) => p.map(Math.round)) : null)); } catch {}
-        if (poly && poly.some((p) => p[0] < B[0] || p[0] > B[2] || p[1] < B[1] || p[1] > B[3])) { console.warn('room outside view', JSON.stringify(poly.map((p) => p.map(Math.round)))); toast('The room outline leaks out of the building here (an opening without wall in the slice?). Try a floor plan view or click elsewhere in the room.', 'info', 6000); return; }
-        if (Math.abs(annValue({ type: 'area', pts: poly })) < 0.5e6) { toast('Only a very small closed area found here (furniture?). Click in an open part of the room.', 'info', 5000); return; }
+        if (poly && poly.some((p) => p[0] < B[0] || p[0] > B[2] || p[1] < B[1] || p[1] > B[3])) { console.warn('room outside view', JSON.stringify(poly.map((p) => p.map(Math.round)))); toast('The room outline leaks out of the building here (an opening without wall in the slice?). Try a floor plan view or click elsewhere in the room.', 'info', opt('toastWarnMs')); return; }
+        if (Math.abs(annValue({ type: 'area', pts: poly })) < opt('drRoomMinArea') * 1e6) { toast('Only a very small closed area found here (furniture?). Click in an open part of the room.', 'info', opt('drToastInfoMs')); return; }
         if (e?.shiftKey) {
           if (!last || last.v !== v || !this.ann(v.id, last.a.id)) { toast('Shift+click adds a space to the last room: make or select a room in this view first'); return; }
           const L = last.a, J = joinRooms(L.pts, poly, r.d, styleOf(this.doc, L).join), U = J.poly;
-          if (!U) { toast(JOIN_MSG[J.reason] || JOIN_MSG.far, 'info', 7000); return; }
+          if (!U) { toast(JOIN_MSG[J.reason] || JOIN_MSG.far, 'info', opt('drToastLongMs')); return; }
           this.change(() => { L.qs = [...(L.qs || [L.q || L.at]), q]; L.pts = U; });
           try { window.__lithLog?.('ROOM add', v.name, L.label || '', 'click', q.map(Math.round), 'area', (annValue(L) / 1e6).toFixed(3), 'n', U.length, 'doors', J.doors ? J.doors.map((b) => (b.full ? 'full ' : '') + Math.round(b.width)).join('/') : '-'); window.__lithLog?.('ROOMPTS', JSON.stringify(U.map((p) => p.map(Math.round)))); } catch {}
           this.app.setStatus(`${L.label || 'Room'}: space added${J.doors ? ` ${J.doors[0].full ? ' over the full width (no doorway found between)' : ` through ${J.doors.length > 1 ? J.doors.length + ' doorways' : 'a doorway of ' + Math.round(J.doors[0].width) + ' mm'}`}` : ''}, ${fmt(annValue(L) / 1e6, 2)} m²`);
@@ -447,11 +452,11 @@ export class DrawingTools {
     this.app.pm.show({ title: 'Scale Bar', iconName: 'dimension', fields: [{ type: 'info', text: 'Click where the scale bar starts (its left end), on or next to a view. Double-click it later to change its length.' }], onCancel: () => this.endTool() });
     this.startTool({
       click: (p) => {
-        const v = this.viewAt(p) || this.viewNear(p, 40) || this.nearestView(p);
+        const v = this.viewAt(p) || this.viewNear(p, opt('drScaleBarNearMm')) || this.nearestView(p);
         if (!v) { toast('Put the scale bar next to a view'); return; }
-        const b = v.geom.box, want = (b[2] - b[0]) / 4, nice = [1, 2, 5].flatMap((k) => [1, 10, 100, 1000, 10000, 100000].map((e) => k * e)).sort((x, y) => x - y);
+        const b = v.geom.box, want = (b[2] - b[0]) * opt('drScaleBarFrac'), nice = [1, 2, 5].flatMap((k) => [1, 10, 100, 1000, 10000, 100000].map((e) => k * e)).sort((x, y) => x - y);
         const len = nice.filter((q) => q <= want).pop() || nice[0];
-        this.addAnn(v, { type: 'scalebar', len, n: 5, at: this.toModel(v, p) });
+        this.addAnn(v, { type: 'scalebar', len, n: opt('drScaleBarParts'), at: this.toModel(v, p) });
         this.app.pm.cancel?.(); this.endTool();
       },
     });
@@ -465,7 +470,7 @@ export class DrawingTools {
       st.anchor = null; st.v = null; this.setPreview(null);
     };
     this.startTool({
-      move: (p) => { const prims = st.v ? [] : this.hoverMark(this.snapAt(p)); if (st.anchor) { const A = this.toSheetPt(st.v, st.anchor); prims.push({ t: 'line', pts: [...A, ...p], w: 0.3, color: '#2a6fd6', screen: true }); } this.setPreview(prims); },
+      move: (p) => { const prims = st.v ? [] : this.hoverMark(this.snapAt(p)); if (st.anchor) { const A = this.toSheetPt(st.v, st.anchor); prims.push({ t: 'line', pts: [...A, ...p], w: opt('drPreviewW'), color: opt('drPreviewColor'), screen: true }); } this.setPreview(prims); },
       click: (p) => {
         if (st.anchor) { finish(st.v, this.toModel(st.v, p)); return; }
         const sn = this.snapAt(p);
@@ -491,7 +496,7 @@ export class DrawingTools {
   // room outline at q with the room settings st (slices → merged sample → roomAt); writes the test file
   async roomCompute(v, q, st, label) {
     const fits = await this.roomFits(v, st), d = mergeData(fits.map(fitData)), opts = roomOpts(st);
-    const poly = d && roomAt(d, q, 25000, opts);
+    const poly = d && roomAt(d, q, opt('drRoomMaxR'), opts);
     this.roomDump(v, q, fits, opts, poly, label);
     return { poly, fits, d };
   }
@@ -505,10 +510,10 @@ export class DrawingTools {
   // annotation under p (its text box)
   annAt(p) {
     const prims = this._annBoxes || sheetPrimsCache(this);
-    const t = 1.5 / 1; // mm tolerance
+    const t = opt('drAnnPickMm'); // mm tolerance (on paper)
     for (const q of prims) if (q.t === 'annbox' && p[0] >= q.box[0] - t && p[0] <= q.box[2] + t && p[1] >= q.box[1] - t && p[1] <= q.box[3] + t) return { view: q.view, id: q.ann };
-    // room / area outlines: within 5 px of the line
-    const tp = 5 / Math.max(1e-6, Math.abs(this.affine().ex[0]));
+    // room / area outlines: within drOutlinePickPx of the line
+    const tp = opt('drOutlinePickPx') / Math.max(opt('geomEps'), Math.abs(this.affine().ex[0]));
     for (const q of prims) if (q.t === 'annpath' && q.view) for (let i = 0; i + 3 < q.pts.length; i += 2) if (segDist(p, q.pts[i], q.pts[i + 1], q.pts[i + 2], q.pts[i + 3]) <= tp) return { view: q.view, id: q.ann, path: true };
     return null;
   }
@@ -525,11 +530,11 @@ export class DrawingTools {
     else if (a.type === 'scalebar') { const t = await promptText('Scale bar length (m)', String(a.len / 1000)); const m = parseFloat(String(t ?? '').replace(',', '.')); if (m > 0) this.change(() => { a.len = m * 1000; }); }
   }
 }
-// two (fitted) lines within 3° count as parallel: the dimension is their perpendicular distance
+// two (fitted) lines within drParallelDeg (3°) count as parallel: the dimension is their perpendicular distance
 const ldir = (l) => nrm(sub(l.b, l.a));
-function parallel(l1, l2) { const a = ldir(l1), b = ldir(l2); return Math.abs(a[0] * b[1] - a[1] * b[0]) < Math.sin((3 * Math.PI) / 180); }
+function parallel(l1, l2) { const a = ldir(l1), b = ldir(l2); return Math.abs(a[0] * b[1] - a[1] * b[0]) < Math.sin((opt('drParallelDeg') * Math.PI) / 180); }
 function footOn(l, q) { const d = ldir(l), t = (q[0] - l.a[0]) * d[0] + (q[1] - l.a[1]) * d[1]; return [l.a[0] + d[0] * t, l.a[1] + d[1] * t]; }
-function sameLine(l1, l2) { if (!parallel(l1, l2)) return false; const f = footOn(l1, l2.a); return len(sub(f, l2.a)) < 1e-6 * (1 + len(l2.a)) + (l1.fit ? 3 * l1.fit.sigma + 2 : 0); }
+function sameLine(l1, l2) { if (!parallel(l1, l2)) return false; const f = footOn(l1, l2.a); return len(sub(f, l2.a)) < opt('geomEps') * (1 + len(l2.a)) + (l1.fit ? opt('drSameLineSigma') * l1.fit.sigma + opt('drSameLineMm') : 0); }
 // distance between parallel lines: from the first pick (or the middle of line 1) square across to line 2 (mean direction)
 function gapAnn(l1, l2, at) {
   let d1 = ldir(l1), d2 = ldir(l2); if (d1[0] * d2[0] + d1[1] * d2[1] < 0) d2 = [-d2[0], -d2[1]];

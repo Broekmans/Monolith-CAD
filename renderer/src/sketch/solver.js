@@ -1,5 +1,6 @@
 // Wrapper around FreeCAD's PlaneGCS solver (WebAssembly) for sketches.
 import { init_planegcs_module, GcsWrapper } from '@salusoft89/planegcs';
+import { opt } from '../app/options/index.js';
 
 let mod = null;
 export async function initSolver(locateFile) {
@@ -13,7 +14,7 @@ function geoMap(sk) {
 }
 
 // Convert one of our constraints into planegcs primitives.
-function consToGcs(c, gm) {
+function consToGcs(c, gm, fixed = null) {
   const id = c.id;
   const T = (o) => ({ id: o.id || id, driving: c.driving !== false, ...o });
   const g = (k) => gm.get(c[k]);
@@ -56,6 +57,24 @@ function consToGcs(c, gm) {
       const cc = isCirc(a) ? ia : ib, aa = isCirc(a) ? ib : ia;
       return [T({ type: 'tangent_ca', c_id: cc, a_id: aa })];
     }
+    // Offset Entities (0.1.94): a = offset entity, b = base entity; value = distance, s = radius sign (+ = bigger)
+    case 'offset': case 'offsetRel': {
+      const a = g('a'), b = g('b');
+      if (a.type === 'line') return [T({ type: 'parallel', l1_id: c.a, l2_id: c.b }), T({ id: id + '#2', type: 'p2l_distance', p_id: a.p1, l_id: c.b, distance: c.value })];
+      // fixed base arc (model reference): its radius is a constant. Tying the offset radius to the base radius
+      // parameter would pull in the fixed arc's own rules (centre / ends fixed + radius) = one redundant equation
+      // per arc → "Over Defined" (0.1.98)
+      if (b.type === 'arc' && fixed && fixed.has(b.c) && fixed.has(b.s) && fixed.has(b.e)) {
+        const C = gm.get(b.c), S = gm.get(b.s), E = gm.get(b.e);
+        const rb = (Math.hypot(S.x - C.x, S.y - C.y) + Math.hypot(E.x - C.x, E.y - C.y)) / 2, r = rb + c.value * (c.s || 1);
+        return [T({ type: 'p2p_coincident', p1_id: a.c, p2_id: b.c }),
+          T({ id: id + '#2', ...(a.type === 'arc' ? { type: 'arc_radius', a_id: c.a } : { type: 'circle_radius', c_id: c.a }), radius: r })];
+      }
+      return [T({ type: 'p2p_coincident', p1_id: a.c, p2_id: b.c }),
+        T({ id: id + '#2', type: 'difference', param1: { o_id: c.b, prop: 'radius' }, param2: { o_id: c.a, prop: 'radius' }, difference: c.value * (c.s || 1) })];
+    }
+    case 'offsetEnd': return [T({ type: 'point_on_line_ppp', p_id: c.p, lp1_id: c.a, lp2_id: c.b })]; // p on line a-b (radial / normal)
+    case 'offsetPerp': { const l = gm.get(c.l); return [T({ type: 'perpendicular_pppp', l1p1_id: c.b, l1p2_id: c.p, l2p1_id: l.p1, l2p2_id: l.p2 })]; }
     case 'tangentEnd': { // line tangent to arc at the shared endpoint p: line ⟂ (arc centre → p)
       const l = gm.get(c.l), a = gm.get(c.c);
       return [T({ type: 'perpendicular_pppp', l1p1_id: l.p1, l1p2_id: l.p2, l2p1_id: a.c, l2p2_id: c.p })];
@@ -110,9 +129,12 @@ function buildPrims(sk, extra = []) {
       prims.push({ id: g.id + '#rules', type: 'arc_rules', a_id: g.id });
     }
   }
-  for (const c of sk.cons) {
-    if (c.driving === false) continue; // reference dimensions are measured in JS
-    try { prims.push(...consToGcs(c, gm)); } catch { /* dangling reference */ }
+  const cm = new Map(sk.cons.map((c) => [c.id, c]));
+  for (const c0 of sk.cons) {
+    if (c0.driving === false) continue; // reference dimensions are measured in JS
+    // offset relations follow their chain's offset dimension (0.1.94)
+    const m = c0.of ? cm.get(c0.of) : null, c = m && typeof m.value === 'number' ? { ...c0, value: m.value } : c0;
+    try { prims.push(...consToGcs(c, gm, fixed)); } catch { /* dangling reference */ }
   }
   prims.push(...extra);
   return prims;
@@ -136,7 +158,29 @@ function readBack(sk, w) {
 
 // Solve the sketch in place. `drag` adds temporary constraints that pull
 // geometry toward the cursor without fighting real constraints.
+// Offset lines (0.1.94): the solver's point-line distance has no side, so before solving each offset line is put
+// back on its own side of the base line (cons.sd) at the offset distance; keeps a big base / model change from
+// flipping the offset to the other side.
+function preOffset(sk) {
+  const gm = geoMap(sk), cm = new Map(sk.cons.map((c) => [c.id, c])), zero = opt('geomEpsZero'), eps = opt('geomEpsTiny');
+  for (const c of sk.cons) {
+    if ((c.type !== 'offset' && c.type !== 'offsetRel') || !c.sd || c.driving === false) continue;
+    const a = gm.get(c.a), b = gm.get(c.b);
+    if (a?.type !== 'line' || b?.type !== 'line') continue;
+    const v = c.of && typeof cm.get(c.of)?.value === 'number' ? cm.get(c.of).value : c.value;
+    const p1 = gm.get(b.p1), p2 = gm.get(b.p2); if (!p1 || !p2) continue;
+    const dx = p2.x - p1.x, dy = p2.y - p1.y, L = Math.hypot(dx, dy); if (L < zero) continue;
+    const n = [-dy / L, dx / L];
+    for (const id of [a.p1, a.p2]) {
+      const q = gm.get(id); if (!q || q.fixed) continue;
+      const s = (q.x - p1.x) * n[0] + (q.y - p1.y) * n[1], want = c.sd * v;
+      if (Math.abs(s - want) > eps) { q.x += n[0] * (want - s); q.y += n[1] * (want - s); }
+    }
+  }
+}
+
 export function solve(sk, { drag = null } = {}) {
+  if (!drag) preOffset(sk);
   const extra = [];
   if (drag) {
     for (const d of drag) {
@@ -171,7 +215,8 @@ export function analyzeDefinition(sk) {
   const under = new Set();
   const gm = geoMap(sk);
   const pts = sk.geo.filter((g) => g.type === 'point');
-  const scale = Math.max(1, ...pts.map((p) => Math.abs(p.x) + Math.abs(p.y))) * 1e-3;
+  const scale = Math.max(1, ...pts.map((p) => Math.abs(p.x) + Math.abs(p.y))) * opt('skProbeScale');
+  const moveTol = scale * opt('skProbeMoveFrac'), rProbe = opt('skProbeRadius');
   const probe = (extra, check) => {
     const w = makeWrapper();
     try {
@@ -192,7 +237,7 @@ export function analyzeDefinition(sk) {
         { id: 'pr_y', type: 'coordinate_y', p_id: p.id, y: p.y + dy, temporary: true },
       ], (prims) => {
         const q = prims.get(p.id);
-        return Math.abs(q.x - p.x) > scale * 0.3 || Math.abs(q.y - p.y) > scale * 0.3;
+        return Math.abs(q.x - p.x) > moveTol || Math.abs(q.y - p.y) > moveTol;
       });
       void axis;
       if (moved) under.add(p.id);
@@ -200,8 +245,8 @@ export function analyzeDefinition(sk) {
   }
   for (const g of sk.geo) {
     if (g.type !== 'circle' && g.type !== 'arc') continue;
-    const moved = probe([{ id: 'pr_r', type: g.type === 'arc' ? 'arc_radius' : 'circle_radius', [g.type === 'arc' ? 'a_id' : 'c_id']: g.id, radius: g.r * 1.01 + scale, temporary: true }],
-      (prims) => Math.abs(prims.get(g.id).radius - g.r) > scale * 0.3);
+    const moved = probe([{ id: 'pr_r', type: g.type === 'arc' ? 'arc_radius' : 'circle_radius', [g.type === 'arc' ? 'a_id' : 'c_id']: g.id, radius: g.r * rProbe + scale, temporary: true }],
+      (prims) => Math.abs(prims.get(g.id).radius - g.r) > moveTol);
     if (moved) under.add(g.id);
   }
   // a curve is under-defined if any of its defining points/radius is
@@ -233,6 +278,12 @@ export function measure(sk, c) {
     }
     case 'radius': return P(c.c).r;
     case 'diameter': return P(c.c).r * 2;
+    case 'offset': {
+      const a = P(c.a), b = P(c.b);
+      if (a.type !== 'line') return Math.abs(a.r - b.r);
+      const p = P(a.p1), l1 = P(b.p1), l2 = P(b.p2), L = Math.hypot(l2.x - l1.x, l2.y - l1.y) || 1;
+      return Math.abs((l2.x - l1.x) * (l1.y - p.y) - (l1.x - p.x) * (l2.y - l1.y)) / L;
+    }
     case 'angle': {
       const la = P(c.a), lb = P(c.b);
       const d = (l) => { const a = P(l.p1), b = P(l.p2); return Math.atan2(b.y - a.y, b.x - a.x); };
@@ -244,4 +295,4 @@ export function measure(sk, c) {
   }
 }
 
-export const DIM_TYPES = new Set(['distance', 'length', 'hdist', 'vdist', 'pointLine', 'radius', 'diameter', 'angle']);
+export const DIM_TYPES = new Set(['distance', 'length', 'hdist', 'vdist', 'pointLine', 'radius', 'diameter', 'angle', 'offset']);

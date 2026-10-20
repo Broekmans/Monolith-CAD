@@ -1,5 +1,6 @@
 // Part: picking, highlights, overlay, double-click feature dims, tree hover
 // Methods are mixed into PartDoc (see part.js); `this` is the PartDoc.
+import { paneDisplay } from '../displaystyle.js';
 import * as THREE from 'three';
 import { Viewport, navHeld } from '../viewport.js';
 import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
@@ -42,7 +43,7 @@ export class PartPicking {
     });
     el.addEventListener('pointerup', (e) => {
       if (this.sketcher || e.button !== 0 || !this._downAt) return;
-      const moved = Math.hypot(e.clientX - this._downAt[0], e.clientY - this._downAt[1]) > 4;
+      const moved = Math.hypot(e.clientX - this._downAt[0], e.clientY - this._downAt[1]) > opt('modelClickMovePx');
       this._downAt = null;
       if (moved) return;
       if (this.dimLabelAt(e)) return; // first click of a double-click on a dimension label: keep the dimensions shown
@@ -72,11 +73,13 @@ export class PartPicking {
     const hits = this.dimHitsOf(pane);
     if (!hits.length) return null;
     const r = (pane?.el || this.vp.el).getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-    return hits.find((d) => x >= d.x0 - 2 && x <= d.x1 + 2 && y >= d.y0 - 2 && y <= d.y1 + 2) || null;
+    const m = opt('modelDimHitPadPx');
+    return hits.find((d) => x >= d.x0 - m && x <= d.x1 + m && y >= d.y0 - m && y <= d.y1 + m) || null;
   }
   clickItem(p, additive) {
     const pm = this.app.pm.current;
     if (pm && p) {
+      if (p.kind === 'face' && this.offerFaceEdges(pm, p)) { this.updateHighlights(); return; }
       if (pm.offer(this.selItem(p))) { this.updateHighlights(); return; }
     }
     if (pm && !p) return;
@@ -88,7 +91,23 @@ export class PartPicking {
     } else this.sel = [p];
     this.afterSelection();
   }
+  // Fillet / Chamfer (any edge selection box that takes no faces): a clicked face adds all its edges; clicking it
+  // again (all its edges already in the box) removes them (0.1.95)
+  offerFaceEdges(pm, p) {
+    const box = Object.values(pm.selboxes).find((b) => b.key === pm.activeSel) || Object.values(pm.selboxes)[0];
+    const okEdge = (it) => !box.accepts || box.accepts(it);
+    if (!box || (box.accepts && box.accepts(this.selItem(p))) || !okEdge({ kind: 'edge', type: 'line' })) return false;
+    const mesh = this.pick?.mesh; if (!mesh) return false;
+    const items = mesh.edges.filter((e) => e.faces?.includes(p.id)).map((e) => this.selItem({ kind: 'edge', id: e.id, mid: e.mid, type: e.type, key: 'edge:' + e.id, edge: e })).filter(okEdge);
+    if (!items.length) return false;
+    const has = (it) => box.items.some((x) => x.key === it.key);
+    const next = items.every(has) ? box.items.filter((x) => !items.some((it) => it.key === x.key)) : [...box.items, ...items.filter((it) => !has(it))];
+    pm.setValue(box.key, next); pm.fire(box.key);
+    window.__lithLog?.(`FACE EDGES face ${p.id} ${items.length} edges → ${next.length} in ${box.key}`);
+    return true;
+  }
   afterSelection() {
+    this.treeGhost?.();
     this.updateHighlights();
     this.updatePlanes();
     this.updateSketchDisplay();
@@ -104,6 +123,14 @@ export class PartPicking {
     return { ...p, label };
   }
 
+  // only the model face under the mouse (Offset Entities face pick, 0.1.97)
+  faceAt(e) {
+    const pk = this.doc.bodyHidden ? null : this.pick; if (!pk) return null;
+    const r = this.vp.el.getBoundingClientRect(), rc = this.vp.ray(e.clientX - r.left, e.clientY - r.top);
+    const hit = rc.intersectObject(pk.obj, false)[0]; if (!hit) return null;
+    const fid = pk.faceOfTri[hit.faceIndex], f = pk.mesh.faces.find((x) => x.id === fid);
+    return f ? { id: fid, plane: f.plane, ftype: f.type } : null;
+  }
   pickAt(e) {
     const r = this.vp.el.getBoundingClientRect();
     const sx = e.clientX - r.left, sy = e.clientY - r.top;
@@ -119,7 +146,7 @@ export class PartPicking {
     const origin = rc.ray.origin;
     // edges (screen space)
     if (pk) {
-      let best = null, bd = 6;
+      let best = null, bd = opt('modelPickPx');
       for (const ed of pk.mesh.edges) {
         const p = ed.pts;
         for (let i = 3; i < p.length; i += 3) {
@@ -128,7 +155,7 @@ export class PartPicking {
           if (d < bd) {
             const mid = new THREE.Vector3((p[i - 3] + p[i]) / 2, (p[i - 2] + p[i + 1]) / 2, (p[i - 1] + p[i + 2]) / 2);
             const depth = mid.clone().sub(origin).dot(viewDir);
-            if (this.displayMode === 'wire' || depth <= faceDepth + this.vp.scale * 8) { bd = d; best = ed; }
+            if (paneDisplay(this) === 'wire' || depth <= faceDepth + this.vp.scale * opt('modelEdgeDepthTolPx')) { bd = d; best = ed; }
           }
         }
       }
@@ -136,7 +163,7 @@ export class PartPicking {
     }
     // sketches
     {
-      let best = null, bd = 6;
+      let best = null, bd = opt('modelPickPx');
       for (const f of this.doc.features) {
         if (f.type !== 'sketch') continue;
         const show = f.visible ?? !this.consumedSketches().has(f.id);
@@ -183,7 +210,7 @@ export class PartPicking {
         geom.setAttribute('position', pk.obj.geometry.getAttribute('position'));
         geom.setAttribute('normal', pk.obj.geometry.getAttribute('normal'));
         geom.setIndex(Array.from(m.indices.slice(f.start, f.start + f.count)));
-        const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: it.col, transparent: true, opacity: 0.45, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, depthWrite: false }));
+        const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: it.col, transparent: true, opacity: opt('modelFaceHlPct') / 100, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, depthWrite: false }));
         this.hlGroup.add(mesh);
       }
     }
@@ -197,7 +224,7 @@ export class PartPicking {
       const ed = it.edge || this.pick?.mesh.edges.find((e) => e.id === it.id);
       if (!ed) continue;
       ctx.strokeStyle = it.col === COLORS.hover ? opt('hoverColor') : opt('selColor');
-      ctx.lineWidth = 3.2;
+      ctx.lineWidth = opt('modelEdgeHlW');
       ctx.beginPath();
       for (let i = 0; i < ed.pts.length; i += 3) {
         const s = this.vp.toScreen([ed.pts[i], ed.pts[i + 1], ed.pts[i + 2]]);
@@ -210,9 +237,10 @@ export class PartPicking {
     // origin glyph
     if (!this.sketcher) {
       const o = this.vp.toScreen([0, 0, 0]);
-      ctx.strokeStyle = '#2050b0'; ctx.lineWidth = 1.2;
+      ctx.strokeStyle = opt('modelOriginColor'); ctx.lineWidth = opt('modelOriginLineW');
       for (const d of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
-        const p = this.vp.toScreen([d[0] * this.vp.scale * 18, d[1] * this.vp.scale * 18, d[2] * this.vp.scale * 18]);
+        const len = this.vp.scale * opt('modelOriginLenPx');
+        const p = this.vp.toScreen([d[0] * len, d[1] * len, d[2] * len]);
         ctx.beginPath(); ctx.moveTo(o[0], o[1]); ctx.lineTo(p[0], p[1]); ctx.stroke();
       }
     }
@@ -222,8 +250,8 @@ export class PartPicking {
       const fr = frameOf(STD_PLANES[o.userData.plane]);
       const S = this.planeSize();
       const s = this.vp.toScreen(to3(fr, [-S, S]));
-      ctx.font = '11px Segoe UI, sans-serif'; ctx.fillStyle = document.body.classList.contains('dark') ? '#9cc2ef' : '#2a4f8a'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-      ctx.fillText(o.userData.plane, s[0] + 4, s[1] - 2);
+      ctx.font = `${opt('planeLabelFontPx')}px ${opt('overlayFont')}`; ctx.fillStyle = opt(document.body.classList.contains('dark') ? 'planeLabelColorDark' : 'planeLabelColor'); ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+      ctx.fillText(o.userData.plane, s[0] + opt('planeLabelDxPx'), s[1] - opt('planeLabelDyPx'));
     }
   }
 
@@ -255,6 +283,7 @@ export class PartPicking {
           case 'length': { const l = G(c.l); const a = P(l?.p1), b = P(l?.p2); return a && b ? [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] : null; }
           case 'distance': case 'hdist': case 'vdist': { const a = P(c.a), b = P(c.b); return a && b ? [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] : null; }
           case 'pointLine': return P(c.p);
+          case 'offset': { const a = G(c.a); if (!a) return null; if (a.type !== 'line') return P(a.c); const p = P(a.p1), q = P(a.p2); return p && q ? [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2] : null; }
           case 'radius': case 'diameter': return P(G(c.c)?.c);
           case 'angle': return P(G(c.a)?.p1);
           default: return null;
@@ -267,7 +296,7 @@ export class PartPicking {
         const a = anchor(c); if (!a) continue;
         const val = c.driving === false ? measureDim(sk, c) : c.value;
         const pre = c.type === 'diameter' ? 'Ø' : c.type === 'radius' ? 'R' : '';
-        out.push({ text: pre + fmt(val, 2) + (c.type === 'angle' ? '°' : ''), value: val, pos3: to3(fr, [a[0] + (c.lp?.[0] ?? 0), a[1] + (c.lp?.[1] ?? 0)]), kind: 'cons', sk: sk.id, cons: c.id, driven: c.driving === false, c, fr, skRef: sk });
+        out.push({ text: pre + fmt(val, opt('dimDecimals')) + (c.type === 'angle' ? '°' : ''), value: val, pos3: to3(fr, [a[0] + (c.lp?.[0] ?? 0), a[1] + (c.lp?.[1] ?? 0)]), kind: 'cons', sk: sk.id, cons: c.id, driven: c.driving === false, c, fr, skRef: sk });
       }
       if (opt('autoDims')) for (const d0 of autoDims(sk)) {
         const lpU = sk.autoLp?.[autoKey(d0.cons)]; // dragged by the user (dimdrag.js)
@@ -295,7 +324,7 @@ export class PartPicking {
       let k = 0;
       for (const [key, lab, u] of P) if (typeof f[key] === 'number' && !(f.type === 'extrude' && f.end && f.end !== 'blind' && key === 'depth')) {
         const line = key === 'depth' && this._depthLine && sk ? this._depthLine : null;
-        out.push({ text: `${lab} ${fmt(f[key], 2)}${u}`, value: f[key], pos3: line ? line.b : base, dy: line ? 0 : 22 * k++, kind: 'feat', key, ...(line ? { line, lineFr: line.fr } : {}) });
+        out.push({ text: `${lab} ${fmt(f[key], opt('dimDecimals'))}${u}`, value: f[key], pos3: line ? line.b : base, dy: line ? 0 : opt('featDimStackPx') * k++, kind: 'feat', key, ...(line ? { line, lineFr: line.fr } : {}) });
       }
     }
     return out;
@@ -305,24 +334,25 @@ export class PartPicking {
     (this._dimHitsBy ||= new WeakMap()).set(this.vp.pane || this.vp, hits);
     if (!this.dimFeat || this.sketcher) return;
     const dark = document.body.classList.contains('dark');
-    ctx.font = '13px Segoe UI, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = `${opt('modelDimFontPx')}px ${opt('overlayFont')}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     const lines = opt('modelDimLines');
     for (const d of this.featureDims()) {
       let s = this.vp.toScreen(d.pos3);
       // dimension lines like in the sketch (Options > Dimensions); the label then sits on its dimension line
-      const lc = d.kind === 'feat' ? '#c06000' : d.driven ? '#888' : (dark ? '#6fa8ff' : '#1e5fbf');
+      const lc = d.kind === 'feat' ? opt('featDimColor') : d.driven ? opt('modelDimDriven') : opt(dark ? 'modelDimColorDark' : 'modelDimColor');
       const at = lines && (d.c || d.line) ? drawModelDimLines(ctx, this.vp, d, lc, d.kind === 'auto') : null;
       if (at) s = at;
-      const x = s[0] + (d.kind === 'feat' && !at ? 14 : 0), y = s[1] + (d.dy || 0);
-      const w = ctx.measureText(d.text).width + 10;
-      ctx.fillStyle = dark ? 'rgba(30,34,40,0.92)' : 'rgba(255,255,255,0.92)';
-      ctx.strokeStyle = d.kind === 'feat' ? '#c06000' : '#1e5fbf'; ctx.lineWidth = 1;
-      ctx.fillRect(x - w / 2, y - 10, w, 20);
-      if (d.kind === 'auto') ctx.setLineDash([3, 2]); // size without a dimension yet (double-click = add one)
-      ctx.strokeRect(x - w / 2, y - 10, w, 20); ctx.setLineDash([]);
-      ctx.fillStyle = d.driven ? '#888' : d.kind === 'feat' ? (dark ? '#ffb060' : '#a04f00') : (dark ? '#8fbfff' : '#1e4fa0');
-      ctx.fillText(d.text, x - w / 2 + 5, y);
-      hits.push({ ...d, x0: x - w / 2, x1: x + w / 2, y0: y - 10, y1: y + 10 });
+      const x = s[0] + (d.kind === 'feat' && !at ? opt('featDimOffsetPx') : 0), y = s[1] + (d.dy || 0);
+      const pad = opt('modelDimPadPx'), bh = opt('modelDimBoxH');
+      const w = ctx.measureText(d.text).width + pad;
+      ctx.fillStyle = opt(dark ? 'modelDimBgDark' : 'modelDimBg');
+      ctx.strokeStyle = d.kind === 'feat' ? opt('featDimColor') : opt('modelDimColor'); ctx.lineWidth = opt('modelDimBoxLineW');
+      ctx.fillRect(x - w / 2, y - bh / 2, w, bh);
+      if (d.kind === 'auto') ctx.setLineDash(opt('autoDimDash')); // size without a dimension yet (double-click = add one)
+      ctx.strokeRect(x - w / 2, y - bh / 2, w, bh); ctx.setLineDash([]);
+      ctx.fillStyle = d.driven ? opt('modelDimDriven') : d.kind === 'feat' ? opt(dark ? 'featDimTextDark' : 'featDimText') : opt(dark ? 'modelDimTextDark' : 'modelDimText');
+      ctx.fillText(d.text, x - w / 2 + pad / 2, y);
+      hits.push({ ...d, x0: x - w / 2, x1: x + w / 2, y0: y - bh / 2, y1: y + bh / 2 });
     }
   }
   // double-click a dimension shown on the model: its label becomes an edit box right there (no window).
@@ -330,9 +360,9 @@ export class PartPicking {
   editShownDim(d) {
     if (d.driven) { toast('Driven (reference) dimensions cannot be modified.'); return; }
     this._dimInline?.cancel();
-    const inp = h('input', { type: 'text', class: 'dim-inline', spellcheck: 'false', value: fmt(d.value, 4) });
-    const w = Math.max(64, d.x1 - d.x0 + 18);
-    Object.assign(inp.style, { left: (d.x0 + d.x1) / 2 - w / 2 + 'px', top: d.y0 - 2 + 'px', width: w + 'px' });
+    const inp = h('input', { type: 'text', class: 'dim-inline', spellcheck: 'false', value: fmt(d.value, opt('featEditDecimals')) });
+    const w = Math.max(opt('modelDimEditMinW'), d.x1 - d.x0 + opt('modelDimEditExtraW'));
+    Object.assign(inp.style, { left: (d.x0 + d.x1) / 2 - w / 2 + 'px', top: d.y0 - opt('modelDimEditDyPx') + 'px', width: w + 'px' });
     for (const ev of ['pointerdown', 'dblclick', 'wheel']) inp.addEventListener(ev, (e) => e.stopPropagation());
     let done = false;
     const finish = (ok) => {
@@ -351,7 +381,7 @@ export class PartPicking {
     const num = Number(String(v).replace(',', '.'));
     if (!isFinite(num) || (d.kind === 'feat' && d.key !== 'angle' && num <= 0)) { toast('Invalid value', 'error'); return; }
     this.beginChange();
-    if (d.kind === 'feat') this.F(this.dimFeat)[d.key] = d.key === 'count' ? Math.max(2, Math.round(num)) : num;
+    if (d.kind === 'feat') this.F(this.dimFeat)[d.key] = d.key === 'count' ? Math.max(opt('featMinCount'), Math.round(num)) : num;
     else if (d.kind === 'auto') {
       // a size the sketch had no dimension for: typing a value adds that dimension to the sketch
       if (num <= 0) { toast('Invalid value', 'error'); this.commit(); return; }
@@ -370,10 +400,10 @@ export class PartPicking {
         if (!dr.cons && dr.fixed && sk.geo.some((g) => g.onEdge)) { this.applyUpstream(sk, { ...d.cons, value: num }, dr.reason); return; } // follows linked edges: change the sketch that made them
         if (dr.cons) {
           const ln = dr.cons.type === 'radius' ? 'R' : dr.cons.type === 'diameter' ? 'Ø' : '';
-          this.app.setStatus(this._statusAfter = `${sk.name}: dimension ${ln}${fmt(dr.old, 3)} → ${ln}${fmt(dr.value, 3)} (it drives this size, now ${fmt(num, 3)})`);
+          this.app.setStatus(this._statusAfter = `${sk.name}: dimension ${ln}${fmt(dr.old, opt('partReportDecimals'))} → ${ln}${fmt(dr.value, opt('partReportDecimals'))} (it drives this size, now ${fmt(num, opt('partReportDecimals'))})`);
           try { window.__lithLog?.('DRIVE', sk.name, dr.cons.id, dr.old, '->', dr.value, 'size', num); } catch {}
-        } else toast(dr.reason, 'warn', 6000);
-      } else this.app.setStatus(`Dimension ${fmt(num, 3)} added to ${sk.name}`);
+        } else toast(dr.reason, 'warn', opt('toastWarnMs'));
+      } else this.app.setStatus(`Dimension ${fmt(num, opt('partReportDecimals'))} added to ${sk.name}`);
     } else {
       const sk = this.F(d.sk), c = sk.cons.find((x) => x.id === d.cons);
       const r = solveStepped(sk, c, num, { maxStep: opt('sizeStepPct') / 100 }); // big changes in steps
@@ -389,10 +419,11 @@ export class PartPicking {
     if (!s) { this.app.setStatus('Ready'); return; }
     if (s.kind === 'edge') {
       const ed = s.edge || this.mesh?.edges.find((e) => e.id === s.id);
-      let txt = `Edge  Length: ${fmt(ed?.length ?? 0, 3)} mm`;
-      if (ed?.type === 'circle') { const c = circle3(ed.pts); if (c) txt += `  Radius: ${fmt(c.r, 3)} mm  Ø${fmt(2 * c.r, 3)}`; }
+      const dec = opt('partReportDecimals');
+      let txt = `Edge  Length: ${fmt(ed?.length ?? 0, dec)} mm`;
+      if (ed?.type === 'circle') { const c = circle3(ed.pts); if (c) txt += `  Radius: ${fmt(c.r, dec)} mm  Ø${fmt(2 * c.r, dec)}`; }
       this.app.setStatus(txt);
-    } else if (s.kind === 'face') this.app.setStatus(`Face  Area: ${fmt(s.area, 3)} mm²${s.plane ? '  (planar)' : s.ftype ? '  (' + s.ftype + ')' : ''}`);
+    } else if (s.kind === 'face') this.app.setStatus(`Face  Area: ${fmt(s.area, opt('partReportDecimals'))} mm²${s.plane ? '  (planar)' : s.ftype ? '  (' + s.ftype + ')' : ''}`);
     else this.app.setStatus(this.selItem(s).label || '');
   }
 

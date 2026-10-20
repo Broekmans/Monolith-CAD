@@ -38,10 +38,15 @@ export class ViewSet {
     this.renderPane = null;
     this.max = null; // maximized pane (others hidden)
     // which pane the mouse works in: set before any document listener runs (capture on the root)
-    const pick = (e) => { const p = this.paneOf(e.target); if (p && p !== this.active) this.setActive(p); };
-    for (const t of ['pointerdown', 'pointermove', 'wheel', 'dblclick', 'contextmenu']) this.root.addEventListener(t, pick, { capture: true, passive: true });
+    // 0.1.95: `active` = pane the mouse is in (event routing), `focus` = pane clicked last (blue border, view toolbar,
+    // OK / Cancel buttons, feature value box); outside the views `active` falls back to `focus`
+    const pick = (e) => { const p = this.paneOf(e.target); if (p && (p !== this._focus || p !== this.active)) this.setActive(p); };
+    const route = (e) => { const p = this.paneOf(e.target); if (p) this.active = p; };
+    for (const t of ['pointerdown', 'wheel', 'dblclick', 'contextmenu']) this.root.addEventListener(t, pick, { capture: true, passive: true });
+    this.root.addEventListener('pointermove', route, { capture: true, passive: true });
+    this.root.addEventListener('pointerleave', () => { const f = this.focus; if (f && this.panes.includes(f)) this.active = f; });
     const p0 = this.addPane();
-    this.active = p0;
+    this.active = this._focus = p0;
     this.cols = [{ w: 1, rows: [{ h: 1, pane: p0 }] }];
     this.proxy = makeProxy(this);
     this.elProxy = makeElProxy(this);
@@ -54,6 +59,9 @@ export class ViewSet {
   }
 
   get cur() { return this.renderPane || this.active; }
+  // pane clicked last; falls back to the active one when it was closed / minimized / hidden by a maximized view
+  get focus() { const f = this._focus; return f && this.panes.includes(f) && !f._min && (!this.max || this.max === f) ? f : this.active; }
+  set focus(p) { this._focus = p; }
 
   get primary() { return this.panes[0]; }
 
@@ -88,9 +96,11 @@ export class ViewSet {
   }
 
   setActive(p) {
-    this.active = p;
+    this.active = this._focus = p;
     for (const q of this.panes) q.el.classList.toggle('active', q === p && this.visible().length > 1);
-    this.placeHud();
+    // the toolbar and OK / Cancel buttons move to the clicked view a moment later, so they never jump under the mouse in
+    // the middle of a double-click (a label next to the cube + the moved Exit Sketch button, 0.1.95)
+    clearTimeout(this._hudT); this._hudT = setTimeout(() => this.placeHud(), 450);
     this.requestRender();
     this.onActive?.(p);
   }

@@ -71,7 +71,7 @@ await win.evaluate(() => lithApp.onMenu('doc-grid', true));
 // feature dialog in pane 1
 await win.mouse.move(...(await rect(1)).slice(0, 2).map((v) => v + 100)); await W(200);
 await win.evaluate(() => { const d = lithApp.doc; d.editFeature(d.doc.features.find((x) => x.type === 'extrude').id); }); await idle();
-console.log('11 value box in active pane:', await win.evaluate(() => { const s = lithApp.doc.viewSet; return document.querySelector('.feat-val')?.parentElement === s.active.el; }));
+console.log('11 value box in active pane:', await win.evaluate(() => { const s = lithApp.doc.viewSet; return document.querySelector('.feat-val')?.parentElement === s.focus.el; }));
 await win.keyboard.press('Escape'); await idle();
 // ---- 0.1.74: real divider drags, model scales with the view, close / maximize / restore, custom layout saved ----
 await win.evaluate(() => lithApp.onMenu('layout', 'four')); await W(600);
@@ -174,7 +174,7 @@ console.log('24 restored with min:', JSON.stringify(s3.min), '→ tabs', await w
 await win.evaluate(() => lithApp.onMenu('restore-mins')); await W(400);
 console.log('24 Restore Minimized Views:', await cols(), 'tabs', await win.locator('.vs-tab').count());
 // 25: no face highlight while the middle button is held
-await win.evaluate(() => lithApp.onMenu('layout', 'single')); await win.evaluate(() => lithApp.doc.zoomFit()); await W(500);
+await win.evaluate(() => lithApp.onMenu('layout', 'single')); await win.evaluate(() => { lithApp.doc.vp.setView('iso', false); lithApp.doc.zoomFit(); }); await W(500); // 0.1.95: single keeps the clicked view's camera
 const [xs, ys, ws, hs] = await rect(0);
 const fpt = await win.evaluate(([x0, y0, w, h]) => { for (let j = 1; j < 20; j++) for (let i = 1; i < 20; i++) { const x = x0 + w * i / 20, y = y0 + h * j / 20; if (lithApp.doc.pickAt({ clientX: x, clientY: y })?.kind === 'face') return [x, y]; } return null; }, [xs, ys, ws, hs]);
 await win.mouse.move(fpt[0] - 3, fpt[1]); await win.mouse.move(fpt[0], fpt[1], { steps: 2 }); await W(200);

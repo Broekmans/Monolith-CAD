@@ -3,6 +3,7 @@
 // its dimension line. Feature depth gets a dimension line along the extrude direction.
 import { Sketcher } from '../sketch/sketcher.js';
 import { to3 } from './part.js';
+import { opt } from '../app/options.js';
 
 // light stand-in for a Sketcher so dimLines / dimAnchor / dirOf work on a stored sketch
 export function sketchView(sk) {
@@ -18,8 +19,8 @@ export function sketchView(sk) {
 // draws the lines of shown dimension d ({c, fr, sk}) and returns the label's screen position (or null)
 export function drawModelDimLines(ctx, vp, d, color, dashed) {
   ctx.save();
-  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 1;
-  if (dashed) ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = opt('dimLineW');
+  if (dashed) ctx.setLineDash(opt('autoDimLineDash'));
   let at = null;
   try {
     if (d.line) at = depthLine(ctx, vp, d.line);
@@ -38,13 +39,14 @@ export function drawModelDimLines(ctx, vp, d, color, dashed) {
 // feature depth: dimension line between two model points with arrows at both ends, short end ticks
 function depthLine(ctx, vp, { a, b }) {
   const s = vp.toScreen(a), e = vp.toScreen(b);
-  const L = Math.hypot(e[0] - s[0], e[1] - s[1]); if (L < 4) return null;
+  const L = Math.hypot(e[0] - s[0], e[1] - s[1]); if (L < opt('depthLineMinPx')) return null;
   const u = [(e[0] - s[0]) / L, (e[1] - s[1]) / L], n = [-u[1], u[0]];
   const seg = (p, q) => { ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); };
-  const arrow = (tip, dir) => { ctx.beginPath(); ctx.moveTo(tip[0], tip[1]); ctx.lineTo(tip[0] - dir[0] * 9 + dir[1] * 2.6, tip[1] - dir[1] * 9 - dir[0] * 2.6); ctx.lineTo(tip[0] - dir[0] * 9 - dir[1] * 2.6, tip[1] - dir[1] * 9 + dir[0] * 2.6); ctx.fill(); };
+  const al = opt('dimArrowLen'), aw = opt('depthArrowHalfPx'), tk = opt('depthTickPx');
+  const arrow = (tip, dir) => { ctx.beginPath(); ctx.moveTo(tip[0], tip[1]); ctx.lineTo(tip[0] - dir[0] * al + dir[1] * aw, tip[1] - dir[1] * al - dir[0] * aw); ctx.lineTo(tip[0] - dir[0] * al - dir[1] * aw, tip[1] - dir[1] * al + dir[0] * aw); ctx.fill(); };
   seg(s, e);
-  seg([s[0] - n[0] * 6, s[1] - n[1] * 6], [s[0] + n[0] * 6, s[1] + n[1] * 6]);
-  seg([e[0] - n[0] * 6, e[1] - n[1] * 6], [e[0] + n[0] * 6, e[1] + n[1] * 6]);
+  seg([s[0] - n[0] * tk, s[1] - n[1] * tk], [s[0] + n[0] * tk, s[1] + n[1] * tk]);
+  seg([e[0] - n[0] * tk, e[1] - n[1] * tk], [e[0] + n[0] * tk, e[1] + n[1] * tk]);
   ctx.setLineDash([]);
   arrow(e, u); arrow(s, [-u[0], -u[1]]);
   return [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2];

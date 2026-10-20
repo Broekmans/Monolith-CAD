@@ -125,6 +125,7 @@ export class PropertyManager {
         inp.addEventListener('input', () => { inp._typed = true; });
         // Enter: apply a changed value (preview updates); Enter again with the value unchanged = OK
         inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); inp.blur(); if (this.current === pm) this.cancel(); return; } // Esc in a field = Cancel (0.1.95)
           if (e.key === 'Enter') {
             e.preventDefault();
             const v = evalNumber(inp.value), typed = inp._typed; inp._typed = false;
@@ -157,6 +158,7 @@ export class PropertyManager {
       } else if (f.type === 'check') {
         const cb = h('input', { type: 'checkbox', checked: !!pm.values[f.key] });
         cb.addEventListener('change', () => { pm.values[f.key] = cb.checked; fire(f.key); });
+        cb.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cb.blur(); if (this.current === pm) this.cancel(); } }); // Esc on a ticked box = Cancel too (0.1.96)
         wrap.append(h('label', { class: 'pm-check' }, cb, f.label));
         pm.inputs[f.key] = cb;
       } else if (f.type === 'selbox') {
@@ -179,6 +181,7 @@ export class PropertyManager {
       }
     };
     pm.renderBoxes = renderBoxes;
+    pm.fire = fire;
     fields.forEach((f) => addField(f, body));
     const firstSel = fields.flatMap((f) => (f.type === 'group' ? f.fields : [f])).find((f) => f.type === 'selbox');
     if (firstSel) pm.activeSel = firstSel.key;
@@ -317,10 +320,38 @@ export function modifyBox(x, y, value, { title = 'Modify', unit = 'mm', onApply,
     ),
     h('div', { class: 'mb-row' }, inp, h('span', { class: 'unit' }, unit)));
   document.body.appendChild(box);
+  makeDraggable(box, '.mb-title', null); // 0.1.95: every window can be moved
   box.style.left = Math.min(x, window.innerWidth - 200) + 'px';
   box.style.top = Math.min(y, window.innerHeight - 110) + 'px';
   setTimeout(() => { inp.focus(); inp.select(); }, 0);
   return { close: cancel };
+}
+
+// Any window: drag it by a title strip matching `handleSel` (event delegation, so a strip rebuilt later still works).
+// The offset (CSS translate) is remembered under localStorage `key` (null = not remembered) and kept on screen. (0.1.95)
+export function makeDraggable(win, handleSel, key) {
+  if (win._drag) return win._drag;
+  let off = [0, 0];
+  if (key) try { const v = JSON.parse(localStorage.getItem(key) || 'null'); if (Array.isArray(v)) off = v; } catch { /* none */ }
+  const apply = () => {
+    win.style.translate = `${off[0]}px ${off[1]}px`;
+    const head = win.querySelector(handleSel) || win, r = head.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight;
+    let dx = 0, dy = 0;
+    if (r.right < 80) dx = 80 - r.right; if (r.left > W - 80) dx = W - 80 - r.left;
+    if (r.top < 0) dy = -r.top; if (r.bottom > H) dy = H - r.bottom;
+    if (dx || dy) { off = [off[0] + dx, off[1] + dy]; win.style.translate = `${off[0]}px ${off[1]}px`; }
+  };
+  win.addEventListener('pointerdown', (e) => {
+    const head = e.target.closest?.(handleSel);
+    if (!head || !win.contains(head) || e.button !== 0 || e.target.closest('button, input, select') || win._drag?.off) return;
+    e.preventDefault(); e.stopPropagation();
+    const x0 = e.clientX, y0 = e.clientY, o0 = off.slice();
+    const mv = (ev) => { off = [o0[0] + ev.clientX - x0, o0[1] + ev.clientY - y0]; apply(); };
+    const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); if (key) try { localStorage.setItem(key, JSON.stringify(off)); } catch { /* no storage */ } };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  });
+  win._drag = { apply, reset: () => { win.style.translate = ''; }, off: false };
+  return win._drag;
 }
 
 // Move a dialog by dragging its title strip (0.1.87); the offset is remembered per dialog title and kept on screen.

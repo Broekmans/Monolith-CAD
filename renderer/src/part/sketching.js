@@ -7,6 +7,7 @@ import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
@@ -68,6 +69,7 @@ export class PartSketching {
   exitSketch(commit) {
     const sk = this.sketcher;
     if (!sk) return;
+    if (sk.offsetMode) this.app.pm.cancel();
     sk.dispose();
     this.sketcher = null;
     this.syncGrid();
@@ -102,7 +104,47 @@ export class PartSketching {
   onToolChanged() { this.app.cm.refresh(); }
   onSketchChanged() { this.vp.requestRender(); }
   setSketchStatus(st) { this.app.setSketchStatus(st); }
-  setCoords(p) { this.app.setCoords(`${fmt(p[0], 2)} mm, ${fmt(p[1], 2)} mm`); }
+  setCoords(p) { const d = opt('partCoordDecimals'); this.app.setCoords(`${fmt(p[0], d)} mm, ${fmt(p[1], d)} mm`); }
+  // Offset Entities (0.1.94): popup + sketcher offset mode (sketch/offsettool.js)
+  cmdOffset() {
+    const sk = this.sketcher;
+    if (!sk) return;
+    if (sk.offsetMode) { this.app.pm.cancel(); return; }
+    let last = {}; try { last = JSON.parse(localStorage.getItem('monolith.offsetOpts') || '{}'); } catch { /* none */ }
+    const values = { dist: opt('featDefOffsetDist'), selectChain: true, both: false, cap: true, baseConstruction: false, ...last, reverse: false }; // side always starts outside
+    sk.startOffset(values);
+    const pm = this.app.pm.show({
+      title: 'Offset Entities', iconName: 'offset',
+      message: 'Click sketch entities or model edges to offset. Click again to remove.',
+      fields: [
+        { key: 'dist', type: 'number', label: 'Distance', unit: 'mm', min: 0 },
+        { key: 'reverse', type: 'check', label: 'Reverse' },
+        { key: 'selectChain', type: 'check', label: 'Select chain' },
+        { key: 'both', type: 'check', label: 'Bi-directional' },
+        { key: 'cap', type: 'check', label: 'Cap ends' },
+        { key: 'baseConstruction', type: 'check', label: 'Base geometry → construction' },
+      ],
+      values,
+      onChange: (v) => { sk.setOffsetOpts(v); try { localStorage.setItem('monolith.offsetOpts', JSON.stringify(v)); } catch { /* ignore */ } },
+      onOk: () => (sk.finishOffset() ? undefined : false),
+      onCancel: () => sk.cancelOffset(),
+    });
+    this.offsetPM = pm;
+    // 0.1.96: the distance box / drag arrow on the sketch and the mouse side talk to this popup
+    sk.offsetUI = {
+      setDist: (d) => { pm.setValue('dist', +(+d).toFixed(opt('partNoiseDecimals'))); sk.setOffsetOpts({ ...pm.values }); },
+      setReverse: (r) => pm.setValue('reverse', r),
+      ok: () => this.app.pm.ok(), cancel: () => this.app.pm.cancel(),
+    };
+    this.app.floatPM?.(true);
+    this.app.cm.refresh();
+  }
+  onOffsetChanged(m) {
+    const pm = this.offsetPM; if (!pm || this.app.pm.current !== pm) return;
+    const n = m.picks.reduce((a, pk) => a + pk.chain.items.length, 0);
+    if (m.err) pm.setMessage(m.err, 'error');
+    else pm.setMessage(m.picks.length ? `${n} entit${n === 1 ? 'y' : 'ies'} in ${m.picks.length} chain${m.picks.length === 1 ? '' : 's'}. OK (Enter) to add the offset.` : 'Click sketch entities or model edges to offset. Click again to remove.');
+  }
   cmdConvert() {
     if (!this.sketcher) return;
     toast('Click model edges to project them into the sketch. Press Esc when done.');
@@ -110,11 +152,14 @@ export class PartSketching {
     const el = this.vp.el;
     const onClick = (e) => {
       if (e.button !== 0) return;
+      // the highlighted edge (sketcher hover, 0.1.94) wins; else a 3D pick on the model
+      const sk = this.sketcher, mh = sk?.modelHover;
+      if (mh?.e) { sk.convertEdge(mh.e); sk.modelHover = null; sk._mhKey = null; e.stopPropagation(); this.vp.requestRender(); return; }
       const p = this.pickAt(e);
       if (p?.kind === 'edge') { this.sketcher.convertEdge(p.edge || this.mesh.edges.find((x) => x.id === p.id)); e.stopPropagation(); }
     };
     const onKey = (e) => { if (e.key === 'Escape') stop(); };
-    const stop = () => { el.removeEventListener('pointerdown', onClick, true); window.removeEventListener('keydown', onKey, true); this.convertMode = false; };
+    const stop = () => { el.removeEventListener('pointerdown', onClick, true); window.removeEventListener('keydown', onKey, true); this.convertMode = false; if (this.sketcher) { this.sketcher.modelHover = null; this.sketcher._mhKey = null; } this.vp.requestRender(); };
     el.addEventListener('pointerdown', onClick, true);
     window.addEventListener('keydown', onKey, true);
   }

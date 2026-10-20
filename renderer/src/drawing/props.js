@@ -4,6 +4,7 @@
 // (drawing defaults + company standard file, import / export).
 import { h, fmt, toast } from '../ui.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { annValue } from './dims.js';
 import { fitData, roomAt } from './fit.js';
 import { unionOrtho, joinRooms, JOIN_MSG } from './outline.js';
@@ -25,16 +26,16 @@ export class DrawingProps {
   placeProps() {
     const el = this._props; if (!el) return;
     const s = this.selAnn, boxes = (this._annBoxes || []).filter((q) => q.ann === s.id && q.t === 'annbox');
-    const host = this.vp.el.getBoundingClientRect();
-    let x = host.width - el.offsetWidth - 12, y = 12;
+    const host = this.vp.el.getBoundingClientRect(), pm = opt('drPopupMarginPx'), pg = opt('drPopupGapPx'), pe = opt('drPopupEdgePx');
+    let x = host.width - el.offsetWidth - pm, y = pm;
     const saved = propsPos();
     if (saved) { x = saved[0]; y = saved[1]; }
     else if (boxes.length) {
       const b = boxes[0].box, p1 = this.S2([b[2], b[3]]), p0 = this.S2([b[0], b[1]]);
-      x = p1[0] + 16; y = p1[1] - 8;
-      if (x + el.offsetWidth > host.width - 8) x = p0[0] - el.offsetWidth - 16;
+      x = p1[0] + pg; y = p1[1] - opt('drPopupNudgePx');
+      if (x + el.offsetWidth > host.width - pe) x = p0[0] - el.offsetWidth - pg;
     }
-    if (saved) { x = Math.max(0, Math.min(host.width - el.offsetWidth, x)); y = Math.max(0, Math.min(host.height - 30, y)); } else { x = Math.max(8, Math.min(host.width - el.offsetWidth - 8, x)); y = Math.max(8, Math.min(host.height - el.offsetHeight - 8, y)); }
+    if (saved) { x = Math.max(0, Math.min(host.width - el.offsetWidth, x)); y = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), y)); } else { x = Math.max(pe, Math.min(host.width - el.offsetWidth - pe, x)); y = Math.max(pe, Math.min(host.height - el.offsetHeight - pe, y)); }
     el.style.left = x + 'px'; el.style.top = y + 'px';
   }
   // one change of an annotation, logged (action log) so test values can be read back later
@@ -67,7 +68,7 @@ export class DrawingProps {
       if (e.button !== 0 || e.target.closest('button')) return;
       e.preventDefault();
       const x0 = e.clientX, y0 = e.clientY, l0 = el.offsetLeft, t0 = el.offsetTop;
-      const mv = (ev) => { const host = this.vp.el.getBoundingClientRect(); const x = Math.max(0, Math.min(host.width - el.offsetWidth, l0 + ev.clientX - x0)), y = Math.max(0, Math.min(host.height - 30, t0 + ev.clientY - y0)); el.style.left = x + 'px'; el.style.top = y + 'px'; };
+      const mv = (ev) => { const host = this.vp.el.getBoundingClientRect(); const x = Math.max(0, Math.min(host.width - el.offsetWidth, l0 + ev.clientX - x0)), y = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), t0 + ev.clientY - y0)); el.style.left = x + 'px'; el.style.top = y + 'px'; };
       const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); setPropsPos([el.offsetLeft, el.offsetTop]); };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
@@ -131,9 +132,9 @@ export class DrawingProps {
     const st = styleOf(this.doc, a), keep = Object.fromEntries(['outlineW', 'outlineColor', 'outlineDash', 'fillColor', 'fillOpacity', ...ROOM_KEYS].map((k) => [k, st[k]]));
     this.change(() => { this.doc.style = { ...(this.doc.style || {}), ...keep }; });
     const all = clean({ ...companyStd(), ...keep }), r = await api.draftStd(all);
-    if (r?.__error) { toast('Saved in this drawing; could not write the standard file: ' + r.__error, 'error', 6000); return; }
+    if (r?.__error) { toast('Saved in this drawing; could not write the standard file: ' + r.__error, 'error', opt('toastWarnMs')); return; }
     setCompanyStd(all); log('STYLE my standard', r?.__path, JSON.stringify(keep));
-    toast('Saved as your standard: new rooms and new drawings use these values', 'info', 5000);
+    toast('Saved as your standard: new rooms and new drawings use these values', 'info', opt('drToastInfoMs'));
   }
   // recalculate a room outline after a straightening change
   async recomputeRoom(v, a, force = false) {
@@ -141,16 +142,16 @@ export class DrawingProps {
       if (!force && !(await this.confirmOverwrite(a))) return;
       const st = styleOf(this.doc, a), qs = a.qs?.length > 1 ? a.qs : [a.q || a.at];
       let poly = null;
-      for (const q of qs) { const r = await this.roomCompute(v, q, st, a.label); if (!r.poly) { poly = null; break; } if (!poly) { poly = r.poly; continue; } const J = joinRooms(poly, r.poly, r.d, st.join); poly = J.poly; if (!poly) { toast('The spaces of this room can no longer be joined with these values: ' + (JOIN_MSG[J.reason] || ''), 'info', 7000); return; } }
-      if (!poly) { toast(st.method === 'rect' ? 'No wall found in one of the 4 directions with these values (try a lower wall coverage or the high slice)' : 'No closed room with these values (it leaks: try a bigger "close openings")', 'info', 6000); return; }
+      for (const q of qs) { const r = await this.roomCompute(v, q, st, a.label); if (!r.poly) { poly = null; break; } if (!poly) { poly = r.poly; continue; } const J = joinRooms(poly, r.poly, r.d, st.join); poly = J.poly; if (!poly) { toast('The spaces of this room can no longer be joined with these values: ' + (JOIN_MSG[J.reason] || ''), 'info', opt('drToastLongMs')); return; } }
+      if (!poly) { toast(st.method === 'rect' ? 'No wall found in one of the 4 directions with these values (try a lower wall coverage or the high slice)' : 'No closed room with these values (it leaks: try a bigger "close openings")', 'info', opt('toastWarnMs')); return; }
       a.pts = poly; this.app.setDirty(true); this.vp.requestRender();
       log('ROOM recalc', v.name, a.label || '', 'area', (annValue(a) / 1e6).toFixed(3), 'n', poly.length, JSON.stringify(roomOpts(st)));
-    } catch (e) { console.error('room recalc', e); toast('Could not recalculate the room: ' + e.message, 'error', 5000); }
+    } catch (e) { console.error('room recalc', e); toast('Could not recalculate the room: ' + e.message, 'error', opt('drToastInfoMs')); }
   }
   // ======================= Drafting Standard =======================
   cmdDraftStd() {
     const d = this.doc, st = styleOf(d, null);
-    const opt = (arr, fmtL = (x) => x) => arr.map((x) => (Array.isArray(x) ? { value: String(x[0]), label: x[1] } : { value: String(x), label: fmtL(x) }));
+    const choices = (arr, fmtL = (x) => x) => arr.map((x) => (Array.isArray(x) ? { value: String(x[0]), label: x[1] } : { value: String(x), label: fmtL(x) }));
     const mm = (x) => x + ' mm';
     this.app.pm.show({
       title: 'Drafting Standard', iconName: 'gear',
@@ -164,13 +165,13 @@ export class DrawingProps {
           { key: 'snap', type: 'select', label: 'Snapping on point clouds', options: [{ value: 'first', label: 'Horizontal/vertical walls first' }, { value: 'axis', label: 'Only horizontal/vertical walls' }, { value: 'any', label: 'Any direction' }] },
         ] },
         { type: 'group', label: 'Text', fields: [
-          { key: 'textH', type: 'select', label: 'Text height', options: opt(TEXT_H, mm) },
+          { key: 'textH', type: 'select', label: 'Text height', options: choices(TEXT_H, mm) },
           { key: 'textColor', type: 'color', label: 'Text colour' },
         ] },
         { type: 'group', label: 'Dimension lines', fields: [
           { key: 'lineW', type: 'number', label: 'Dimension line weight (mm)', min: 0.01, step: 0.05 },
           { key: 'lineColor', type: 'color', label: 'Line colour' },
-          { key: 'arrow', type: 'select', label: 'Arrow', options: opt(ARROWS) },
+          { key: 'arrow', type: 'select', label: 'Arrow', options: choices(ARROWS) },
           { key: 'arrowSize', type: 'number', label: 'Arrow size (mm)', min: 0, step: 0.5 },
           { key: 'extGap', type: 'number', label: 'Extension line gap (mm)', min: 0, step: 0.5 },
           { key: 'extOver', type: 'number', label: 'Extension line overshoot (mm)', min: 0, step: 0.5 },
@@ -178,7 +179,7 @@ export class DrawingProps {
         { type: 'group', label: 'Room / area outline', fields: [
           { key: 'outlineW', type: 'number', label: 'Room / area outline weight (mm)', min: 0.01, step: 0.05 },
           { key: 'outlineColor', type: 'color', label: 'Outline colour' },
-          { key: 'outlineDash', type: 'select', label: 'Outline line type', options: opt(DASH_NAMES) },
+          { key: 'outlineDash', type: 'select', label: 'Outline line type', options: choices(DASH_NAMES) },
           { key: 'fillColor', type: 'color', label: 'Infill colour' },
           { key: 'fillOpacity', type: 'number', label: 'Infill opacity (%, 0 = none)', min: 0, step: 5 },
         ] },
@@ -220,7 +221,7 @@ export class DrawingProps {
   async saveCompanyStd(vals) {
     const s = styleValues(vals || styleOf(this.doc, null)), r = await api.draftStd(s);
     if (r?.__error) { toast('Could not save: ' + r.__error, 'error'); return; }
-    setCompanyStd(s); log('STYLE company saved', r?.__path, JSON.stringify(s)); toast('Company standard saved: ' + (r?.__path || ''), 'info', 5000);
+    setCompanyStd(s); log('STYLE company saved', r?.__path, JSON.stringify(s)); toast('Company standard saved: ' + (r?.__path || ''), 'info', opt('drToastInfoMs'));
   }
   async loadCompanyStd() {
     const r = await api.draftStd(); const s = clean(r || {});
@@ -232,7 +233,7 @@ export class DrawingProps {
     let s; try { s = clean(JSON.parse(f.text)); } catch { toast('Not a drafting standard file', 'error'); return; }
     if (!Object.keys(s).length) { toast('No drafting standard values in this file', 'error'); return; }
     this.app.pm.cancel?.(); this.change(() => { this.doc.style = { ...(this.doc.style || {}), ...s }; }); log('STYLE imported', f.path, JSON.stringify(s));
-    toast('Imported into this drawing. Use "Save as company standard" to make it the default for new drawings.', 'info', 6000);
+    toast('Imported into this drawing. Use "Save as company standard" to make it the default for new drawings.', 'info', opt('toastWarnMs'));
   }
   async exportStd(vals) {
     const s = styleValues(vals || styleOf(this.doc, null));
@@ -248,9 +249,9 @@ const labelOf = (k) => LABELS[k] || k;
 const unit = (d) => { const l = Math.hypot(d[0], d[1]) || 1; return [d[0] / l, d[1] / l]; };
 function styleValues(v) { const o = {}; for (const k of KEYS) if (v[k] != null && v[k] !== '') o[k] = typeof STD_DEF[k] === 'number' ? Number(v[k]) : String(v[k]); return clean(o); }
 function valueLine(doc, a) {
-  const v = annValue(a);
-  if (a.type === 'area') return fmt(v / 1e6, 2) + ' m²' + (a.pts ? `, ${a.pts.length} corners` : '');
-  if (a.type === 'ang') return fmt(v, 2) + '°';
+  const v = annValue(a), dc = opt('drPropsDec');
+  if (a.type === 'area') return fmt(v / 1e6, dc) + ' m²' + (a.pts ? `, ${a.pts.length} corners` : '');
+  if (a.type === 'ang') return fmt(v, dc) + '°';
   if (a.type === 'note') return '';
-  return fmt(v, 2) + ' mm' + (a.fit ? `  ±${fmt(a.fit.sigma, 1)}` : '');
+  return fmt(v, dc) + ' mm' + (a.fit ? `  ±${fmt(a.fit.sigma, opt('drInfoDecMm'))}` : '');
 }

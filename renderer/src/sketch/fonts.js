@@ -3,13 +3,13 @@
 // can be extruded (embossed) or cut (engraved).
 import opentype from 'opentype.js';
 import { api } from '../api.js';
+import { opt } from '../app/options/index.js';
 
 const BUNDLED = [
   { name: 'DejaVu Sans', file: 'fonts/DejaVuSans.ttf', bundled: true },
   { name: 'DejaVu Sans Bold', file: 'fonts/DejaVuSans-Bold.ttf', bundled: true },
 ];
-export const DEFAULT_FONT = 'DejaVu Sans';
-const PREFERRED = ['Arial', 'Segoe UI', 'Calibri'];
+// default font (bundled) and preferred system fonts: Options rows skTextFont / skTextFontPreferred
 
 let listPromise = null;
 const cache = new Map();
@@ -28,7 +28,7 @@ export function listFonts() {
 
 export async function preferredFont() {
   const fonts = await listFonts();
-  return PREFERRED.find((n) => fonts.some((f) => f.name === n)) || DEFAULT_FONT;
+  return opt('skTextFontPreferred').find((n) => fonts.some((f) => f.name === n)) || opt('skTextFont');
 }
 
 export async function loadFont(name) {
@@ -53,18 +53,18 @@ export async function loadFont(name) {
 // letter height in sketch units, matching how engineers specify lettering.
 // Returns flattened loops (display, profile nesting) and the exact glyph
 // segments per loop (lines + quadratic/cubic Beziers) for the kernel.
-export function textGeometry(font, text, h, { align = 'left', spacing = 1.45 } = {}) {
-  const capRatio = (font.tables.os2?.sCapHeight || font.unitsPerEm * 0.7) / font.unitsPerEm;
+export function textGeometry(font, text, h, { align = 'left', spacing = opt('skTextLineSpacing') } = {}) {
+  const capRatio = (font.tables.os2?.sCapHeight || font.unitsPerEm * opt('skTextCapRatio')) / font.unitsPerEm;
   const size = h / capRatio;
-  const tol = h * 0.004;
-  const eps = tol * 0.05;
+  const tol = h * opt('skTextCurveTol');
+  const eps = tol * opt('skTextSamePtTol'), maxSeg = opt('skTextMaxSeg'), colTol = tol * opt('skTextCollinearTol'), res = opt('skTextCoordRes');
   const outline = [], segs = [];
   const lines = String(text || '').split('\n');
   lines.forEach((line, li) => {
     const width = font.getAdvanceWidth(line, size);
     const x0 = align === 'center' ? -width / 2 : align === 'right' ? -width : 0;
     const y0 = -li * h * spacing;
-    const T = (x, y) => [round(x0 + x), round(y0 - y)];
+    const T = (x, y) => [round(x0 + x, res), round(y0 - y, res)];
     const path = font.getPath(line, 0, 0, size);
     let poly = null, sg = null, pen = null, start = null, last = null;
     const same = (a, b) => Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps;
@@ -72,7 +72,7 @@ export function textGeometry(font, text, h, { align = 'left', spacing = 1.45 } =
     const steps = (pts) => {
       let L = 0;
       for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-      return Math.max(2, Math.min(16, Math.ceil(Math.sqrt(L / tol))));
+      return Math.max(2, Math.min(maxSeg, Math.ceil(Math.sqrt(L / tol))));
     };
     const addSeg = (ctrl) => { if (ctrl.every((q) => same(q, ctrl[0]))) return; sg.push(ctrl); };
     const close = () => {
@@ -81,7 +81,7 @@ export function textGeometry(font, text, h, { align = 'left', spacing = 1.45 } =
       else if (sg.length && pen && start) { const lastSeg = sg[sg.length - 1]; lastSeg[lastSeg.length - 1] = start; }
       if (poly.length >= 3) {
         if (same(poly[0], poly[poly.length - 1])) poly.pop();
-        const simplified = dropCollinear(poly, tol * 0.02);
+        const simplified = dropCollinear(poly, colTol);
         if (simplified.length >= 3 && Math.abs(area(simplified)) > tol * tol && sg.length >= 2) { outline.push(simplified); segs.push(sg); }
       }
       poly = null; sg = null; pen = null; start = null; last = null;
@@ -113,7 +113,7 @@ export function textGeometry(font, text, h, { align = 'left', spacing = 1.45 } =
 }
 export function textOutline(font, text, h, opts) { return textGeometry(font, text, h, opts).outline; }
 
-const round = (v) => Math.round(v * 1e6) / 1e6;
+const round = (v, res) => Math.round(v * res) / res;
 function area(p) { let a = 0; for (let i = 0; i < p.length; i++) { const q = p[(i + 1) % p.length]; a += p[i][0] * q[1] - q[0] * p[i][1]; } return a / 2; }
 function dropCollinear(p, eps) {
   const out = [];

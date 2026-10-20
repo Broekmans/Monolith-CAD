@@ -1,0 +1,27 @@
+// Values shared by Sketch and Part (and later other areas): overlay text, dimensions, drag arrow + value box,
+// messages, geometric tolerances. Rows with hidden: true are internal (not in the Options window, always factory).
+export default [
+  // ---- shown in Options ----
+  { key: 'dimLineW', cat: 'Dimensions', group: 'Dimension lines', label: 'Dimension and extension line width', type: 'num', def: 1, min: 0.5, max: 4, step: 0.1, unit: 'px' },
+  { key: 'dimDecimals', cat: 'Dimensions', group: 'Dimension lines', label: 'Decimal places', type: 'num', def: 2, min: 0, max: 6, step: 1 },
+  { key: 'dimArrowLen', cat: 'Dimensions', group: 'Dimension lines', label: 'Arrow length', type: 'num', def: 9, min: 3, max: 30, step: 1, unit: 'px' },
+  { key: 'dragArrowColor', cat: 'Colours', group: 'Feature values', label: 'Drag arrow (distance, depth)', type: 'color', def: '#286edc' },
+  { key: 'dragArrowHeadPx', cat: 'Feature Values', label: 'Drag arrow head length', type: 'num', def: 12, min: 6, max: 40, step: 1, unit: 'px' },
+  // ---- internal ----
+  { key: 'overlayFont', hidden: true, label: 'Font of text drawn over the view', def: 'Segoe UI, sans-serif' },
+  { key: 'dimArrowAngle', hidden: true, label: 'Dimension arrow head half angle (rad)', def: 0.28 },
+  { key: 'dragArrowLineW', hidden: true, label: 'Drag arrow line width (px)', def: 1.6 },
+  { key: 'dragArrowDotPx', hidden: true, label: 'Drag arrow base dot radius (px)', def: 3 },
+  { key: 'dragArrowHeadHalfPx', hidden: true, label: 'Drag arrow head half width (px)', def: 5 },
+  { key: 'dragGripOffsetPx', hidden: true, label: 'Drag grip position along the arrow (px)', def: 5 },
+  { key: 'valueBoxGapPx', hidden: true, label: 'Gap between arrow tip and value box (px)', def: 22 },
+  { key: 'valueBoxMarginPx', hidden: true, label: 'Value box margin to the right view edge (px)', def: 4 },
+  { key: 'valueBoxMarginLeftPx', hidden: true, label: 'Value box margin to the left view edge (px)', def: 2 },
+  { key: 'dragSnapSteps', hidden: true, label: 'Arrow drag rounding steps, coarse / normal / fine (mm)', def: [5, 1, 0.1] },
+  { key: 'dragStepZoom', hidden: true, label: 'Zoom (px per mm) below which the coarser drag step is used', def: [2, 0.4] },
+  { key: 'dragFineDiv', hidden: true, label: 'Shift + drag: step divided by', def: 10 },
+  { key: 'toastWarnMs', hidden: true, label: 'Time a warning message stays (ms)', def: 6000 },
+  { key: 'geomEps', hidden: true, label: 'Geometric zero: lengths / radii (mm)', def: 1e-6 },
+  { key: 'geomEpsTiny', hidden: true, label: 'Geometric zero: parameters, parallel tests', def: 1e-9 },
+  { key: 'geomEpsZero', hidden: true, label: 'Geometric zero: divisions', def: 1e-12 },
+];

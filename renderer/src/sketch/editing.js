@@ -7,6 +7,7 @@ import { h, fmt, modifyBox, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { listFonts, loadFont, textGeometry, preferredFont } from './fonts.js';
 import { textLoops } from '../../../shared/profile.mjs';
+import { opt } from '../app/options.js';
 import { niceHeight, COL, COL_LIGHT, COL_DARK, setSketchTheme, SKETCH_TOOLS, REL_DEFS, newSketch } from './sketcher.js';
 
 export class SketchEditing {
@@ -51,7 +52,7 @@ export class SketchEditing {
     const tc = this.paramOn(c, p);
     this.pushUndo();
     const end = c.kind === 'line' ? 1 : c.kind === 'arc' ? (normAng(c.a1 - c.a0) || TAU) : TAU;
-    const eps = 1e-7 * Math.max(1, end);
+    const eps = opt('skTrimParamEps') * Math.max(1, end);
     const inner = ints.filter((x) => x.t > eps && x.t < end - eps).sort((a, b) => a.t - b.t);
     if (c.kind === 'circle') {
       if (inner.length < 2) { this.deleteGeo([id]); this.resolve(true); return; }
@@ -191,10 +192,10 @@ export class SketchEditing {
     const ents = gs.filter((g) => g !== axis && g.type !== 'text');
     if (!axis || !ents.length) { this.startMirror(); return; }
     const a = this.P(axis.p1), b = this.P(axis.p2), L = dist(a, b);
-    if (L < 1e-9) return;
+    if (L < opt('geomEpsTiny')) return;
     const u = [(b[0] - a[0]) / L, (b[1] - a[1]) / L];
     const refl = (p) => { const d = [p[0] - a[0], p[1] - a[1]], t = d[0] * u[0] + d[1] * u[1]; const f = [a[0] + u[0] * t, a[1] + u[1] * t]; return [2 * f[0] - p[0], 2 * f[1] - p[1]]; };
-    const onAxis = (p) => dist(p, refl(p)) < 1e-5;
+    const axTol = opt('skMirrorAxisTol'), onAxis = (p) => dist(p, refl(p)) < axTol;
     this.pushUndo();
     const map = new Map();
     const mp = (id) => {

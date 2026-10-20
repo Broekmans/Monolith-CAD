@@ -11,8 +11,10 @@ import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
 import { optHex } from '../app/options.js';
+import { applyDisplay, paneDisplay, displayItems, setDisplayStyle } from '../displaystyle.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
 import * as M from '../../../shared/mates.mjs';
+import { upgradeDoc } from '../../../shared/format.mjs';
 import { FASTENERS, fastenerDef, fastenerPart, fastenerName, hasLength, sizeDia } from '../../../shared/fasteners.mjs';
 import { AsmCommands } from './commands.js';
 import { AsmPicking } from './picking.js';
@@ -112,6 +114,7 @@ export function loadPart(path, text = null, stack = []) {
     try {
       const f = text != null ? { text } : await api.readFile(path);
       const data = JSON.parse(f.text);
+      upgradeDoc(data); // older file format → current (shared/format.mjs)
       if (data.kind === 'assembly') return await loadSubassembly(path, data, stack);
       if (data.kind !== 'part') throw new Error('Not a part document');
       // use the finished mesh saved in the file when it is up to date; otherwise rebuild
@@ -181,6 +184,8 @@ export class AssemblyDoc {
     this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
     this.viewport = this.vp = this.viewSet.proxy;
     this.viewSet.onLayout = () => app.syncViewportMenu?.(); // close / maximize from the pane buttons
+    this.viewSet.beforePane = (p) => { const m = paneDisplay(this, p); for (const v of this.views.values()) applyDisplay([v.mesh, v.lines], m); };
+    this.viewSet.displayItems = (p) => displayItems(this, p);
     this.vp.onContextMenu = (e) => this.viewContextMenu(e);
     this.vp.onMiddleClick = () => this.zoomFit(); // double middle click = Zoom to Fit
     this.scene = this.vp.scene;
@@ -229,9 +234,7 @@ export class AssemblyDoc {
     const dispMenu = (e) => {
       const r = e.currentTarget.getBoundingClientRect();
       contextMenu(r.left, r.bottom + 4, [
-        { label: 'Shaded With Edges', icon: 'shaded', run: () => this.setDisplay('shadedEdges') },
-        { label: 'Shaded', icon: 'shaded', run: () => this.setDisplay('shaded') },
-        { label: 'Wireframe', icon: 'wire', run: () => this.setDisplay('wire') },
+        ...displayItems(this),
       ]);
     };
     bar.append(B('zoomFit', 'Zoom to Fit (F)', () => this.zoomFit()), B('views', 'View Orientation', viewsMenu), B('shaded', 'Display Style', dispMenu), B('section', 'Section View', () => toggleSection(this)), B('grid', 'Show / Hide Grid', () => this.toggleGrid()));
@@ -244,7 +247,7 @@ export class AssemblyDoc {
   setViewLayout(name) { this.viewSet.setLayout(name, { fit: () => this.zoomFit() }); this.app.setStatus(name === 'single' ? 'Single view' : 'Click in a view to make it the active one (blue border); commands like Zoom to Fit and the standard views act on it'); }
   resetViews() { this.viewSet.resetViews(() => this.zoomFit()); }
   beforeSave() { const s = this.viewSet.toJSON(); if (s.layout === 'single') delete this.doc.viewLayout; else this.doc.viewLayout = s; }
-  setDisplay(m) { this.displayMode = m; for (const v of this.views.values()) v.group.parent?.remove(v.group); this.views.clear(); this.syncScene(); }
+  setDisplay(m) { setDisplayStyle(this, m); }
 
   // ======================= loading & scene =======================
   async reloadAll(fromDisk) {
@@ -313,15 +316,15 @@ export class AssemblyDoc {
       if (!v && part) {
         const group = new THREE.Group();
         group.matrixAutoUpdate = false;
-        const wire = this.displayMode === 'wire';
-        const mat = new THREE.MeshStandardMaterial({ color: PALETTE[i % PALETTE.length], metalness: 0.18, roughness: 0.42, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, transparent: wire, opacity: wire ? 0 : 1, depthWrite: !wire });
+        const mat = new THREE.MeshStandardMaterial({ color: PALETTE[i % PALETTE.length], metalness: 0.18, roughness: 0.42, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
         const mesh = new THREE.Mesh(part.geom, mat);
-        mesh.userData.comp = c.id;
+        mesh.userData.comp = c.id; mesh.userData.disp = 'body'; // display style per view (displaystyle.js)
         group.add(mesh);
-        if (this.displayMode !== 'shaded') group.add(new THREE.LineSegments(part.egeom, new THREE.LineBasicMaterial({ color: COLORS.edge, depthTest: !wire })));
+        const lines = new THREE.LineSegments(part.egeom, new THREE.LineBasicMaterial({ color: COLORS.edge }));
+        lines.userData.disp = 'edges'; group.add(lines);
         const hl = new THREE.Group(); group.add(hl);
         this.compGroup.add(group);
-        v = { group, mesh, hl, part };
+        v = { group, mesh, hl, part, lines };
         this.views.set(c.id, v);
       }
       if (!v) return;

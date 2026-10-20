@@ -53,8 +53,9 @@ export class PolygonTool {
     const p = this.pts;
     if (!p.length) return;
     ctx.lineWidth = 1.6;
-    ctx.strokeStyle = '#d81bd8';
-    ctx.fillStyle = 'rgba(216,27,216,0.10)';
+    // closed fence = selected (blue), still drawing = will be (orange) (0.1.99)
+    ctx.strokeStyle = this.closed ? '#1e90ff' : '#ff8a00';
+    ctx.fillStyle = this.closed ? 'rgba(30,144,255,0.10)' : 'rgba(255,138,0,0.10)';
     ctx.setLineDash(this.closed ? [] : [6, 4]);
     ctx.beginPath();
     ctx.moveTo(p[0][0], p[0][1]);
@@ -63,7 +64,7 @@ export class PolygonTool {
     ctx.closePath();
     ctx.fill(); ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = '#d81bd8';
+    ctx.fillStyle = ctx.strokeStyle;
     for (const q of p) ctx.fillRect(q[0] - 2.5, q[1] - 2.5, 5, 5);
   }
   dispose() {
@@ -128,7 +129,7 @@ export class BoxTool {
     const { min, max } = this.box;
     const C = (i) => this.vp.toScreen(docToWorld([i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]]));
     const P = Array.from({ length: 8 }, (_, i) => C(i));
-    ctx.strokeStyle = '#d81bd8'; ctx.lineWidth = 1.4;
+    ctx.strokeStyle = '#1e90ff'; ctx.lineWidth = 1.4;
     ctx.beginPath();
     for (let i = 0; i < 8; i++) for (const b of [1, 2, 4]) if (!(i & b)) { ctx.moveTo(...P[i]); ctx.lineTo(...P[i | b]); }
     ctx.stroke();

@@ -89,7 +89,7 @@ class MeasureTool {
   paint(ctx) {
     const S = (a) => this.doc.absToScreen(a);
     const pts = this.pts.map(S);
-    ctx.strokeStyle = '#d81bd8'; ctx.lineWidth = 1.6; ctx.setLineDash([5, 3]);
+    ctx.strokeStyle = '#ff8a00'; ctx.lineWidth = 1.6; ctx.setLineDash([5, 3]);
     if (pts.length) {
       ctx.beginPath(); ctx.moveTo(...pts[0]);
       for (const q of pts.slice(1)) ctx.lineTo(...q);
@@ -97,7 +97,7 @@ class MeasureTool {
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    ctx.fillStyle = '#d81bd8';
+    ctx.fillStyle = '#ff8a00';
     for (const q of pts) { ctx.beginPath(); ctx.arc(q[0], q[1], 3.5, 0, Math.PI * 2); ctx.fill(); }
     if (this.hover) {
       const q = S(this.hover.abs);

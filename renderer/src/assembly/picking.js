@@ -1,5 +1,6 @@
 // Assembly: picking, dragging, highlights
 // Methods are mixed into AssemblyDoc (see assembly.js); `this` is the AssemblyDoc.
+import { paneDisplay } from '../displaystyle.js';
 import * as THREE from 'three';
 import { Viewport, navHeld } from '../viewport.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
@@ -39,7 +40,7 @@ export class AsmPicking {
             const d = segDist([sx, sy], prev.s, s);
             if (d < bd) {
               const depth = new THREE.Vector3(...w).sub(rc.ray.origin).dot(viewDir);
-              if (this.displayMode === 'wire' || depth <= faceDepth + this.vp.scale * 8) { bd = d; best = { c, ed, w }; }
+              if (paneDisplay(this) === 'wire' || depth <= faceDepth + this.vp.scale * 8) { bd = d; best = { c, ed, w }; }
             }
           }
           prev = { s };

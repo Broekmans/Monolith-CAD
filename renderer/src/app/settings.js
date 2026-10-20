@@ -4,7 +4,7 @@ import { cacheKey, packMesh } from '../meshcache.js';
 import { h, CommandManager, PropertyManager, toast, dialog } from '../ui.js';
 import { icon } from '../icons.js';
 import { api } from '../api.js';
-import { OPTIONS_DEF, OPT_CATS, opt, allOpts, setOpts, setOpt, factory, factoryOf, myDefaults, setMine, hasStored, clean } from './options.js';
+import { OPTIONS_DEF, OPTIONS_SHOWN, OPT_CATS, opt, allOpts, setOpts, setOpt, factory, factoryOf, myDefaults, setMine, hasStored, clean } from './options.js';
 import { initActionLog, askLogConsentOnce } from '../actionlog.js';
 import { initSolver } from '../sketch/solver.js';
 import { setSketchTheme, applySketchColours } from '../sketch/sketcher.js';
@@ -104,6 +104,8 @@ export class AppSettings {
     const search = h('input', { class: 'opt-search', type: 'search', placeholder: 'Search settings…' });
     search.addEventListener('input', () => show());
     search.addEventListener('keydown', (e) => e.stopPropagation());
+    // rows of one category come from several cats files: keep each sub-heading together (order of first appearance)
+    const byGroup = (defs) => { const o = []; for (const d of defs) if (!o.includes(d.group || '')) o.push(d.group || ''); return o.flatMap((g) => defs.filter((d) => (d.group || '') === g)); };
     const rowsOf = (defs, withCat) => {
       const out = []; let g = null;
       for (const d of defs) {
@@ -118,9 +120,9 @@ export class AppSettings {
       const q = search.value.trim().toLowerCase();
       list.replaceChildren(search, ...OPT_CATS.map((c) => h('button', { class: 'opt-cat' + (c === cat && !q ? ' on' : ''), onclick: () => { cat = c; search.value = ''; try { localStorage.setItem('monolith.optionsCat', c); } catch {} show(); } }, c)));
       if (q) {
-        const hits = OPTIONS_DEF.filter((d) => (d.label + ' ' + d.cat + ' ' + (d.group || '') + ' ' + d.key).toLowerCase().includes(q));
+        const hits = OPTIONS_SHOWN.filter((d) => (d.label + ' ' + d.cat + ' ' + (d.group || '') + ' ' + d.key).toLowerCase().includes(q));
         rows.replaceChildren(h('div', { class: 'opt-head' }, `Search: ${hits.length} setting${hits.length === 1 ? '' : 's'}`), ...rowsOf(hits, true));
-      } else rows.replaceChildren(h('div', { class: 'opt-head' }, cat), ...rowsOf(OPTIONS_DEF.filter((d) => d.cat === cat), false));
+      } else rows.replaceChildren(h('div', { class: 'opt-head' }, cat), ...rowsOf(byGroup(OPTIONS_SHOWN.filter((d) => d.cat === cat)), false));
     };
     const load = (o, text) => { this.applyOptions(o); show(); msg.textContent = text; };
     const exportJson = async () => {

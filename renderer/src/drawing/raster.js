@@ -3,6 +3,7 @@
 // 255 (dense); the view's darkness (v.cloud.dark) is applied here. Loading a PNG is asynchronous: the
 // first paint starts it and asks for a repaint when ready (onRasterReady). Prim: {t:'raster', R, x, y, w, h}
 // (sheet mm of the image corners: x,y = bottom-left).
+import { opt } from '../app/options.js';
 
 const cache = new WeakMap(); // raster object -> {ink: Uint8Array, w, h, canv: Map(dark -> canvas), loading}
 let ready = () => {};
@@ -27,8 +28,8 @@ function load(r) {
   return e;
 }
 export async function loadRaster(r) { const e = load(r); await e.loading; return e; }
-// tone curve: t^1.25 keeps sparse areas light; darkness scales the result
-export function inkOf(L, dark = 1) { if (!L) return 0; const t = Math.pow(L / 255, 1.25) * dark; return t >= 1 ? 1 : t; }
+// tone curve: t^1.25 (drRasterGamma) keeps sparse areas light; darkness scales the result. gm: exponent read once by the caller
+export function inkOf(L, dark = 1, gm = opt('drRasterGamma')) { if (!L) return 0; const t = Math.pow(L / 255, gm) * dark; return t >= 1 ? 1 : t; }
 // canvas for a darkness and a reduction k (zoomed out: k×k pixels -> 1 by their maximum, so thin walls stay visible)
 function canvasFor(e, dark, k = 1) {
   const key = dark + ':' + k;
@@ -42,7 +43,8 @@ function canvasFor(e, dark, k = 1) {
   }
   c = document.createElement('canvas'); c.width = w; c.height = h;
   const x = c.getContext('2d'), id = x.createImageData(w, h), d = id.data, lut = new Uint8Array(256);
-  for (let i = 0; i < 256; i++) lut[i] = Math.round(inkOf(i, dark) * 255);
+  const gm = opt('drRasterGamma');
+  for (let i = 0; i < 256; i++) lut[i] = Math.round(inkOf(i, dark, gm) * 255);
   for (let i = 0; i < ink.length; i++) { d[i * 4 + 3] = lut[ink[i]]; } // black with alpha = ink
   x.putImageData(id, 0, 0);
   if (e.canv.size > 6) e.canv.clear();
@@ -68,7 +70,8 @@ export function paintRaster(ctx, p, S) {
 export function pdfGrey(p) {
   const e = cache.get(p.R); if (!e?.ink) return null;
   const out = new Uint8Array(e.ink.length), lut = new Uint8Array(256);
-  for (let i = 0; i < 256; i++) lut[i] = 255 - Math.round(inkOf(i, p.dark) * 255);
+  const gm = opt('drRasterGamma');
+  for (let i = 0; i < 256; i++) lut[i] = 255 - Math.round(inkOf(i, p.dark, gm) * 255);
   for (let i = 0; i < out.length; i++) out[i] = lut[e.ink[i]];
   return { w: e.w, h: e.h, data: out };
 }

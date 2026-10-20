@@ -5,6 +5,7 @@
 //   note: {text, at, anchor?}
 import { textWidth, EM } from './pdf.js';
 import { STD_DEF, DASHES } from './styles.js';
+import { opt } from '../app/options.js';
 
 export const DIM = { text: 3.5, arrow: 3, arrowW: 0.5, gap: 1, ext: 2, lw: 0.25 };
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
@@ -58,11 +59,13 @@ export function annPrims(a, f, s, out, { dec = 2, color, units = 'mm', areaUnits
   const lc = color || (st.lineColor && st.lineColor !== '#000000' ? st.lineColor : null), tc = color || (st.textColor && st.textColor !== '#000000' ? st.textColor : null);
   const C = lc ? { color: lc } : {}, CT = tc ? { color: tc } : {};
   const TH = st.textH || DIM.text, AS = st.arrowSize ?? DIM.arrow, GAP = st.extGap ?? DIM.gap, EXT = st.extOver ?? DIM.ext, LW = st.lineW || DIM.lw;
+  // layout on paper (mm): Options rows dr* (sheet output)
+  const G = opt('drAnnTextGap'), SH = opt('drAnnShoulder');
   const L = (pts) => out.push({ t: 'line', pts, w: LW, ...C });
   const arrow = (tip, dir) => {
-    const u = nrm(dir), p = perp(u), k = AS / 6, ty = st.arrow || 'filled';
-    if (ty === 'dot') { out.push({ t: 'circle', c: tip, r: AS / 5, w: AS / 2.5, ...C }); return; }
-    if (ty === 'tick') { const d = mul(nrm(add(u, p)), AS / 2); out.push({ t: 'line', pts: [...sub(tip, d), ...add(tip, d)], w: LW * 2, ...C }); return; }
+    const u = nrm(dir), p = perp(u), k = AS / opt('drArrowWDiv'), ty = st.arrow || 'filled';
+    if (ty === 'dot') { out.push({ t: 'circle', c: tip, r: AS / opt('drArrowDotRDiv'), w: AS / opt('drArrowDotWDiv'), ...C }); return; }
+    if (ty === 'tick') { const d = mul(nrm(add(u, p)), AS / opt('drArrowTickDiv')); out.push({ t: 'line', pts: [...sub(tip, d), ...add(tip, d)], w: LW * opt('drArrowTickWK'), ...C }); return; }
     const b = sub(tip, mul(u, AS)); const q1 = add(b, mul(p, k)), q2 = sub(b, mul(p, k));
     if (ty === 'open') out.push({ t: 'line', pts: [...q1, ...tip, ...q2], w: LW, ...C }); else out.push({ t: 'fill', pts: [...tip, ...q1, ...q2], ...C });
   };
@@ -76,9 +79,9 @@ export function annPrims(a, f, s, out, { dec = 2, color, units = 'mm', areaUnits
     // extension lines (small gap at the part, a little past the dimension line)
     for (const [p, d] of [[A, dA], [B, dB]]) { const v = sub(d, p), l = len(v); if (l > GAP) { const w = mul(v, 1 / l); L([...add(p, mul(w, GAP)), ...add(d, mul(w, EXT))]); } }
     const span = len(sub(dB, dA)), ud = span > 1e-9 ? nrm(sub(dB, dA)) : u;
-    const inside = span > 2 * AS + 2;
+    const inside = span > 2 * AS + opt('drDimInsideAdd'), oa = opt('drDimOutsideAdd');
     if (inside) { L([...dA, ...dB]); arrow(dA, mul(ud, -1)); arrow(dB, ud); }
-    else { L([...sub(dA, mul(ud, AS + 4)), ...add(dB, mul(ud, AS + 4))]); arrow(dA, ud); arrow(dB, mul(ud, -1)); }
+    else { L([...sub(dA, mul(ud, AS + oa)), ...add(dB, mul(ud, AS + oa))]); arrow(dA, ud); arrow(dB, mul(ud, -1)); }
     // text: at the dimension line, above it (ISO aligned), at P's position along the line
     const t = Math.max(-0.5, Math.min(1.5, span > 1e-9 ? dot(sub(P, dA), ud) / span : 0.5));
     const along = Math.abs(t - 0.5) < 0.5 ? add(dA, mul(sub(dB, dA), inside ? 0.5 : t)) : add(dA, mul(sub(dB, dA), t));
@@ -86,8 +89,8 @@ export function annPrims(a, f, s, out, { dec = 2, color, units = 'mm', areaUnits
     const up = [-Math.sin(rot), Math.cos(rot)];
     // chain: a text longer than its segment goes to the other side of the line on every second one
     // (neighbouring short segments then never overlap)
-    const flip = a.chain != null && tw + 1 > span && a.chain % 2 === 1;
-    const tp = add(along, mul(up, flip ? -(TH + 1) : 1));
+    const flip = a.chain != null && tw + G > span && a.chain % 2 === 1;
+    const tp = add(along, mul(up, flip ? -(TH + G) : G));
     T(tp[0], tp[1], text, rot);
     return { box: textBox(tp, tw, rot, TH) };
   }
@@ -100,14 +103,14 @@ export function annPrims(a, f, s, out, { dec = 2, color, units = 'mm', areaUnits
     if (outside) arrow(Q, mul(d, -1)); else arrow(Q, d);
     if (a.type === 'dia') arrow(far, mul(d, outside ? 1 : -1));
     // horizontal shoulder with the text on it
-    const right = P[0] >= Cc[0], sh = add(P, [right ? tw + 2 : -(tw + 2), 0]);
+    const right = P[0] >= Cc[0], sh = add(P, [right ? tw + SH : -(tw + SH), 0]);
     L([...P, ...sh]);
-    const tx = right ? P[0] + 1 : sh[0] + 1;
-    T(tx, P[1] + 1, text, 0, 'l');
-    return { box: [tx, P[1], tx + tw, P[1] + TH + 1] };
+    const tx = right ? P[0] + G : sh[0] + G;
+    T(tx, P[1] + G, text, 0, 'l');
+    return { box: [tx, P[1], tx + tw, P[1] + TH + G] };
   }
   if (a.type === 'ang') {
-    const X = f(...a.x), P = f(...a.at), r = Math.max(4, len(sub(P, X)));
+    const X = f(...a.x), P = f(...a.at), r = Math.max(opt('drAngMinR'), len(sub(P, X)));
     const a1 = Math.atan2(a.d1[1], a.d1[0]);
     let da = Math.atan2(a.d2[1], a.d2[0]) - a1;
     while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI;
@@ -115,14 +118,15 @@ export function annPrims(a, f, s, out, { dec = 2, color, units = 'mm', areaUnits
     for (let i = 0; i <= N; i++) { const t = a1 + (da * i) / N; pts.push(X[0] + r * Math.cos(t), X[1] + r * Math.sin(t)); }
     L(pts);
     // extension along the rays when the arc is beyond the geometry
-    for (const d of [a.d1, a.d2]) L([...add(X, mul(d, r * 0.15)), ...add(X, mul(d, r + EXT))]);
+    const e0 = opt('drAngExtStart');
+    for (const d of [a.d1, a.d2]) L([...add(X, mul(d, r * e0)), ...add(X, mul(d, r + EXT))]);
     const sg = Math.sign(da) || 1;
     arrow([pts[0], pts[1]], [Math.sin(a1) * sg, -Math.cos(a1) * sg]);
     const a2 = a1 + da;
     arrow([pts[pts.length - 2], pts[pts.length - 1]], [-Math.sin(a2) * sg, Math.cos(a2) * sg]);
     // horizontal text just outside the arc, on the bisector
     const mid = a1 + da / 2, cx = Math.cos(mid), sy = Math.sin(mid);
-    const tp = add(X, [(r + 2 + (tw / 2) * Math.abs(cx)) * cx, (r + 2) * sy + (sy < 0 ? -TH : 0)]);
+    const tp = add(X, [(r + SH + (tw / 2) * Math.abs(cx)) * cx, (r + SH) * sy + (sy < 0 ? -TH : 0)]);
     T(tp[0], tp[1], text, 0);
     return { box: textBox(tp, tw, 0, TH) };
   }
@@ -131,16 +135,16 @@ export function annPrims(a, f, s, out, { dec = 2, color, units = 'mm', areaUnits
     if (a.pts && st.fillOpacity > 0) { const q = a.pts.flatMap((p) => f(...p)); out.push({ t: 'fill', pts: q, color: st.fillColor || '#2a6fd6', alpha: Math.min(1, st.fillOpacity / 100) }); }
     if (a.pts) { const q = a.pts.flatMap((p) => f(...p)); const oc = color || st.outlineColor || '#000000'; out.push({ t: 'line', pts: [...q, q[0], q[1]], w: st.outlineW || LW, ...(DASHES[st.outlineDash || 'chain'] ? { dash: DASHES[st.outlineDash || 'chain'] } : {}), ...(oc !== '#000000' ? { color: oc } : {}) }); out.push({ t: 'annpath', ann: a.id, pts: [...q, q[0], q[1]] }); }
     const Cc = a.dot ? f(...a.dot) : a.pts ? f(...centroid(a.pts)) : f(...a.c);
-    out.push({ t: 'circle', c: Cc, r: 0.6, w: 0.5, ...C });
-    if (len(sub(P, Cc)) > 3) L([...Cc, ...P]);
-    L([...P, ...add(P, [P[0] >= Cc[0] ? tw + 2 : -(tw + 2), 0])]);
-    const tx = P[0] >= Cc[0] ? P[0] + 1 : P[0] - tw - 1;
-    T(tx, P[1] + 1, text, 0, 'l');
-    return { box: [tx, P[1], tx + tw, P[1] + TH + 1] };
+    out.push({ t: 'circle', c: Cc, r: opt('drAreaDotR'), w: opt('drAreaDotW'), ...C });
+    if (len(sub(P, Cc)) > opt('drAreaLeaderMin')) L([...Cc, ...P]);
+    L([...P, ...add(P, [P[0] >= Cc[0] ? tw + SH : -(tw + SH), 0])]);
+    const tx = P[0] >= Cc[0] ? P[0] + G : P[0] - tw - G;
+    T(tx, P[1] + G, text, 0, 'l');
+    return { box: [tx, P[1], tx + tw, P[1] + TH + G] };
   }
   if (a.type === 'scalebar') {
     // checkered bar: n segments, labels 0 … len (m from 1 m on), true to the view scale
-    const P = f(...a.at), Lp = a.len * s, n = a.n || 5, sl = Lp / n, hb = 1.2;
+    const P = f(...a.at), Lp = a.len * s, n = a.n || opt('drScaleBarParts'), sl = Lp / n, hb = opt('drScaleBarH');
     const lab = (v) => (a.len >= 1000 ? fmtVal(v / 1000, 2) + (v === a.len ? ' m' : '') : fmtVal(v, 1) + (v === a.len ? ' mm' : ''));
     for (let i = 0; i < n; i++) {
       const x0 = P[0] + i * sl, q = [x0, P[1], x0 + sl, P[1], x0 + sl, P[1] + hb, x0, P[1] + hb];
@@ -148,26 +152,26 @@ export function annPrims(a, f, s, out, { dec = 2, color, units = 'mm', areaUnits
       L([...q, q[0], q[1]]);
     }
     let w = 0;
-    for (const i of [0, Math.floor(n / 2), n]) { const tx = lab((a.len * i) / n); T(P[0] + i * sl, P[1] + hb + 1, tx, 0, 'c'); w = Math.max(w, textWidth(tx, TH * EM)); }
-    return { box: [P[0] - w / 2, P[1], P[0] + Lp + w / 2, P[1] + hb + 1 + TH] };
+    for (const i of [0, Math.floor(n / 2), n]) { const tx = lab((a.len * i) / n); T(P[0] + i * sl, P[1] + hb + G, tx, 0, 'c'); w = Math.max(w, textWidth(tx, TH * EM)); }
+    return { box: [P[0] - w / 2, P[1], P[0] + Lp + w / 2, P[1] + hb + G + TH] };
   }
   if (a.type === 'note') {
     const P = f(...a.at), lines = String(a.text || '').split('\n');
     if (a.anchor) { const A = f(...a.anchor); L([...A, ...P]); arrow(A, sub(A, P)); }
-    let w = 0;
-    lines.forEach((ln, i) => { T(P[0] + 1, P[1] - i * TH * 1.6, ln, 0, 'l'); w = Math.max(w, textWidth(ln, TH * EM)); });
-    return { box: [P[0], P[1] - (lines.length - 1) * TH * 1.6, P[0] + w + 1, P[1] + TH] };
+    let w = 0; const ls = opt('drNoteLineSpacing');
+    lines.forEach((ln, i) => { T(P[0] + G, P[1] - i * TH * ls, ln, 0, 'l'); w = Math.max(w, textWidth(ln, TH * EM)); });
+    return { box: [P[0], P[1] - (lines.length - 1) * TH * ls, P[0] + w + G, P[1] + TH] };
   }
   return null;
 }
 function textBox(p, w, rot, th = DIM.text) {
-  const c = Math.cos(rot), s = Math.sin(rot), h = th + 1;
+  const c = Math.cos(rot), s = Math.sin(rot), h = th + opt('drAnnTextGap');
   const pts = [[-w / 2, 0], [w / 2, 0], [w / 2, h], [-w / 2, h]].map(([x, y]) => [p[0] + x * c - y * s, p[1] + x * s + y * c]);
   return [Math.min(...pts.map((q) => q[0])), Math.min(...pts.map((q) => q[1])), Math.max(...pts.map((q) => q[0])), Math.max(...pts.map((q) => q[1]))];
 }
 
 // 45° hatch lines inside loops (even-odd), spacing in model units; returns sheet line prims
-export function hatchPrims(face, f, spacing, out, w = 0.18) {
+export function hatchPrims(face, f, spacing, out, w = opt('drHatchW')) {
   const c = Math.SQRT1_2;
   // rotate by -45°: u = (x + y)c, v = (-x + y)c ; scan lines v = const
   const segs = [];

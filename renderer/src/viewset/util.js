@@ -36,7 +36,7 @@ export function copyCam(a, b) {
   b.anim = null; b.target.copy(a.target); b.scale = a.scale; b._applyQuat(a.camera.quaternion.clone());
 }
 export function wrapRender(set, p, orig) {
-  return () => { const old = set.renderPane; set.renderPane = p; try { orig(); } finally { set.renderPane = old; } };
+  return () => { const old = set.renderPane; set.renderPane = p; try { set.beforePane?.(p); orig(); } finally { set.renderPane = old; } };
 }
 export function slotOf(cols, p) {
   for (const col of cols) for (const row of col.rows) if (row.pane === p) return { col, row };

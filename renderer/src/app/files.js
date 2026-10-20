@@ -14,11 +14,19 @@ import { PC_EXTS, isPointCloud, askImportOptions } from '../pointcloud.js';
 import { CloudDoc, newCloudDoc, CLOUD_EXTS } from '../cloud/clouddoc.js';
 import { DrawingDoc, newDrawingDoc } from '../drawing/drawing.js';
 import { EXT, extOf, APP_NAME, SLOTS, boot, App } from '../main.js';
+import { upgradeDoc } from '../../../shared/format.mjs';
 
 export class AppFiles {
   async loadDoc(docData, path = null) {
     const app = this.root;
     if (path) { const ex = app.tabs.find((t) => t.path === path); if (ex) { app.activate(ex); return; } }
+    // file format: older files are upgraded step by step (shared/format.mjs); a newer file opens with a warning
+    if (path) {
+      const name = path.split(/[\\/]/).pop();
+      let up; try { up = upgradeDoc(docData); } catch (e) { toast(`${name}: ${e.message}`, 'error'); return null; }
+      if (up.upgraded) { window.__lithLog?.('FORMAT', name, `upgraded ${up.kind} format ${up.from} -> ${up.to}`); toast(`${name} was made with an older format and has been updated (it is saved in the new format)`, 'info', 4000); }
+      if (up.newer) { window.__lithLog?.('FORMAT', name, `newer ${up.kind} format ${up.from}`); toast(`${name} was made with a newer ${APP_NAME} version. You can view it; saving it here may lose things this version does not know.`, 'warn', 9000); }
+    }
     const t = app.newTab();
     // old-format files (.ek*) open normally; the first Save asks where to store the new .lith* file
     // old-format file (.ek*): from now on it lives as .lith* next to it; Save writes there directly
@@ -103,6 +111,8 @@ export class AppFiles {
     }
     const thumb = this.doc.makeThumb ? this.doc.makeThumb() : makeThumb(this.doc.vp, this.doc.thumbBox?.());
     if (thumb) data = { ...data, thumb }; // shown on the Home screen project cards
+    const info = await api.info().catch(() => null);
+    if (info?.version) data = { ...data, savedWith: info.version }; // program version that wrote the file (for support)
     const text = JSON.stringify(data);
     let path = this.path;
     if (!path || as) {

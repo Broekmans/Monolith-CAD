@@ -1,6 +1,7 @@
 // Point cloud dots in drawing views: decoding the packed dots stored in a view (geom.dots, made by
 // main/clouddraw.cjs), colour buckets, the 'dots' primitive drawn on screen (drawing.js paint) and in the
 // PDF (pdf.js). Dot coordinates are view-model mm; prim: sheet = (ox + x·s, oy + y·s).
+import { opt } from '../app/options.js';
 
 const dec = new WeakMap();
 const bytes = (s) => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
@@ -39,11 +40,11 @@ export function dotsPrim(v, xf) {
   const D = decodeDots(v.geom?.dots);
   if (!D || !D.n) return null;
   const b = v.geom.box, cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2, o = v.cloud || {};
-  return { t: 'dots', D, s: xf.s, ox: v.pos[0] - cx * xf.s, oy: v.pos[1] - cy * xf.s, size: o.size || 0.25, mode: o.color || 'black' };
+  return { t: 'dots', D, s: xf.s, ox: v.pos[0] - cx * xf.s, oy: v.pos[1] - cy * xf.s, size: o.size || opt('drDotSize'), mode: o.color || 'black' };
 }
 // screen: S = sheet -> pixel, k = pixels per mm
 export function paintDots(ctx, p, S, k) {
-  const D = p.D, px = Math.max(1, p.size * k), h = px / 2;
+  const D = p.D, px = Math.max(opt('drDotMinPx'), p.size * k), h = px / 2;
   const o = S([p.ox, p.oy]), e = S([p.ox + p.s, p.oy]), f = S([p.ox, p.oy + p.s]);
   const ax = e[0] - o[0], ay = f[1] - o[1];
   for (const bk of dotBuckets(D, p.mode)) {

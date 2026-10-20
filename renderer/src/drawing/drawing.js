@@ -119,7 +119,7 @@ export class DrawingDoc {
     bar.append(h('button', { class: 'hu-btn', title: 'Zoom to sheet (F)', html: icon('zoomFit'), onclick: () => this.zoomFit() }));
   }
   zoomFit(animate = true) {
-    const [W, H] = sheetSize(this.sheet), m = 8;
+    const [W, H] = sheetSize(this.sheet), m = opt('drZoomFitMargin');
     this.vp.fit({ min: [-m, 0, -H - m], max: [W + m, 0, m] }, animate);
     this.vp.requestRender();
   }
@@ -136,20 +136,21 @@ export class DrawingDoc {
     const A = (this._A = this.affine()), k = A.ex[0];
     const [W, H] = sheetSize(this.sheet);
     const a = this.S2([0, 0]), b = this.S2([W, H]);
-    ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(a[0] + 4, b[1] + 4, b[0] - a[0], a[1] - b[1]);
+    const so = opt('drSheetShadowPx'); ctx.fillStyle = opt('drSheetShadow'); ctx.fillRect(a[0] + so, b[1] + so, b[0] - a[0], a[1] - b[1]);
     ctx.fillStyle = paper(); ctx.fillRect(a[0], b[1], b[0] - a[0], a[1] - b[1]);
     const prims = sheetPrims(this.doc, this.sheet, { selected: this.sel, selAnn: this.selAnn?.id, preview: this.preview });
     this._annBoxes = prims.filter((q) => q.t === 'annbox' || q.t === 'annpath');
     this.paint(ctx, prims, (p) => this.S2(p, A), k);
     this.drawOutlineGrips(ctx);
     this.drawDotGrip(ctx);
-    const set = this.viewSet; if (set.panes.length > 1 && this.vp.pane !== set.active) return; // popups / panels follow the active pane
+    const set = this.viewSet; if (set.panes.length > 1 && this.vp.pane !== (set.focus || set.active)) return; // popups / panels follow the active pane
     this.syncProps(); this.syncInfo();
     this.syncRoomList();
   }
   // draw primitives with a sheet->pixel mapping S (k = pixels per mm)
   paint(ctx, prims, S, k) {
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    const ink = opt('drInk'), minW = opt('drMinLinePx'), minD = opt('drMinDashPx'), minT = opt('drMinTextPx'), font = opt('drSheetFont');
     for (const p of prims) {
       if (p.t === 'dots') { paintDots(ctx, p, S, k); continue; }
       if (p.t === 'raster') { paintRaster(ctx, p, S); continue; }
@@ -158,22 +159,22 @@ export class DrawingDoc {
         ctx.beginPath();
         let s = S([q[0], q[1]]); ctx.moveTo(s[0], s[1]);
         for (let i = 2; i < q.length; i += 2) { s = S([q[i], q[i + 1]]); ctx.lineTo(s[0], s[1]); }
-        if (p.t === 'sel') { if (!this.showFrames) continue; ctx.strokeStyle = p.on ? '#2a6fd6' : 'rgba(90,80,60,0.45)'; ctx.lineWidth = p.on ? 1.3 : 1; ctx.setLineDash(p.on ? [5, 4] : [2, 3]); }
-        else { ctx.strokeStyle = p.color || '#000'; ctx.lineWidth = Math.max(0.6, p.w * k); ctx.setLineDash(p.dash ? p.dash.map((d) => Math.max(1, d * k)) : []); }
+        if (p.t === 'sel') { if (!this.showFrames) continue; ctx.strokeStyle = p.on ? opt('drSelColor') : opt('drFrameColor'); ctx.lineWidth = p.on ? opt('drFrameLineWSel') : opt('drFrameLineW'); ctx.setLineDash(p.on ? opt('drFrameDashSel') : opt('drFrameDash')); }
+        else { ctx.strokeStyle = p.color || ink; ctx.lineWidth = Math.max(minW, p.w * k); ctx.setLineDash(p.dash ? p.dash.map((d) => Math.max(minD, d * k)) : []); }
         ctx.stroke();
       } else if (p.t === 'fill') {
         const q = p.pts; ctx.beginPath(); let s0 = S([q[0], q[1]]); ctx.moveTo(s0[0], s0[1]);
         for (let i = 2; i < q.length; i += 2) { s0 = S([q[i], q[i + 1]]); ctx.lineTo(s0[0], s0[1]); }
-        ctx.closePath(); ctx.fillStyle = p.color || '#000'; if (p.alpha != null) { ctx.globalAlpha = p.alpha; ctx.fill(); ctx.globalAlpha = 1; } else ctx.fill();
+        ctx.closePath(); ctx.fillStyle = p.color || ink; if (p.alpha != null) { ctx.globalAlpha = p.alpha; ctx.fill(); ctx.globalAlpha = 1; } else ctx.fill();
       } else if (p.t === 'circle') {
-        const c = S(p.c); ctx.setLineDash([]); ctx.strokeStyle = p.color || '#000'; ctx.lineWidth = Math.max(0.6, p.w * k);
+        const c = S(p.c); ctx.setLineDash([]); ctx.strokeStyle = p.color || ink; ctx.lineWidth = Math.max(minW, p.w * k);
         ctx.beginPath(); ctx.arc(c[0], c[1], p.r * k, 0, Math.PI * 2); ctx.stroke();
       } else if (p.t === 'text') {
         const px = p.size * EM * k;
-        if (px < 2) continue;
+        if (px < minT) continue;
         const s = S([p.x, p.y]);
-        ctx.fillStyle = p.color || '#000';
-        ctx.font = `${p.bold ? 'bold ' : ''}${px}px Helvetica, Arial, sans-serif`;
+        ctx.fillStyle = p.color || ink;
+        ctx.font = `${p.bold ? 'bold ' : ''}${px}px ${font}`;
         ctx.textAlign = p.align === 'c' ? 'center' : p.align === 'r' ? 'right' : 'left';
         ctx.textBaseline = 'alphabetic';
         if (p.rot) { ctx.save(); ctx.translate(s[0], s[1]); ctx.rotate(-p.rot); ctx.fillText(p.text, 0, 0); ctx.restore(); } else ctx.fillText(p.text, s[0], s[1]);
@@ -183,15 +184,15 @@ export class DrawingDoc {
   }
   makeThumb() {
     try {
-      const sh = this.doc.sheets[0], [W, H] = sheetSize(sh), cw = 320, chh = 200;
-      const k = Math.min((cw - 16) / W, (chh - 16) / H), ox = (cw - W * k) / 2, oy = (chh + H * k) / 2;
+      const sh = this.doc.sheets[0], [W, H] = sheetSize(sh), cw = opt('drThumbW'), chh = opt('drThumbH'), tm = opt('drThumbMarginPx');
+      const k = Math.min((cw - tm) / W, (chh - tm) / H), ox = (cw - W * k) / 2, oy = (chh + H * k) / 2;
       const cv = document.createElement('canvas'); cv.width = cw; cv.height = chh;
       const ctx = cv.getContext('2d');
-      ctx.fillStyle = '#dfe4ea'; ctx.fillRect(0, 0, cw, chh);
+      ctx.fillStyle = opt('drThumbBg'); ctx.fillRect(0, 0, cw, chh);
       ctx.fillStyle = paper(); ctx.fillRect(ox, oy - H * k, W * k, H * k);
       this.showFrames = false;
       try { this.paint(ctx, sheetPrims(this.doc, sh), (p) => [ox + p[0] * k, oy - p[1] * k], k); } finally { this.showFrames = true; }
-      return cv.toDataURL('image/jpeg', 0.8);
+      return cv.toDataURL('image/jpeg', opt('drThumbQuality'));
     } catch { return null; }
   }
 
@@ -234,7 +235,7 @@ export class DrawingDoc {
       if (this.tool) { if (!e.buttons) this.tool.move?.(p, e); return; }
       if (!drag) { const g = !e.buttons && (this.dotGripAt(p) ? { kind: 'corner' } : this.outlineGripAt(p)); el.style.cursor = g ? (g.kind === 'corner' ? 'crosshair' : 'move') : !e.buttons && (this.frameAt(p) || this.annAt(p) || this.cutAt(p)) ? 'move' : ''; return; }
       const d = [p[0] - drag.p0[0], p[1] - drag.p0[1]];
-      if (Math.abs(d[0]) + Math.abs(d[1]) > (drag.outline ? 2 / Math.max(1e-6, Math.abs(this.affine().ex[0])) : 0.5)) drag.moved = true;
+      if (Math.abs(d[0]) + Math.abs(d[1]) > (drag.outline ? opt('drDragStartPx') / Math.max(opt('geomEps'), Math.abs(this.affine().ex[0])) : opt('drDragStartMm'))) drag.moved = true;
       if (drag.dot) { if (drag.moved) { this.dotDragMove(drag, p); this.vp.requestRender(); } return; }
       if (drag.outline) { if (drag.moved) { this.outlineDragMove(drag, p, e.shiftKey, e.ctrlKey); this.vp.requestRender(); } return; }
       if (drag.cut) { const sh = this.dragCutShift(drag.cut, d); this.shiftCut(drag.cut, sh - drag.last); drag.last = sh; this.vp.requestRender(); return; }
@@ -246,9 +247,9 @@ export class DrawingDoc {
     el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
     el.addEventListener('dblclick', (e) => { if (this.tool) return; const r = el.getBoundingClientRect(), p = this.toSheet(e.clientX - r.left, e.clientY - r.top), an = this.annAt(p); if (an) { this.editAnn(an); return; } const v = this.viewAt(p); if (v) this.zoomTo(v); });
   }
-  // view whose dotted frame is under p (within 6 px)
+  // view whose dotted frame is under p (within drPickPx)
   frameAt(p) {
-    const tol = 6 / Math.max(1e-6, Math.abs(this.affine().ex[0]));
+    const tol = opt('drPickPx') / Math.max(opt('geomEps'), Math.abs(this.affine().ex[0]));
     const vs = this.doc.views.filter((v) => v.sheet === this.sheetId).reverse();
     return vs.find((v) => {
       const r = frameRect(v, this.sheet);
@@ -258,7 +259,8 @@ export class DrawingDoc {
   }
   viewAt(p) {
     const vs = this.doc.views.filter((v) => v.sheet === this.sheetId).reverse();
-    return vs.find((v) => { const r = viewRect(v, this.sheet); return p[0] >= r[0] - 3 && p[0] <= r[2] + 3 && p[1] >= r[1] - 3 && p[1] <= r[3] + 3; }) || null;
+    const m = opt('drViewPickMm');
+    return vs.find((v) => { const r = viewRect(v, this.sheet); return p[0] >= r[0] - m && p[0] <= r[2] + m && p[1] >= r[1] - m && p[1] <= r[3] + m; }) || null;
   }
   // move a view; projected views stay aligned with their parent, children follow
   moveView(v, pos) {
@@ -268,7 +270,7 @@ export class DrawingDoc {
     const shift = (q) => { q.pos = [q.pos[0] + d[0], q.pos[1] + d[1]]; for (const c of this.doc.views.filter((x) => x.parent === q.id)) shift(c); };
     shift(v);
   }
-  zoomTo(v) { const r = viewRect(v, this.sheet), m = 15; this.vp.fit({ min: [r[0] - m, 0, -r[3] - m], max: [r[2] + m, 0, -r[1] + m] }); }
+  zoomTo(v) { const r = viewRect(v, this.sheet), m = opt('drZoomViewMargin'); this.vp.fit({ min: [r[0] - m, 0, -r[3] - m], max: [r[2] + m, 0, -r[1] + m] }); }
   select(id) { this.sel = id; this.renderTree(); this.app.cm.refresh(); this.vp.requestRender(); }
   contextMenu(e) {
     if (this.tool) { this.tool.context?.(); return; }
@@ -285,7 +287,7 @@ export class DrawingDoc {
 
   // ======================= undo =======================
   snapshot() { return JSON.stringify({ sheets: this.doc.sheets, views: this.doc.views, titleBlock: this.doc.titleBlock, dimDec: this.doc.dimDec ?? 2, dimUnits: this.doc.dimUnits || 'mm', areaUnits: this.doc.areaUnits || 'm2', snapMode: this.doc.snapMode || 'first', style: this.doc.style || null }); }
-  pushUndo(s = this.snapshot()) { this.undoStack.push(s); if (this.undoStack.length > 50) this.undoStack.shift(); this.redoStack = []; this.app.cm.refresh(); }
+  pushUndo(s = this.snapshot()) { this.undoStack.push(s); if (this.undoStack.length > opt('drUndoLevels')) this.undoStack.shift(); this.redoStack = []; this.app.cm.refresh(); }
   restore(s) { this.closeProps?.(); Object.assign(this.doc, JSON.parse(s)); if (!this.doc.sheets.some((x) => x.id === this.sheetId)) this.sheetId = this.doc.sheets[0].id; if (!this.V(this.sel)) this.sel = null; this.selAnn = null; this.app.setDirty(true); this.renderTree(); this.app.cm.refresh(); this.vp.requestRender(); }
   undo() { if (!this.undoStack.length) return; this.redoStack.push(this.snapshot()); this.restore(this.undoStack.pop()); }
   redo() { if (!this.redoStack.length) return; this.undoStack.push(this.snapshot()); this.restore(this.redoStack.pop()); }
@@ -303,7 +305,7 @@ export class DrawingDoc {
   }
   async run(label, fn) {
     this.busy = true; this.app.setBusy(true); this.app.cm.refresh(); this.app.setStatus(label + '…');
-    try { return await fn(); } catch (e) { toast(`${label} failed: ${e.message}`, 'error', 7000); return null; } finally { this.busy = false; this.app.setBusy(false); this.app.cm.refresh(); }
+    try { return await fn(); } catch (e) { toast(`${label} failed: ${e.message}`, 'error', opt('drToastLongMs')); return null; } finally { this.busy = false; this.app.setBusy(false); this.app.cm.refresh(); }
   }
   cmdModelView(three) {
     const srcs = this.sources();
@@ -339,7 +341,7 @@ export class DrawingDoc {
     let geoms = await this.run('Creating views', () => this.computeViews(file, list, null, { probe: isCloud && auto }));
     if (!geoms) return null;
     const snap = this.snapshot();
-    const sh = this.sheet, A = drawArea(sh), gap = 25;
+    const sh = this.sheet, A = drawArea(sh), gap = opt('drViewGap');
     const size = (g) => [g.box[2] - g.box[0], g.box[3] - g.box[1]];
     const S = list.map((_, i) => size(geoms[i]));
     // layout (model mm): front at origin; top above; right to the right
@@ -347,7 +349,7 @@ export class DrawingDoc {
     const three = iF >= 0 && iT >= 0 && iR >= 0;
     if (auto) {
       const needW = three ? S[iF][0] + S[iR][0] : S[0][0], needH = three ? S[iF][1] + S[iT][1] : S[0][1];
-      const avail = [A.x1 - A.x0 - (three ? 3 : 2) * gap, A.y1 - A.y0 - (three ? 3 : 2) * gap - 10];
+      const avail = [A.x1 - A.x0 - (three ? 3 : 2) * gap, A.y1 - A.y0 - (three ? 3 : 2) * gap - opt('drViewFitSlack')];
       const fit = SCALES.find((s) => needW * scaleVal(s) <= avail[0] && needH * scaleVal(s) <= avail[1]) || SCALES[SCALES.length - 1];
       sh.scale = fit.slice();
     }
@@ -356,20 +358,21 @@ export class DrawingDoc {
     const mk = (i, pos, extra = {}) => { const n = names[i]; const v = { id: uid('v'), sheet: sh.id, name: STD[n].label[0] + STD[n].label.slice(1).toLowerCase(), src: file, srcName: baseName(file), dir: list[i].dir, x: list[i].x, pos, hidden, scale: null, geom: geoms[i], ...(list[i].cloud ? { cloud: list[i].cloud } : {}), ...extra }; this.doc.views.push(v); made.push(v); return v; };
     if (three) {
       const wTot = (S[iF][0] + S[iR][0]) * s + gap, hTot = (S[iF][1] + S[iT][1]) * s + gap;
-      const left = (A.x0 + A.x1) / 2 - wTot / 2, bottom = (A.y0 + A.y1) / 2 - hTot / 2 + 5;
+      const left = (A.x0 + A.x1) / 2 - wTot / 2, bottom = (A.y0 + A.y1) / 2 - hTot / 2 + opt('drViewThreeUp');
       const f = mk(iF, [left + (S[iF][0] * s) / 2, bottom + (S[iF][1] * s) / 2]);
       mk(iT, [f.pos[0], bottom + S[iF][1] * s + gap + (S[iT][1] * s) / 2], { parent: f.id, side: 'above' });
       mk(iR, [left + S[iF][0] * s + gap + (S[iR][0] * s) / 2, f.pos[1]], { parent: f.id, side: 'right' });
     } else {
       // other views: each at a free spot on the sheet (top right first), else the middle
+      const eg = opt('drViewEdgeGap'), lb = opt('drViewFreeLabel'), st = opt('drViewSearchStep');
       for (let i = 0; i < names.length; i++) {
-        const rr = this.doc.views.filter((v) => v.sheet === sh.id).map((v) => viewRect(v, sh)), w = S[i][0] * s, hh = S[i][1] * s, m = 12;
+        const rr = this.doc.views.filter((v) => v.sheet === sh.id).map((v) => viewRect(v, sh)), w = S[i][0] * s, hh = S[i][1] * s, m = opt('drViewFreeGap');
         let x = (A.x0 + A.x1) / 2, y = (A.y0 + A.y1) / 2;
         if (rr.length) {
-          const free = (cx, cy) => cx - w / 2 >= A.x0 + 5 && cx + w / 2 <= A.x1 - 5 && cy - hh / 2 >= A.y0 && cy + hh / 2 <= A.y1 - 5 && rr.every((r) => cx + w / 2 + m < r[0] || cx - w / 2 - m > r[2] || cy + hh / 2 + m + 8 < r[1] || cy - hh / 2 - m - 8 > r[3]);
+          const free = (cx, cy) => cx - w / 2 >= A.x0 + eg && cx + w / 2 <= A.x1 - eg && cy - hh / 2 >= A.y0 && cy + hh / 2 <= A.y1 - eg && rr.every((r) => cx + w / 2 + m < r[0] || cx - w / 2 - m > r[2] || cy + hh / 2 + m + lb < r[1] || cy - hh / 2 - m - lb > r[3]);
           let found = null;
-          for (let cy = A.y1 - 5 - hh / 2; cy >= A.y0 + hh / 2 && !found; cy -= 5) for (let cx = A.x1 - 5 - w / 2; cx >= A.x0 + 5 + w / 2; cx -= 5) if (free(cx, cy)) { found = [cx, cy]; break; }
-          if (found) [x, y] = found; else toast('No free space for the view: drag it where you want it, or change the sheet scale', 'info', 5000);
+          for (let cy = A.y1 - eg - hh / 2; cy >= A.y0 + hh / 2 && !found; cy -= st) for (let cx = A.x1 - eg - w / 2; cx >= A.x0 + eg + w / 2; cx -= st) if (free(cx, cy)) { found = [cx, cy]; break; }
+          if (found) [x, y] = found; else toast('No free space for the view: drag it where you want it, or change the sheet scale', 'info', opt('drToastInfoMs'));
         }
         mk(i, [x, y]);
       }
@@ -385,9 +388,9 @@ export class DrawingDoc {
     const geoms = await this.run('Creating view', () => this.computeViews(par.src, [d], par));
     if (!geoms) return null;
     const snap = this.snapshot(), sh = this.doc.sheets.find((x) => x.id === par.sheet), g = geoms[0], s = scaleVal(par.scale || sh.scale);
-    const pr = viewRect(par, sh), gap = 25, w = (g.box[2] - g.box[0]) * s, hh = (g.box[3] - g.box[1]) * s;
+    const pr = viewRect(par, sh), gap = opt('drViewGap'), w = (g.box[2] - g.box[0]) * s, hh = (g.box[3] - g.box[1]) * s;
     const pos = side === 'right' ? [pr[2] + gap + w / 2, par.pos[1]] : side === 'left' ? [pr[0] - gap - w / 2, par.pos[1]] : side === 'above' ? [par.pos[0], pr[3] + gap + hh / 2] : [par.pos[0], pr[1] - gap - hh / 2];
-    const nm = Object.entries(STD).find(([k, q]) => k !== 'iso' && q.dir.every((c, i) => Math.abs(c - d.dir[i]) < 1e-9) && q.x.every((c, i) => Math.abs(c - d.x[i]) < 1e-9));
+    const eps = opt('geomEpsTiny'), nm = Object.entries(STD).find(([k, q]) => k !== 'iso' && q.dir.every((c, i) => Math.abs(c - d.dir[i]) < eps) && q.x.every((c, i) => Math.abs(c - d.x[i]) < eps));
     const v = { id: uid('v'), sheet: sh.id, name: nm ? nm[1].label[0] + nm[1].label.slice(1).toLowerCase() : `Projected ${this.doc.views.length + 1}`, src: par.src, srcName: par.srcName, dir: d.dir, x: d.x, pos, hidden: par.hidden, scale: par.scale ? par.scale.slice() : null, geom: g, parent: par.id, side, ...(par.cloud ? { cloud: { ...par.cloud, clip: { ...par.cloud.clip, on: false } } } : {}) };
     this.doc.views.push(v);
     this.pushUndo(snap); this.sel = v.id;
@@ -453,7 +456,7 @@ export class DrawingDoc {
         { key: 'nx', type: 'number', label: 'Zones across (1, 2, 3…)', min: 0, step: 1 },
         { key: 'ny', type: 'number', label: 'Zones down (A, B, C…)', min: 0, step: 1 },
         { type: 'info', text: `0 = automatic (about 50 mm per zone: ${auto.nx} × ${auto.ny} on ${sh.size}).` }],
-      onOk: (v) => { this.change(() => { sh.zones = { on: !!v.on, nx: Math.max(0, Math.min(40, Math.round(v.nx || 0))), ny: Math.max(0, Math.min(24, Math.round(v.ny || 0))) }; }); return true; },
+      onOk: (v) => { this.change(() => { sh.zones = { on: !!v.on, nx: Math.max(0, Math.min(opt('drZonesMaxX'), Math.round(v.nx || 0))), ny: Math.max(0, Math.min(opt('drZonesMaxY'), Math.round(v.ny || 0))) }; }); return true; },
     });
   }
   addSheet() {
@@ -488,7 +491,7 @@ export class DrawingDoc {
     if (path) { await api.writeFile(path, text); return path; }
     const dir = this.app.path ? this.app.path.replace(/[^\\/]*$/, '') : '';
     const p = await api.saveFile({ defaultPath: dir + `${this.doc.name}.pdf`, filters: [{ name: 'PDF', extensions: ['pdf'] }], text, latin1: true });
-    if (p) toast(`Exported ${fileName(p)} (${this.doc.sheets.length} sheet${this.doc.sheets.length > 1 ? 's' : ''})`, 'ok', 3000);
+    if (p) toast(`Exported ${fileName(p)} (${this.doc.sheets.length} sheet${this.doc.sheets.length > 1 ? 's' : ''})`, 'ok', opt('drToastOkMs'));
     return p;
   }
 

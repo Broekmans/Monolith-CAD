@@ -12,6 +12,34 @@ export function cubeSize(w, h) {
 const FACES = [ // BoxGeometry material order: +X, -X, +Y, -Y, +Z, -Z
   'RIGHT', 'LEFT', 'TOP', 'BOTTOM', 'FRONT', 'BACK',
 ];
+// 0.1.94: texture axes (u = right, v = up of the label) of each BoxGeometry face in world coordinates; the label is
+// turned in 90° steps so it always reads horizontally on screen (Wouter: text flips to horizontal while rotating).
+export const FACE_UV = [
+  [[0, 0, -1], [0, 1, 0]], [[0, 0, 1], [0, 1, 0]], [[1, 0, 0], [0, 0, -1]],
+  [[1, 0, 0], [0, 0, 1]], [[1, 0, 0], [0, 1, 0]], [[-1, 0, 0], [0, 1, 0]],
+];
+export const FACE_N = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+// quarter turns (0..3) that put the label upright for screen-up vector `up` (world); `prev` = hysteresis (5°)
+export function labelTurn(i, up, prev) {
+  const [u, v] = FACE_UV[i], a = dot3(up, u), b = dot3(up, v);
+  if (Math.hypot(a, b) < 1e-6) return prev ?? 0;
+  const ang = Math.atan2(a, b), k = ((Math.round(ang / (Math.PI / 2)) % 4) + 4) % 4;
+  if (prev != null && prev !== k) {
+    let dd = Math.abs(ang - prev * Math.PI / 2) % (2 * Math.PI); if (dd > Math.PI) dd = 2 * Math.PI - dd;
+    if (dd < Math.PI / 4 + 5 * Math.PI / 180) return prev;
+  }
+  return k;
+}
+// screen-up after clicking face n: the face axis nearest to the current up (= the way its label reads now)
+export function faceUp(n, up) {
+  let best = null, bd = -Infinity;
+  for (const ax of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+    if (Math.abs(dot3(ax, n)) > 0.5) continue;
+    const d = dot3(ax, up); if (d > bd + 1e-9) { bd = d; best = ax; }
+  }
+  return best;
+}
 
 export class ViewCube {
   constructor(vp) {
@@ -25,6 +53,7 @@ export class ViewCube {
     this.hl.visible = false;
     this.scene.add(this.cube, this.edges, this.hl);
     this.hover = null;
+    this.turn = FACES.map(() => 0);
     this.S = 104; this.M = 20;
     // DOM hit area over the canvas
     const el = this.el = document.createElement('div');
@@ -62,7 +91,7 @@ export class ViewCube {
     const box = this.arrows = document.createElement('div');
     box.className = 'vc-arrows';
     Object.assign(box.style, { position: 'absolute', top: '0px', right: '0px', pointerEvents: 'none', zIndex: 4 });
-    const tri = '<svg viewBox="0 0 12 12"><path d="M6 2L11 9H1z"/></svg>';
+    const tri = '<svg viewBox="0 0 12 12"><path class="tri" d="M6 2L11 9H1z"/></svg>';
     const roll = (flip) => `<svg viewBox="0 0 16 16"${flip ? ' style="transform:scaleX(-1)"' : ''}><path d="M3 9a5 5 0 1 0 2-6" fill="none" stroke-width="1.8"/><path d="M2.2 0.8L6.4 3 3 6.2z" stroke="none"/></svg>`;
     const items = [
       ['up', tri, 0, 'Rotate 90° up'], ['down', tri, 180, 'Rotate 90° down'],
@@ -113,6 +142,8 @@ export class ViewCube {
       const old = this.mats[i].map;
       this.mats[i].map = new THREE.CanvasTexture(c);
       this.mats[i].map.colorSpace = THREE.SRGBColorSpace;
+      this.mats[i].map.center.set(0.5, 0.5);
+      this.mats[i].map.rotation = -this.turn[i] * Math.PI / 2;
       this.mats[i].needsUpdate = true;
       old?.dispose();
     });
@@ -146,7 +177,12 @@ export class ViewCube {
   goTo(n) {
     const names = { '1,0,0': 'right', '-1,0,0': 'left', '0,1,0': 'top', '0,-1,0': 'bottom', '0,0,1': 'front', '0,0,-1': 'back' };
     const name = names[n.join()];
-    if (name) { this.vp.setView(name); return; }
+    if (name) { // look at the face with its label upright = keep the roll nearest to the current one (0.1.94)
+      const vp = this.vp, q = vp.anim ? vp.anim.to : vp.camera.quaternion;
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q).toArray();
+      vp.orient([-n[0], -n[1], -n[2]], faceUp(n, up));
+      return;
+    }
     const d = new THREE.Vector3(-n[0], -n[1], -n[2]).normalize(); // view direction
     const up = new THREE.Vector3(0, 1, 0).addScaledVector(d, -d.y);
     if (up.lengthSq() < 1e-6) up.set(0, 0, -1);
@@ -165,6 +201,11 @@ export class ViewCube {
     this.cam.quaternion.copy(q);
     this.cam.position.set(0, 0, 5).applyQuaternion(q);
     this.cam.updateMatrixWorld();
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q).toArray();
+    FACES.forEach((_, i) => {
+      const k = labelTurn(i, up, this.turn[i]);
+      if (k !== this.turn[i]) { this.turn[i] = k; const m = this.mats[i].map; if (m) m.rotation = -k * Math.PI / 2; }
+    });
     r.render(this.scene, this.cam);
   }
 

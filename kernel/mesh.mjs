@@ -65,6 +65,21 @@ export function tessellate(shape, quality = 1) {
     oc.TopExp.MapShapesAndUniqueAncestors(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_FACE, anc, false);
     seamOf = (edge) => { try { const i = anc.FindIndex(edge); return i > 0 && anc.FindFromIndex(i).Size() === 1; } catch { return false; } };
   } catch { /* keep all edges */ }
+  // faces of each edge (index into `faces`) — Fillet / Chamfer: a clicked face adds its edges (0.1.95)
+  let facesOf = () => [];
+  try {
+    const anc2 = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
+    oc.TopExp.MapShapesAndAncestors(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_FACE, anc2);
+    facesOf = (edge) => {
+      const out = [];
+      try {
+        const i = anc2.FindIndex(edge); if (i <= 0) return out;
+        const l = anc2.FindFromIndex(i);
+        for (const f of [l.First_1(), l.Last_1()]) { const k = faceList.findIndex((fi) => fi.face.IsSame(f)); if (k >= 0 && !out.includes(k)) out.push(k); }
+      } catch { /* none */ }
+      return out;
+    };
+  } catch { /* no face info */ }
   const edges = listEdges(shape).filter((e) => !seamOf(e.edge)).map((e, id) => {
     const pts = [];
     try {
@@ -75,7 +90,7 @@ export function tessellate(shape, quality = 1) {
     }
     let length = 0;
     for (let i = 3; i < pts.length; i += 3) length += Math.hypot(pts[i] - pts[i - 3], pts[i + 1] - pts[i - 2], pts[i + 2] - pts[i - 1]);
-    return { id, mid: e.mid, type: e.type, pts: new Float32Array(pts), length };
+    return { id, mid: e.mid, type: e.type, pts: new Float32Array(pts), length, faces: facesOf(e.edge) };
   });
   return { positions: new Float32Array(positions), indices: new Uint32Array(indices), faces, edges, bbox: bb };
 }

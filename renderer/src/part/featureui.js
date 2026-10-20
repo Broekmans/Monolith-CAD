@@ -9,14 +9,14 @@
 // - looking straight at the sketch when the dialog opens -> the view turns to Isometric (featTurnIso).
 import * as THREE from 'three';
 import { h, fmt } from '../ui.js';
-import { opt } from '../app/options.js';
+import { opt, optHex, factoryOf } from '../app/options.js';
 import { sketchCurves, findRegions } from '../../../shared/profile.mjs';
 import { frameOf, to3 } from './part.js';
 
 // main value per feature type: [PM key, label, unit]
 export const MAIN = { extrude: ['depth', 'Depth', 'mm'], revolve: ['angle', 'Angle', '°'], fillet: ['radius', 'Radius', 'mm'], chamfer: ['distance', 'Distance', 'mm'], shell: ['thickness', 'Thickness', 'mm'], linearPattern: ['spacing', 'Spacing', 'mm'], circularPattern: ['angle', 'Total angle', '°'] };
 // mouse wheel step for the value box (mm, or ° for angles)
-export const WHEEL_STEP = 1; // factory value; Tools > Options > Feature Values
+export const WHEEL_STEP = factoryOf('wheelStep'); // factory value; Tools > Options > Feature Values
 const evalNum = (s) => { const v = Number(String(s).replace(',', '.').trim()); return isFinite(v) ? v : null; };
 
 export class PartFeatureUI {
@@ -25,7 +25,7 @@ export class PartFeatureUI {
     const t = draft.type, m = MAIN[t];
     const ui = (this.featUI = { type: t, op: draft.op, key: m?.[0], values, preview: () => { this.setPickBase(base); preview(this.app.pm.current?.values || values); } });
     if (m) {
-      const inp = h('input', { type: 'text', spellcheck: 'false', value: fmt(+values[m[0]], 4) });
+      const inp = h('input', { type: 'text', spellcheck: 'false', value: fmt(+values[m[0]], opt('featEditDecimals')) });
       const grip = h('div', { class: 'feat-grip', title: 'Drag to change the ' + m[1].toLowerCase() });
       const box = h('div', { class: 'feat-val', title: 'Enter = OK · Esc = Cancel · Tab = apply' }, h('label', {}, m[1]), inp, h('span', { class: 'unit' }, m[2]));
       for (const ev of ['pointerdown', 'dblclick']) box.addEventListener(ev, (e) => e.stopPropagation());
@@ -36,9 +36,9 @@ export class PartFeatureUI {
         if (!isNew) return; // passes on to the viewport (zoom)
         e.preventDefault(); e.stopPropagation();
         const cur = evalNum(inp.value) ?? +this.featUI.values[m[0]] ?? 0;
-        const st = opt('wheelStep') || WHEEL_STEP, next = +(cur + (e.deltaY < 0 ? st : -st)).toFixed(6);
+        const st = opt('wheelStep') || WHEEL_STEP, next = +(cur + (e.deltaY < 0 ? st : -st)).toFixed(opt('partNoiseDecimals'));
         if (next <= 0) return;
-        inp.value = fmt(next, 4); inp._typed = false;
+        inp.value = fmt(next, opt('featEditDecimals')); inp._typed = false;
         this.featUI.pinned = true; // the box stays under the mouse while wheeling (it would follow the arrow tip)
         this.featApply(String(next));
       }, { passive: false });
@@ -71,7 +71,7 @@ export class PartFeatureUI {
     ui.values = v;
     const sid = v.sketchSel?.[0]?.id || null;
     if (sid !== ui.sketch) { ui.sketch = sid; this.dimFeat = sid; this.updateSketchDisplay(); if (sid && !ui.turned) { ui.turned = true; this.featTurnIso(); } }
-    if (ui.inp && document.activeElement !== ui.inp && !ui.drag) ui.inp.value = fmt(+v[ui.key], 4);
+    if (ui.inp && document.activeElement !== ui.inp && !ui.drag) ui.inp.value = fmt(+v[ui.key], opt('featEditDecimals'));
     this.vp.requestRender();
   }
   // Looking straight at the feature's sketch (e.g. right after Exit Sketch)? Turn to an isometric view that looks at
@@ -81,11 +81,11 @@ export class PartFeatureUI {
     const pr = this.featProfile(); if (!pr) return;
     const vp = this.vp, n = pr.fr.n, vd = vp.viewDir();
     if (Math.abs(vd.x * n[0] + vd.y * n[1] + vd.z * n[2]) < Math.cos(opt('isoTol') * Math.PI / 180)) return; // not looking straight at it (> isoTol, 10°)
-    const d = n.map((c) => (Math.abs(c) > 0.3 ? -Math.sign(c) : -1)), L = Math.hypot(...d), dn = d.map((x) => x / L);
+    const d = n.map((c) => (Math.abs(c) > opt('featIsoAxisMin') ? -Math.sign(c) : -1)), L = Math.hypot(...d), dn = d.map((x) => x / L);
     const up = [-dn[1] * dn[0], 1 - dn[1] * dn[1], -dn[1] * dn[2]], U = Math.hypot(...up) || 1;
     vp.orient(dn, up.map((x) => x / U), true);
     let k = 0;
-    const wait = () => { if (vp.anim && k++ < 90) requestAnimationFrame(wait); else this.zoomFit(); };
+    const wait = () => { if (vp.anim && k++ < opt('partZoomFitWaitFrames')) requestAnimationFrame(wait); else this.zoomFit(); };
     requestAnimationFrame(wait);
     this.app.setStatus('View turned to Isometric (Interface menu: Turn to Isometric for Features)');
   }
@@ -96,7 +96,7 @@ export class PartFeatureUI {
     const f = pm.inputs[ui.key];
     if (n === null || n <= 0 || !f) { ui.inp?.classList.add('bad'); return false; }
     ui.inp?.classList.remove('bad');
-    const val = ui.key === 'count' ? Math.max(2, Math.round(n)) : n;
+    const val = ui.key === 'count' ? Math.max(opt('featMinCount'), Math.round(n)) : n;
     if (+pm.values[ui.key] === val) return 'same';
     f.value = String(val); f.dispatchEvent(new Event('change'));
     return true;
@@ -135,27 +135,34 @@ export class PartFeatureUI {
     // several panes: the value box + arrow live in the active pane only (they move along when another pane becomes active)
     const set = this.vp.viewset;
     if (set && set.panes.length > 1) {
-      if (this.vp.pane !== set.active) return;
-      if (ui.box.parentElement !== set.active.el) { set.active.el.appendChild(ui.box); if (ui.grip) set.active.el.appendChild(ui.grip); }
+      const fp = set.focus || set.active; // the view clicked last (blue border)
+      if (this.vp.pane !== fp) return;
+      if (ui.box.parentElement !== fp.el) { fp.el.appendChild(ui.box); if (ui.grip) fp.el.appendChild(ui.grip); }
     }
     const a = this.featAnchor(), vp = this.vp;
     if (!a) { // no spot on the model: top centre under the view toolbar
-      Object.assign(ui.box.style, { left: vp.width / 2 + 'px', top: '52px', display: '' }); ui.box.classList.add('free'); ui.grip.style.display = 'none'; return;
+      Object.assign(ui.box.style, { left: vp.width / 2 + 'px', top: opt('featValueBoxTopPx') + 'px', display: '' }); ui.box.classList.add('free'); ui.grip.style.display = 'none'; return;
     }
     ui.box.classList.remove('free');
     const s = vp.toScreen(a.p);
     if (a.arrow) {
       const b = vp.toScreen(a.base);
-      ctx.strokeStyle = '#286edc'; ctx.fillStyle = '#286edc'; ctx.lineWidth = 1.6;
+      ctx.strokeStyle = opt('dragArrowColor'); ctx.fillStyle = opt('dragArrowColor'); ctx.lineWidth = opt('dragArrowLineW');
       ctx.beginPath(); ctx.moveTo(b[0], b[1]); ctx.lineTo(s[0], s[1]); ctx.stroke();
-      ctx.beginPath(); ctx.arc(b[0], b[1], 3, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(b[0], b[1], opt('dragArrowDotPx'), 0, Math.PI * 2); ctx.fill();
       // arrow head pointing along the extrude direction (screen)
       const t = vp.toScreen(a.p.map((x, i) => x + a.dir[i])), L = Math.hypot(t[0] - s[0], t[1] - s[1]) || 1, ux = (t[0] - s[0]) / L, uy = (t[1] - s[1]) / L;
-      ctx.beginPath(); ctx.moveTo(s[0] + ux * 12, s[1] + uy * 12); ctx.lineTo(s[0] - uy * 5, s[1] + ux * 5); ctx.lineTo(s[0] + uy * 5, s[1] - ux * 5); ctx.closePath(); ctx.fill();
-      Object.assign(ui.grip.style, { left: s[0] + ux * 5 + 'px', top: s[1] + uy * 5 + 'px', display: '' });
+      const hl = opt('dragArrowHeadPx'), hw = opt('dragArrowHeadHalfPx'), go = opt('dragGripOffsetPx');
+      ctx.beginPath(); ctx.moveTo(s[0] + ux * hl, s[1] + uy * hl); ctx.lineTo(s[0] - uy * hw, s[1] + ux * hw); ctx.lineTo(s[0] + uy * hw, s[1] - ux * hw); ctx.closePath(); ctx.fill();
+      Object.assign(ui.grip.style, { left: s[0] + ux * go + 'px', top: s[1] + uy * go + 'px', display: '' });
       ui.dirScr = [ux, uy];
     } else ui.grip.style.display = 'none';
-    if (!ui.pinned) Object.assign(ui.box.style, { left: s[0] + 22 + 'px', top: s[1] + 'px', display: '' });
+    if (!ui.pinned) {
+      const W = ui.box.parentElement?.clientWidth || 1e9, bw = ui.box.offsetWidth || opt('featValueBoxW'), gap = opt('valueBoxGapPx');
+      const x = s[0] + gap + bw > W - opt('valueBoxMarginPx') ? s[0] - gap - bw : s[0] + gap; // near the right edge: left of the tip (0.1.96)
+      Object.assign(ui.box.style, { left: Math.max(opt('valueBoxMarginLeftPx'), x) + 'px', top: s[1] + 'px', display: '' });
+    }
+    const par = ui.box.parentElement; if (par && (par.scrollLeft || par.scrollTop)) { par.scrollLeft = 0; par.scrollTop = 0; } // focusing the field must not scroll the view
   }
   // drag the arrow: value follows the mouse along the extrude direction on screen
   featGripDown(e) {
@@ -163,18 +170,19 @@ export class PartFeatureUI {
     e.preventDefault(); e.stopPropagation();
     const vp = this.vp, s0 = vp.toScreen(a.base), s1 = vp.toScreen(a.base.map((x, i) => x + a.dir[i]));
     const pxPerMm = Math.hypot(s1[0] - s0[0], s1[1] - s0[1]);
-    if (pxPerMm < 0.05) return; // looking straight along the direction
+    if (pxPerMm < opt('featDragMinPxPerMm')) return; // looking straight along the direction
     const u = [(s1[0] - s0[0]) / pxPerMm, (s1[1] - s0[1]) / pxPerMm], d0 = +ui.values.depth, x0 = e.clientX, y0 = e.clientY;
-    const step = vp.scale > 2 ? 5 : vp.scale > 0.4 ? 1 : 0.1;
+    const [z1, z2] = opt('dragStepZoom'), [st1, st2, st3] = opt('dragSnapSteps'), fd = opt('dragFineDiv');
+    const step = vp.scale > z1 ? st1 : vp.scale > z2 ? st2 : st3;
     ui.drag = true; ui.grip.setPointerCapture(e.pointerId);
     let raf = 0, want = d0;
     const mv = (ev) => {
       const t = ((ev.clientX - x0) * u[0] + (ev.clientY - y0) * u[1]) / pxPerMm / a.k;
-      want = Math.max(step, Math.round((d0 + t) / (ev.shiftKey ? step / 10 : step)) * (ev.shiftKey ? step / 10 : step));
-      ui.inp.value = fmt(want, 4);
+      want = Math.max(step, Math.round((d0 + t) / (ev.shiftKey ? step / fd : step)) * (ev.shiftKey ? step / fd : step));
+      ui.inp.value = fmt(want, opt('featEditDecimals'));
       if (!raf) raf = requestAnimationFrame(() => { raf = 0; this.featApply(String(want)); });
     };
-    const up = () => { ui.grip.removeEventListener('pointermove', mv); ui.grip.removeEventListener('pointerup', up); ui.drag = false; this.featApply(String(want)); this.app.setStatus(`Depth ${fmt(want, 3)} mm`); };
+    const up = () => { ui.grip.removeEventListener('pointermove', mv); ui.grip.removeEventListener('pointerup', up); ui.drag = false; this.featApply(String(want)); this.app.setStatus(`Depth ${fmt(want, opt('partReportDecimals'))} mm`); };
     ui.grip.addEventListener('pointermove', mv); ui.grip.addEventListener('pointerup', up);
   }
   // light fill of the profile regions of the shown sketch (added by updateSketchDisplay)
@@ -190,7 +198,7 @@ export class PartFeatureUI {
       g.dispose();
     }
     const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: 0xffc478, transparent: true, opacity: opt('profileFill') / 100, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+    const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: optHex('profileFillColor'), transparent: true, opacity: opt('profileFill') / 100, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
     mesh.renderOrder = 4; mesh.raycast = () => {};
     return mesh;
   }

@@ -32,25 +32,25 @@ export class SketchText {
   drawText(ctx, g, scr) {
     const col = this.colorFor(g);
     const polys = this.textPolys(g);
-    ctx.setLineDash(g.construction ? [6, 3] : []);
-    ctx.lineWidth = this.sel.has('geo:' + g.id) || this.hover === 'geo:' + g.id ? 1.8 : 1.2;
+    ctx.setLineDash(g.construction ? opt('skTextConstructionDash') : []);
+    ctx.lineWidth = this.sel.has('geo:' + g.id) || this.hover === 'geo:' + g.id ? opt('skTextLineWSel') : opt('skTextLineW');
     ctx.strokeStyle = col;
-    ctx.fillStyle = col === COL.sel ? 'rgba(0,162,255,.12)' : col === COL.hover ? 'rgba(255,138,0,.12)' : 'rgba(16,64,224,.06)';
+    ctx.fillStyle = col === COL.sel ? opt('skTextFillSel') : col === COL.hover ? opt('skTextFillHover') : opt('skTextFill');
     ctx.beginPath();
     for (const loop of polys) { loop.forEach((q, i) => { const s = scr(q); if (i) ctx.lineTo(s[0], s[1]); else ctx.moveTo(s[0], s[1]); }); ctx.closePath(); }
     if (polys.length) { ctx.fill('evenodd'); ctx.stroke(); }
     ctx.setLineDash([]);
     if (!polys.length) {
       const a = this.G(g.p); const s = scr([a.x, a.y]);
-      ctx.font = '12px Segoe UI, sans-serif'; ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+      ctx.font = `${opt('skTextPlaceholderPx')}px ${opt('overlayFont')}`; ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
       ctx.fillText(g.text || '…', s[0], s[1]);
     }
     if (this.sel.has('geo:' + g.id)) {
       const b = this.textBox(g), a = this.G(g.p), r = g.rot || 0;
       const T = (x, y) => scr([a.x + x * Math.cos(r) - y * Math.sin(r), a.y + x * Math.sin(r) + y * Math.cos(r)]);
-      const pad = g.h * 0.15;
+      const pad = g.h * opt('skTextBoxPad');
       const cs = [T(b.min[0] - pad, b.min[1] - pad), T(b.max[0] + pad, b.min[1] - pad), T(b.max[0] + pad, b.max[1] + pad), T(b.min[0] - pad, b.max[1] + pad)];
-      ctx.strokeStyle = COL.sel; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = COL.sel; ctx.lineWidth = 1; ctx.setLineDash(opt('skTextBoxDash'));
       ctx.beginPath(); cs.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]))); ctx.closePath(); ctx.stroke(); ctx.setLineDash([]);
     }
   }
@@ -64,7 +64,7 @@ export class SketchText {
     ta.addEventListener('input', () => {
       if (!undone) { this.pushUndo(); undone = true; }
       g.text = ta.value;
-      clearTimeout(tmr); tmr = setTimeout(() => this.updateText(g), 120);
+      clearTimeout(tmr); tmr = setTimeout(() => this.updateText(g), opt('skTextDebounceMs'));
     });
     rows.push(h('div', { class: 'sp-field' }, h('label', {}, 'Text'), ta));
     const fontSel = h('select', {}, h('option', { value: g.font }, g.font));
@@ -109,7 +109,7 @@ export class SketchText {
       fix(l);
     } else if (edge.type === 'circle') {
       const a = pts[0], m = pts[Math.floor(pts.length / 2)], b = pts[pts.length - 1];
-      const closed = dist(a, b) < 1e-6;
+      const closed = dist(a, b) < opt('geomEps');
       const cc = circleFrom3(a, pts[Math.floor(pts.length / 3)], pts[Math.floor((2 * pts.length) / 3)]);
       if (!cc) return;
       if (closed) {

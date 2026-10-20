@@ -5,6 +5,7 @@
 import { h, fmt, toast } from '../ui.js';
 import { api } from '../api.js';
 import { annValue, centroid } from './dims.js';
+import { opt } from '../app/options.js';
 
 const log = (...a) => { try { window.__lithLog?.(...a); } catch {} };
 const LIST_POS = 'monolith.roomListPos', LIST_SORT = 'monolith.roomListSort';
@@ -46,7 +47,7 @@ export class DrawingRooms {
       if (e.button !== 0 || e.target.closest('button')) return;
       e.preventDefault();
       const x0 = e.clientX, y0 = e.clientY, l0 = el.offsetLeft, t0 = el.offsetTop;
-      const mv = (ev) => { const host = this.vp.el.getBoundingClientRect(); el.style.left = Math.max(0, Math.min(host.width - el.offsetWidth, l0 + ev.clientX - x0)) + 'px'; el.style.top = Math.max(0, Math.min(host.height - 30, t0 + ev.clientY - y0)) + 'px'; };
+      const mv = (ev) => { const host = this.vp.el.getBoundingClientRect(); el.style.left = Math.max(0, Math.min(host.width - el.offsetWidth, l0 + ev.clientX - x0)) + 'px'; el.style.top = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), t0 + ev.clientY - y0)) + 'px'; };
       const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); lsSet(LIST_POS, [el.offsetLeft, el.offsetTop]); };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
@@ -55,15 +56,15 @@ export class DrawingRooms {
     this.vp.el.appendChild(el);
     this.fillRoomList(true);
     const host = this.vp.el.getBoundingClientRect(), pos = lsGet(LIST_POS);
-    const x = pos ? pos[0] : 12, y = pos ? pos[1] : Math.max(12, host.height - el.offsetHeight - 12);
-    el.style.left = Math.max(0, Math.min(host.width - el.offsetWidth, x)) + 'px'; el.style.top = Math.max(0, Math.min(host.height - 30, y)) + 'px';
+    const pm = opt('drPopupMarginPx'), x = pos ? pos[0] : pm, y = pos ? pos[1] : Math.max(pm, host.height - el.offsetHeight - pm);
+    el.style.left = Math.max(0, Math.min(host.width - el.offsetWidth, x)) + 'px'; el.style.top = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), y)) + 'px';
     this.keepRoomListIn();
     this.app.cm.refresh();
   }
   // called after every repaint: rebuild only when a name, value or the selection changed
   syncRoomList() { if (this._rl?.isConnected) this.fillRoomList(false); }
   fillRoomList(force) {
-    const rows = this.roomRows(), dec = 2;
+    const rows = this.roomRows(), dec = opt('drRoomListDec');
     const sig = JSON.stringify([rows.map((r) => [r.a.id, r.name, r.area.toFixed(4), r.per.toFixed(3)]), this.selAnn?.id, lsGet(LIST_SORT)]);
     if (!force && sig === this._rlSig) return;
     // do not pull a field away from under the cursor while typing a name
@@ -93,7 +94,7 @@ export class DrawingRooms {
   // a list that grew past the bottom moves up (it never covers the top less than 0)
   keepRoomListIn() {
     const el = this._rl; if (!el?.isConnected) return;
-    const H = this.vp.el.clientHeight; if (el.offsetTop + el.offsetHeight > H - 4) el.style.top = Math.max(0, H - el.offsetHeight - 8) + 'px';
+    const H = this.vp.el.clientHeight; if (el.offsetTop + el.offsetHeight > H - opt('drListSlackPx')) el.style.top = Math.max(0, H - el.offsetHeight - opt('drPopupEdgePx')) + 'px';
   }
   selectRoom(v, a) {
     if (v.sheet !== this.sheetId) this.showSheet(v.sheet);
@@ -110,21 +111,21 @@ export class DrawingRooms {
     const rows = this.roomRows(); if (!rows.length) { toast('No rooms in this drawing'); return; }
     const sort = lsGet(LIST_SORT) || { k: 'name', dir: 1 };
     rows.sort((a, b) => (sort.k === 'name' || sort.k === 'where' ? coll.compare(a[sort.k], b[sort.k]) : a[sort.k] - b[sort.k]) * sort.dir);
-    const q = (s) => `"${String(s).replace(/"/g, '""')}"`, c = (x) => x.toFixed(3).replace('.', ','); // Dutch Excel: ';' + decimal comma
+    const cd = opt('drRoomCsvDec'), q = (s) => `"${String(s).replace(/"/g, '""')}"`, c = (x) => x.toFixed(cd).replace('.', ','); // Dutch Excel: ';' + decimal comma
     const lines = ['Name;Area m2;Perimeter m;Width m;Length m;Corners;Sheet / view', ...rows.map((r) => [q(r.name), c(r.area), c(r.per), c(r.w), c(r.l), r.corners, q(r.where)].join(';'))];
     lines.push(['"Total"', c(rows.reduce((s, r) => s + r.area, 0)), '', '', '', '', ''].join(';'));
     const def = (this.app.path ? this.app.path.replace(/\.[^.\\/]+$/, '') : this.doc.name) + ' rooms.csv';
     const p = await api.saveFile({ defaultPath: def, filters: [{ name: 'CSV (Excel)', extensions: ['csv'] }], text: '﻿' + lines.join('\r\n') + '\r\n' });
-    if (p) { toast(`Saved ${rows.length} rooms to ${p.split(/[\\/]/).pop()}`, 'ok', 3000); log('ROOMLIST csv', rows.length); }
+    if (p) { toast(`Saved ${rows.length} rooms to ${p.split(/[\\/]/).pop()}`, 'ok', opt('drToastOkMs')); log('ROOMLIST csv', rows.length); }
   }
   // ---------- rename on the sheet: an input right over the text ----------
   inlineRename(s) {
     const a = this.ann(s.view, s.id), v = this.V(s.view); if (!a || a.type !== 'area') return false;
     const box = (this._annBoxes || []).find((q) => q.t === 'annbox' && q.ann === a.id)?.box; if (!box) return false;
     this._inline?.remove();
-    const p0 = this.S2([box[0], box[3]]), p1 = this.S2([box[2], box[1]]), hpx = Math.max(16, Math.abs(p1[1] - p0[1]));
+    const p0 = this.S2([box[0], box[3]]), p1 = this.S2([box[2], box[1]]), hpx = Math.max(opt('drRenameMinHPx'), Math.abs(p1[1] - p0[1])), pad = opt('drRenamePadPx');
     const inp = (this._inline = h('input', { type: 'text', class: 'inline-name', value: a.label || '', placeholder: 'Name' }));
-    Object.assign(inp.style, { left: Math.min(p0[0], p1[0]) - 3 + 'px', top: Math.min(p0[1], p1[1]) - 3 + 'px', height: hpx + 6 + 'px', width: Math.max(140, Math.abs(p1[0] - p0[0]) + 30) + 'px', fontSize: Math.max(11, hpx * 0.72) + 'px' });
+    Object.assign(inp.style, { left: Math.min(p0[0], p1[0]) - pad + 'px', top: Math.min(p0[1], p1[1]) - pad + 'px', height: hpx + 2 * pad + 'px', width: Math.max(opt('drRenameMinWPx'), Math.abs(p1[0] - p0[0]) + opt('drRenameExtraWPx')) + 'px', fontSize: Math.max(opt('drRenameFontMinPx'), hpx * opt('drRenameFontK')) + 'px' });
     for (const ev of ['pointerdown', 'dblclick', 'wheel']) inp.addEventListener(ev, (e) => e.stopPropagation());
     let done = false;
     const finish = (ok) => { if (done) return; done = true; const val = inp.value; inp.remove(); this._inline = null; if (ok) this.renameRoom(v, a, val); this.vp.requestRender(); };
@@ -138,14 +139,14 @@ export class DrawingRooms {
   dotGripAt(p) {
     const s = this.selAnn; if (!s || this.tool) return null;
     const a = this.ann(s.view, s.id), v = this.V(s.view); if (a?.type !== 'area') return null;
-    const D = this.toSheetPt(v, dotOf(a)), k = Math.max(1e-6, Math.abs(this.affine().ex[0]));
-    return Math.hypot(D[0] - p[0], D[1] - p[1]) * k <= 7 ? { a, v } : null;
+    const D = this.toSheetPt(v, dotOf(a)), k = Math.max(opt('geomEps'), Math.abs(this.affine().ex[0]));
+    return Math.hypot(D[0] - p[0], D[1] - p[1]) * k <= opt('drGripPickPx') ? { a, v } : null;
   }
   drawDotGrip(ctx) {
     const s = this.selAnn; if (!s || this.tool) return;
     const a = this.ann(s.view, s.id), v = this.V(s.view); if (a?.type !== 'area') return;
     const D = this.S2(this.toSheetPt(v, dotOf(a)));
-    ctx.save(); ctx.setLineDash([]); ctx.lineWidth = 1.5; ctx.strokeStyle = '#2a6fd6'; ctx.beginPath(); ctx.arc(D[0], D[1], 5.5, 0, Math.PI * 2); ctx.stroke(); ctx.restore();
+    ctx.save(); ctx.setLineDash([]); ctx.lineWidth = opt('drDotGripW'); ctx.strokeStyle = opt('drHandleColor'); ctx.beginPath(); ctx.arc(D[0], D[1], opt('drDotGripR'), 0, Math.PI * 2); ctx.stroke(); ctx.restore();
   }
   dotDragStart(g, p) { return { dot: g, p0: p, snap: this.snapshot(), moved: false }; }
   dotDragMove(dr, p) { dr.dot.a.dot = this.toModel(dr.dot.v, p); }

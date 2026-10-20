@@ -1,5 +1,6 @@
 // Part: feature PropertyManagers (extrude, revolve, fillet, ...)
 // Methods are mixed into PartDoc (see part.js); `this` is the PartDoc.
+import { MAIN } from './featureui.js';
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
 import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
@@ -7,6 +8,7 @@ import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
@@ -35,28 +37,28 @@ export class PartFeatures {
     fn(null);
   }
 
-  cmdExtrude(op) { this.withSketch((sid) => this.openFeaturePM({ type: 'extrude', op, sketch: sid, end: op === 'cut' ? 'throughAll' : 'blind', depth: 10, reverse: false })); }
+  cmdExtrude(op) { this.withSketch((sid) => this.openFeaturePM({ type: 'extrude', op, sketch: sid, end: op === 'cut' ? 'throughAll' : 'blind', depth: opt('featDefDepth'), reverse: false })); }
   cmdRevolve(op) {
     this.withSketch((sid) => {
       const sk = sid ? this.F(sid) : null;
       const lines = sk ? sk.geo.filter((g) => g.type === 'line') : [];
       const axis = lines.find((l) => l.construction) || null;
-      this.openFeaturePM({ type: 'revolve', op, sketch: sid, axis: axis ? { line: axis.id } : null, angle: 360, reverse: false });
+      this.openFeaturePM({ type: 'revolve', op, sketch: sid, axis: axis ? { line: axis.id } : null, angle: opt('featDefRevolveAngle'), reverse: false });
     });
   }
   cmdFillet(type) {
     const edges = this.sel.filter((s) => s.kind === 'edge').map((s) => this.selItem(s));
-    this.openFeaturePM(type === 'fillet' ? { type, edges, radius: 2 } : { type, edges, distance: 1 });
+    this.openFeaturePM(type === 'fillet' ? { type, edges, radius: opt('featDefFilletR') } : { type, edges, distance: opt('featDefChamferDist') });
   }
   cmdShell() {
     const faces = this.sel.filter((s) => s.kind === 'face').map((s) => this.selItem(s));
-    this.openFeaturePM({ type: 'shell', faces, thickness: 1 });
+    this.openFeaturePM({ type: 'shell', faces, thickness: opt('featDefShellThk') });
   }
   cmdPattern(type) {
     const feats = this.sel.filter((s) => s.kind === 'feature').map((s) => this.selItem(s));
-    if (type === 'linearPattern') this.openFeaturePM({ type, features: feats, direction: 'X', spacing: 20, count: 3, reverse: false });
-    else if (type === 'circularPattern') this.openFeaturePM({ type, features: feats, axis: 'Y', count: 6, angle: 360 });
-    else this.openFeaturePM({ type, features: feats, plane: 'Right' });
+    if (type === 'linearPattern') this.openFeaturePM({ type, features: feats, direction: opt('featDefPatDir'), spacing: opt('featDefPatSpacing'), count: opt('featDefPatCount'), reverse: false });
+    else if (type === 'circularPattern') this.openFeaturePM({ type, features: feats, axis: opt('featDefCircAxis'), count: opt('featDefCircCount'), angle: opt('featDefCircAngle') });
+    else this.openFeaturePM({ type, features: feats, plane: opt('featDefMirrorPlane') });
   }
 
   editFeature(id) {
@@ -87,7 +89,7 @@ export class PartFeatures {
         { key: 'sketchSel', type: 'selbox', label: 'Sketch Profile', max: 1, accepts: isSketch },
         { type: 'group', label: 'Direction 1', fields: [
           { key: 'end', type: 'select', label: 'End Condition', options: [{ value: 'blind', label: 'Blind' }, { value: 'throughAll', label: 'Through All' }, { value: 'midplane', label: 'Mid Plane' }] },
-          { key: 'depth', type: 'number', label: 'Depth', unit: 'mm', min: 0.0001, step: 1 },
+          { key: 'depth', type: 'number', label: 'Depth', unit: 'mm', min: opt('featMinLen'), step: opt('featStepLen') },
           { key: 'reverse', type: 'check', label: 'Reverse Direction' },
         ] },
       ];
@@ -106,19 +108,19 @@ export class PartFeatures {
         { key: 'sketchSel', type: 'selbox', label: 'Sketch Profile', max: 1, accepts: isSketch },
         { key: 'axisSel', type: 'select', label: 'Axis of Revolution', options: axisOpts() },
         { type: 'group', label: 'Direction 1', fields: [
-          { key: 'angle', type: 'number', label: 'Angle', unit: '°', min: 0.01, step: 15 },
+          { key: 'angle', type: 'number', label: 'Angle', unit: '°', min: opt('featMinAngle'), step: opt('featStepDeg') },
           { key: 'reverse', type: 'check', label: 'Reverse Direction' }] },
       ];
       this._revolveAxisOpts = axisOpts;
     } else if (t === 'fillet' || t === 'chamfer') {
       fields = [
         { key: 'edges', type: 'selbox', label: 'Edges', accepts: (it) => it.kind === 'edge' },
-        t === 'fillet' ? { key: 'radius', type: 'number', label: 'Radius', unit: 'mm', min: 0.0001, step: 0.5 } : { key: 'distance', type: 'number', label: 'Distance', unit: 'mm', min: 0.0001, step: 0.5 },
+        t === 'fillet' ? { key: 'radius', type: 'number', label: 'Radius', unit: 'mm', min: opt('featMinLen'), step: opt('featStepSmall') } : { key: 'distance', type: 'number', label: 'Distance', unit: 'mm', min: opt('featMinLen'), step: opt('featStepSmall') },
       ];
     } else if (t === 'shell') {
       fields = [
         { key: 'faces', type: 'selbox', label: 'Faces to Remove', accepts: (it) => it.kind === 'face' },
-        { key: 'thickness', type: 'number', label: 'Thickness', unit: 'mm', min: 0.0001, step: 0.5 },
+        { key: 'thickness', type: 'number', label: 'Thickness', unit: 'mm', min: opt('featMinLen'), step: opt('featStepSmall') },
       ];
     } else if (t === 'linearPattern' || t === 'circularPattern' || t === 'mirror') {
       const featureOk = (it) => it.kind === 'feature' && ['extrude', 'revolve'].includes(this.F(it.id)?.type);
@@ -128,12 +130,12 @@ export class PartFeatures {
         values.dirSel = typeof draft.direction === 'string' ? draft.direction : 'edge';
         values.dirEdge = draft.direction?.edge ? [draft.direction.edge] : [];
         fields.push({ type: 'group', label: 'Direction 1', fields: [axisSel('dirSel', 'Direction'), { key: 'dirEdge', type: 'selbox', label: 'Direction edge (optional)', max: 1, accepts: (it) => it.kind === 'edge' && it.type === 'line' },
-          { key: 'spacing', type: 'number', label: 'Spacing', unit: 'mm', step: 1 }, { key: 'count', type: 'number', label: 'Instances', min: 2, step: 1 }, { key: 'reverse', type: 'check', label: 'Reverse Direction' }] });
+          { key: 'spacing', type: 'number', label: 'Spacing', unit: 'mm', step: opt('featStepLen') }, { key: 'count', type: 'number', label: 'Instances', min: opt('featMinCount'), step: 1 }, { key: 'reverse', type: 'check', label: 'Reverse Direction' }] });
       } else if (t === 'circularPattern') {
         values.axisSel = typeof draft.axis === 'string' ? draft.axis : 'edge';
         values.axisEdge = draft.axis?.edge ? [draft.axis.edge] : [];
         fields.push({ type: 'group', label: 'Parameters', fields: [axisSel('axisSel', 'Axis'), { key: 'axisEdge', type: 'selbox', label: 'Axis edge (circular or linear)', max: 1, accepts: (it) => it.kind === 'edge' },
-          { key: 'angle', type: 'number', label: 'Total Angle', unit: '°', min: 0.01, step: 15 }, { key: 'count', type: 'number', label: 'Instances', min: 2, step: 1 }] });
+          { key: 'angle', type: 'number', label: 'Total Angle', unit: '°', min: opt('featMinAngle'), step: opt('featStepDeg') }, { key: 'count', type: 'number', label: 'Instances', min: opt('featMinCount'), step: 1 }] });
       } else {
         values.planeSel = typeof draft.plane === 'string' ? draft.plane : 'face';
         values.planeFace = draft.planeFace ? [draft.planeFace] : [];
@@ -166,7 +168,7 @@ export class PartFeatures {
           v.axisSel = opts[0]?.value; sel.value = v.axisSel;
         }
         this.updateHighlights(); this.featUISync(v);
-        clearTimeout(debounce); debounce = setTimeout(() => preview(v), 60);
+        clearTimeout(debounce); debounce = setTimeout(() => preview(v), opt('featPreviewDebounceMs'));
       },
       onOk: (v) => {
         const f = build(v);
@@ -196,12 +198,23 @@ export class PartFeatures {
     this.app.setConfirmCorner({ ok: () => this.app.pm.ok(), cancel: () => this.app.pm.cancel() });
     this.sel = [];
     this.featUIStart(draft, this.app.pm.current.values, preview, base);
+    this.highlightMainValue(t);
     this.editingId = edit?.editId || null; this.renderTree(); // tree row green while its dialog is open
     this.updateHighlights();
     preview(values);
     this.app.cm.refresh();
   }
 
+  // 0.1.95: the value you change (Depth, Radius, …) is the highlighted field of the dialog; a selection box stays
+  // active (blue) only while it is still empty
+  highlightMainValue(t) {
+    const pm = this.app.pm.current, m = MAIN[t]; if (!pm) return;
+    const inp = m && pm.inputs[m[0]];
+    if (inp) inp.classList.add('pm-main');
+    const box = pm.selboxes[pm.activeSel];
+    if (box && box.items.length) { pm.activeSel = null; pm.renderBoxes(); }
+    if (inp && !(box && !box.items.length)) setTimeout(() => { if (this.app.pm.current === pm && inp.isConnected) { inp.focus(); inp.select(); } }, 0);
+  }
   featureFromValues(draft, v) {
     const t = draft.type;
     const f = { type: t };
@@ -212,7 +225,7 @@ export class PartFeatures {
     } else if (t === 'revolve') {
       const s = v.sketchSel?.[0]; if (!s) return null;
       const ax = String(v.axisSel || '');
-      Object.assign(f, { sketch: s.id, axis: ax.startsWith('line:') ? { line: ax.slice(5) } : ax || 'Y', angle: +v.angle, reverse: !!v.reverse });
+      Object.assign(f, { sketch: s.id, axis: ax.startsWith('line:') ? { line: ax.slice(5) } : ax || opt('featDefRevolveAxis'), angle: +v.angle, reverse: !!v.reverse });
     } else if (t === 'fillet' || t === 'chamfer') {
       if (!v.edges?.length) return null;
       f.edges = v.edges.map((e) => edgeRef(e, this.pick?.mesh));
@@ -227,11 +240,11 @@ export class PartFeatures {
       if (t === 'linearPattern') {
         let dir = v.dirSel;
         if (dir === 'edge') { const e = v.dirEdge?.[0]; if (!e) return null; const ax = edgeAxis(e.edge || this.mesh?.edges.find((x) => x.id === e.id) || e); if (!ax) return null; dir = { p: ax.p, d: ax.d, edge: { mid: e.mid, type: e.type, label: e.label, kind: 'edge', key: e.key, pts: e.pts || ax.pts } }; }
-        Object.assign(f, { direction: dir, spacing: +v.spacing, count: Math.max(2, Math.round(+v.count)), reverse: !!v.reverse });
+        Object.assign(f, { direction: dir, spacing: +v.spacing, count: Math.max(opt('featMinCount'), Math.round(+v.count)), reverse: !!v.reverse });
       } else if (t === 'circularPattern') {
         let ax = v.axisSel;
         if (ax === 'edge') { const e = v.axisEdge?.[0]; if (!e) return null; const a = edgeAxis(e.edge || this.mesh?.edges.find((x) => x.id === e.id) || e); if (!a) return null; ax = { p: a.p, d: a.d, edge: { mid: e.mid, type: e.type, label: e.label, kind: 'edge', key: e.key } }; }
-        Object.assign(f, { axis: ax, count: Math.max(2, Math.round(+v.count)), angle: +v.angle });
+        Object.assign(f, { axis: ax, count: Math.max(opt('featMinCount'), Math.round(+v.count)), angle: +v.angle });
       } else {
         if (v.planeSel === 'face') { const fc = v.planeFace?.[0]; if (!fc) return null; f.plane = fc.plane; f.planeFace = { kind: 'face', c: fc.c, n: fc.n, plane: fc.plane, key: fc.key, label: fc.label }; }
         else f.plane = v.planeSel;

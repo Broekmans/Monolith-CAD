@@ -1,4 +1,5 @@
 import { cacheKey } from '../meshcache.js';
+import { displayItems } from '../displaystyle.js';
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
 import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
@@ -47,6 +48,7 @@ export class PartCommands {
       sketchTools.filter((t) => !['sk-trim', 'sk-dimension'].includes(t.id)),
       [sketchTools.find((t) => t.id === 'sk-trim'),
         C('convert', 'Convert Entities', 'convert', () => this.cmdConvert(), { enabled: inSketch, tip: 'Project selected model edges into the sketch' }),
+        C('offsetEnt', 'Offset Entities', 'offset', () => this.cmdOffset(), { enabled: inSketch, active: () => !!this.sketcher?.offsetMode, tip: 'Offset sketch entities or model edges by a distance (stays linked)' }),
         C('mirror', 'Mirror Entities', 'mirror', () => this.sketcher?.startMirror(), { enabled: inSketch, active: () => !!this.sketcher?.mirrorMode, tip: 'Mirror: 1) select entities, 2) click the mirror line' }),
         C('construction', 'Construction Geometry', 'construction', () => this.sketcher?.toggleConstruction(), { enabled: inSketch }),
         C('relations', 'Show Relations', 'relation', () => { if (this.sketcher) { this.sketcher.showRelations = !this.sketcher.showRelations; this.vp.requestRender(); this.app.cm.refresh(); } }, { enabled: inSketch, active: () => this.sketcher?.showRelations })],
@@ -74,7 +76,7 @@ export class PartCommands {
     const B = (ic, tip, run) => h('button', { class: 'hu-btn', title: tip, html: icon(ic), onclick: run });
     const viewsMenu = (e) => {
       const r = e.currentTarget.getBoundingClientRect();
-      contextMenu(r.left, r.bottom + 4, [
+      contextMenu(r.left, r.bottom + opt('partMenuGapPx'), [
         { label: 'Front', key: 'Ctrl+1', run: () => this.vp.setView('front') }, { label: 'Back', key: 'Ctrl+2', run: () => this.vp.setView('back') },
         { label: 'Left', key: 'Ctrl+3', run: () => this.vp.setView('left') }, { label: 'Right', key: 'Ctrl+4', run: () => this.vp.setView('right') },
         { label: 'Top', key: 'Ctrl+5', run: () => this.vp.setView('top') }, { label: 'Bottom', key: 'Ctrl+6', run: () => this.vp.setView('bottom') },
@@ -84,10 +86,8 @@ export class PartCommands {
     };
     const dispMenu = (e) => {
       const r = e.currentTarget.getBoundingClientRect();
-      contextMenu(r.left, r.bottom + 4, [
-        { label: 'Shaded With Edges', icon: 'shaded', run: () => this.setDisplay('shadedEdges') },
-        { label: 'Shaded', icon: 'shaded', run: () => this.setDisplay('shaded') },
-        { label: 'Wireframe', icon: 'wire', run: () => this.setDisplay('wire') },
+      contextMenu(r.left, r.bottom + opt('partMenuGapPx'), [
+        ...displayItems(this),
         '-',
         { label: (this.showPlanes ? 'Hide' : 'Show') + ' Planes', icon: 'plane', run: () => { this.showPlanes = !this.showPlanes; this.updatePlanes(); } },
       ]);
@@ -114,6 +114,8 @@ export class PartCommands {
     }
     if (this.sketcher) {
       const sk = this.sketcher;
+      if (sk.offsetMode && k === 'Escape') { this.app.pm.cancel(); return true; }
+      if (sk.offsetMode && k === 'Enter') { this.app.pm.ok(); return true; }
       if (sk.mirrorMode && k === 'Escape') { sk.endMirror(); return true; }
       if (sk.mirrorMode && k === 'Enter') { if (sk.mirrorMode.step === 1) sk.mirrorNext(); return true; }
       if (k === 'Escape') { if (sk.tool) { if (sk.tool.pts?.length || sk.tool.pending) { sk.tool.pts = []; sk.tool.snaps = []; sk.tool.prevEnd = null; sk.tool.pending = null; sk.tool.picks = []; sk.vp.requestRender(); } else sk.setTool(null); } else { sk.sel.clear(); sk.renderPanel(); sk.vp.requestRender(); } this.app.cm.refresh(); return true; }
@@ -140,7 +142,7 @@ export class PartCommands {
         { label: 'Exit Sketch', icon: 'exitSketch', run: () => this.exitSketch(true) },
         { label: 'Discard Changes', icon: 'cancel', run: () => this.exitSketch(false) },
         '-',
-        ...SKETCH_TOOLS.slice(0, 6).map((t) => ({ label: t.label, icon: t.icon, run: () => this.sketchTool(t.id) })),
+        ...SKETCH_TOOLS.slice(0, opt('partMenuSketchTools')).map((t) => ({ label: t.label, icon: t.icon, run: () => this.sketchTool(t.id) })),
         { label: 'Smart Dimension', icon: 'dimension', run: () => this.sketchTool('dimension') },
         '-', { label: 'Zoom to Fit', icon: 'zoomFit', key: 'F', run: () => this.zoomFit() }, { label: 'Normal To', icon: 'normalTo', run: () => this.normalTo() },
         sk.sel.size ? { label: 'Delete', icon: 'delete', key: 'Del', run: () => sk.deleteSelection() } : null,

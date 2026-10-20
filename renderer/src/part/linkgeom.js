@@ -5,12 +5,14 @@
 // (`matchRef`, same idea as fillet / chamfer edges: type, direction, position relative to the body's bounding box),
 // moves the geometry onto it (`applyLinks`) and solves the sketch, so its own relations and dimensions are kept.
 
+import { opt } from '../app/options/index.js';
+
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const len = (a) => Math.hypot(a[0], a[1], a[2]);
 const nrm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 const d2 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-export const bbDiag = (bb) => (bb ? Math.hypot(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1], bb.max[2] - bb.min[2]) : 100);
+export const bbDiag = (bb) => (bb ? Math.hypot(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1], bb.max[2] - bb.min[2]) : opt('linkDefaultSize'));
 
 // sketch frame helpers (frame = {o, x, y, n})
 export const loc2 = (fr, p) => { const d = sub(p, fr.o); return [dot(d, fr.x), dot(d, fr.y)]; };
@@ -22,7 +24,7 @@ function expected(p, bb0, bb1) {
   const out = [];
   for (let k = 0; k < 3; k++) {
     const s0 = bb0.max[k] - bb0.min[k], s1 = bb1.max[k] - bb1.min[k];
-    out.push(bb1.min[k] + (s0 > 1e-9 ? (p[k] - bb0.min[k]) / s0 : 0.5) * s1);
+    out.push(bb1.min[k] + (s0 > opt('geomEpsTiny') ? (p[k] - bb0.min[k]) / s0 : 0.5) * s1);
   }
   return out;
 }
@@ -38,7 +40,7 @@ const near3 = (q, p, bb0, bb1) => Math.min(len(sub(q, p)), len(sub(q, expected(p
 function circle3pts(a, b, c) {
   const ab = sub(b, a), ac = sub(c, a);
   const n = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
-  const nn = dot(n, n); if (nn < 1e-18) return null;
+  const nn = dot(n, n); if (nn < opt('linkCircleDegenEps')) return null;
   const t1 = [n[1] * ab[2] - n[2] * ab[1], n[2] * ab[0] - n[0] * ab[2], n[0] * ab[1] - n[1] * ab[0]]; // n × ab
   const t2 = [ac[1] * n[2] - ac[2] * n[1], ac[2] * n[0] - ac[0] * n[2], ac[0] * n[1] - ac[1] * n[0]]; // ac × n
   const k1 = dot(ac, ac) / (2 * nn), k2 = dot(ab, ab) / (2 * nn);
@@ -54,7 +56,7 @@ export function refFromMeshEdge(e, bb) {
   if (e.type === 'line') return { type: 'line', a, b, mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], bb };
   if (e.type === 'circle' && n >= 3) {
     const c = circle3pts(a, P(Math.floor(n / 3)), P(Math.floor((2 * n) / 3))); if (!c) return null;
-    return { type: 'circle', a, b, mid: e.mid || P(Math.floor(n / 2)), c: c.c, r: c.r, n: c.n, closed: len(sub(a, b)) < 1e-6 * Math.max(1, c.r), bb };
+    return { type: 'circle', a, b, mid: e.mid || P(Math.floor(n / 2)), c: c.c, r: c.r, n: c.n, closed: len(sub(a, b)) < opt('geomEps') * Math.max(1, c.r), bb };
   }
   return null;
 }
@@ -68,14 +70,14 @@ export function refFromEdge(e, bb) {
 // unique edge end points = model corners
 export function vertices(base) {
   const out = [];
-  for (const e of base.edges || []) for (const p of [e.a, e.b]) if (p && !out.some((q) => len(sub(p, q)) < 1e-7)) out.push(p);
+  for (const e of base.edges || []) for (const p of [e.a, e.b]) if (p && !out.some((q) => len(sub(p, q)) < opt('linkPointMergeTol'))) out.push(p);
   return out;
 }
 
 // find the referenced edge (or corner) on the new body; null when nothing is close enough
-export function matchRef(ref, base, tolPct = 4) {
+export function matchRef(ref, base, tolPct = opt('linkTolPct')) {
   if (!ref || !base) return null;
-  const bb = base.bbox, tol = Math.max(0.5, (bbDiag(bb) * tolPct) / 100);
+  const bb = base.bbox, tol = Math.max(opt('linkTolMin'), (bbDiag(bb) * tolPct) / 100);
   if (ref.type === 'vertex') {
     let best = null, bd = Infinity;
     for (const v of vertices(base)) { const d = near3(v, ref.p, ref.bb, bb); if (d < bd) { bd = d; best = v; } }
@@ -87,18 +89,18 @@ export function matchRef(ref, base, tolPct = 4) {
     const exA = expected(ref.a, ref.bb, bb), exB = expected(ref.b, ref.bb, bb), Lx = len(sub(exB, exA));
     for (const e of base.edges || []) {
       if (e.type !== 'line') continue;
-      const L = len(sub(e.b, e.a)); if (L < 1e-9) continue;
-      if (Math.abs(dot(nrm(sub(e.b, e.a)), dir)) < 0.995) continue;
-      const d = near3(e.mid, ref.mid, ref.bb, bb) + 0.5 * Math.min(Math.abs(L - L0), Math.abs(L - Lx));
+      const L = len(sub(e.b, e.a)); if (L < opt('geomEpsTiny')) continue;
+      if (Math.abs(dot(nrm(sub(e.b, e.a)), dir)) < opt('linkDirDot')) continue;
+      const d = near3(e.mid, ref.mid, ref.bb, bb) + opt('linkScoreWeight') * Math.min(Math.abs(L - L0), Math.abs(L - Lx));
       if (d < bd) { bd = d; best = e; }
     }
   } else if (ref.type === 'circle') {
 
     for (const e of base.edges || []) {
       if (e.type !== 'circle' || !e.c || !!e.closed !== !!ref.closed) continue;
-      if (ref.n && e.n && Math.abs(dot(ref.n, e.n)) < 0.995) continue;
-      let d = near3(e.c, ref.c, ref.bb, bb) + 0.5 * Math.abs(e.r - ref.r);
-      if (!ref.closed) d += 0.5 * near3(e.mid, ref.mid, ref.bb, bb); // arcs: also the right piece
+      if (ref.n && e.n && Math.abs(dot(ref.n, e.n)) < opt('linkDirDot')) continue;
+      let d = near3(e.c, ref.c, ref.bb, bb) + opt('linkScoreWeight') * Math.abs(e.r - ref.r);
+      if (!ref.closed) d += opt('linkScoreWeight') * near3(e.mid, ref.mid, ref.bb, bb); // arcs: also the right piece
       if (d < bd) { bd = d; best = e; }
     }
   }
@@ -107,10 +109,10 @@ export function matchRef(ref, base, tolPct = 4) {
 
 // Move linked geometry of sketch `sk` (in place) onto its edges. fr = the sketch's frame for this rebuild.
 // Returns {linked, moved, missing: [geo ids]}; the caller solves the sketch afterwards.
-export function applyLinks(sk, base, fr, tolPct = 4) {
+export function applyLinks(sk, base, fr, tolPct = opt('linkTolPct')) {
   const G = new Map(sk.geo.map((g) => [g.id, g]));
   const out = { linked: 0, moved: 0, missing: [] };
-  const setP = (id, q) => { const p = G.get(id); if (!p) return; if (d2([p.x, p.y], q) > 1e-9) out.moved++; p.x = q[0]; p.y = q[1]; };
+  const setP = (id, q) => { const p = G.get(id); if (!p) return; if (d2([p.x, p.y], q) > opt('geomEpsTiny')) out.moved++; p.x = q[0]; p.y = q[1]; };
   const pair = (i1, i2, A, B) => { // keep the end points' order: each takes the nearer end
     const p = G.get(i1), q = G.get(i2); if (!p || !q) return;
     const keep = d2([p.x, p.y], A) + d2([q.x, q.y], B) <= d2([p.x, p.y], B) + d2([q.x, q.y], A);
@@ -131,7 +133,7 @@ export function applyLinks(sk, base, fr, tolPct = 4) {
       let A = ea, B = eb;
       if (ref.cut) { // a piece of the edge: same distances from the edge's ends as before
         const u = nrm(sub(eb, ea)), L = len(sub(eb, ea));
-        if (L - ref.cut[0] - ref.cut[1] > 1e-6) { A = [ea[0] + u[0] * ref.cut[0], ea[1] + u[1] * ref.cut[0], ea[2] + u[2] * ref.cut[0]]; B = [eb[0] - u[0] * ref.cut[1], eb[1] - u[1] * ref.cut[1], eb[2] - u[2] * ref.cut[1]]; }
+        if (L - ref.cut[0] - ref.cut[1] > opt('geomEps')) { A = [ea[0] + u[0] * ref.cut[0], ea[1] + u[1] * ref.cut[0], ea[2] + u[2] * ref.cut[0]]; B = [eb[0] - u[0] * ref.cut[1], eb[1] - u[1] * ref.cut[1], eb[2] - u[2] * ref.cut[1]]; }
       }
       pair(g.p1, g.p2, loc2(fr, A), loc2(fr, B));
       g.onEdge = { ...refFromEdge({ ...e, a: ea, b: eb }, base.bbox), ...(ref.cut ? { cut: ref.cut } : {}) };
@@ -139,7 +141,7 @@ export function applyLinks(sk, base, fr, tolPct = 4) {
     }
     else if ((g.type === 'circle' || g.type === 'arc') && e.type === 'circle') {
       setP(g.c, loc2(fr, e.c));
-      if (Math.abs(g.r - e.r) > 1e-9) out.moved++;
+      if (Math.abs(g.r - e.r) > opt('geomEpsTiny')) out.moved++;
       g.r = e.r;
       if (g.type === 'arc') pair(g.s, g.e, loc2(fr, e.a), loc2(fr, e.b));
     } else { out.missing.push(g.id); continue; }
@@ -152,7 +154,7 @@ export function applyLinks(sk, base, fr, tolPct = 4) {
 // fixed point on a corner) gets linked. Returns the number of new links.
 export function autoLink(sk, base, fr) {
   const G = new Map(sk.geo.map((g) => [g.id, g])), P = (id) => { const p = G.get(id); return p ? [p.x, p.y] : null; };
-  const eps = Math.max(1e-3, bbDiag(base.bbox) * 2e-5);
+  const eps = Math.max(opt('linkOnEdgeMin'), bbDiag(base.bbox) * opt('linkOnEdgeRel'));
   const off = (p3) => Math.abs(dot(sub(p3, fr.o), fr.n)); // distance of a model point from the sketch plane
   const corners = vertices(base);
   let n = 0;
@@ -170,12 +172,12 @@ export function autoLink(sk, base, fr) {
       // a piece of an edge (e.g. converted from a later, filleted model): both ends on the edge, in the sketch plane
       if (!ref) for (const e of base.edges) {
         if (e.type !== 'line' || off(e.a) > eps || off(e.b) > eps) continue;
-        const a = loc2(fr, e.a), b = loc2(fr, e.b), L = d2(a, b); if (L < 1e-6) continue;
+        const a = loc2(fr, e.a), b = loc2(fr, e.b), L = d2(a, b); if (L < opt('geomEps')) continue;
         const u = [(b[0] - a[0]) / L, (b[1] - a[1]) / L];
         const t = (q) => (q[0] - a[0]) * u[0] + (q[1] - a[1]) * u[1], dl = (q) => Math.abs((q[0] - a[0]) * u[1] - (q[1] - a[1]) * u[0]);
         if (dl(A) > eps || dl(B) > eps) continue;
         const tA = t(A), tB = t(B), lo = Math.min(tA, tB), hi = Math.max(tA, tB);
-        if (lo < -eps || hi > L + eps || hi - lo < 1e-6) continue;
+        if (lo < -eps || hi > L + eps || hi - lo < opt('geomEps')) continue;
         ref = { ...refFromEdge(e, base.bbox), cut: [Math.max(0, lo), Math.max(0, L - hi)] }; break;
       }
     } else if (g.type === 'circle' || g.type === 'arc') {
@@ -213,7 +215,7 @@ export function frameOfPlane(pl) {
 // returns the kernel's linkBase for sketch i (async), `solve(sk)` solves a sketch. With `auto`, fixed geometry of
 // older parts that lies on a model edge is linked first. `stopAt` = only sketches before this index.
 // Returns {changed, linkedNow: [{name, n}], warn: Map(sketch id → text)}.
-export async function relinkChain(features, { upTo = features.length, stopAt = Infinity, getBase, solve, tolPct = 4, auto = false } = {}) {
+export async function relinkChain(features, { upTo = features.length, stopAt = Infinity, getBase, solve, tolPct = opt('linkTolPct'), auto = false } = {}) {
   const res = { changed: false, linkedNow: [], warn: new Map() };
   for (let i = 0; i < features.length && i < upTo && i < stopAt; i++) {
     const f = features[i];
@@ -242,7 +244,7 @@ export async function relinkChain(features, { upTo = features.length, stopAt = I
 // Solve a sketch whose linked geometry moved from `before` (geo list) to where it is now. Big moves go in steps with a
 // prediction (each free point / radius first moves by its speed of the previous step, then the sketch is solved), so
 // small offsets (a 7 mm distance to a linked line) don't flip to the other side.
-export function followLinks(sk, before, solve, maxStep = 0.25) {
+export function followLinks(sk, before, solve, maxStep = opt('sizeStepPct') / 100) {
   const target = sk.geo.map((g) => (g.type === 'point' ? [g.x, g.y] : g.r !== undefined ? [g.r] : null));
   const start = before.map((g) => (g.type === 'point' ? [g.x, g.y] : g.r !== undefined ? [g.r] : null));
   const linked = new Set();
@@ -251,14 +253,14 @@ export function followLinks(sk, before, solve, maxStep = 0.25) {
   const pts = sk.geo.filter((g) => g.type === 'point');
   if (pts.length) { const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y); size = Math.max(1, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)); }
   sk.geo.forEach((g, i) => { if (linked.has(g.id) && start[i] && target[i]) move = Math.max(move, ...target[i].map((v, k) => Math.abs(v - start[i][k]))); });
-  const n = Math.min(60, Math.max(1, Math.ceil(move / (maxStep * size))));
+  const n = Math.min(opt('driveMaxSteps'), Math.max(1, Math.ceil(move / (maxStep * size))));
   if (n === 1) return solve(sk);
   const set = (S, only) => sk.geo.forEach((g, i) => { if (!S[i] || (only && !only(g))) return; if (g.type === 'point') { g.x = S[i][0]; g.y = S[i][1]; } else g.r = S[i][0]; });
   const lerp = (t) => start.map((a, i) => (a && target[i] ? a.map((v, k) => v + (target[i][k] - v) * t) : a));
   const state = () => sk.geo.map((g) => (g.type === 'point' ? [g.x, g.y] : g.r !== undefined ? [g.r] : null));
   set(start); // back to the old position, then walk
   let X = state(), V = null, r = null, tPrev = 0;
-  const steps = [0.01 / n, ...Array.from({ length: n }, (_, k) => (k + 1) / n)];
+  const steps = [opt('driveProbeFrac') / n, ...Array.from({ length: n }, (_, k) => (k + 1) / n)];
   for (const t of steps) {
     const dt = t - tPrev;
     if (V) set(X.map((a, i) => (a && V[i] ? a.map((v, k) => v + V[i][k] * dt) : a)), (g) => !linked.has(g.id)); // prediction

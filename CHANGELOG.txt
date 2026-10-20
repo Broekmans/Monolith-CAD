@@ -1,3 +1,71 @@
+0.1.104 (2026-10-20)
+- Options: 20 new Drawing settings, all with the values used until now (nothing looks or works differently):
+  - Colours (Drawing): selected view / annotation / section line, preview while placing, snap marker and fitted scan wall, grips of a selected room outline.
+  - Drawings: undo levels, gap between new views, select distances (view frames and section lines, room outlines, grips, annotation text), Polygon Area closing distance, section line horizontal / vertical snap angle, parallel angle for dimensions, scan wall search distance and max. scatter, smallest door / window opening, and Room tool limits (smallest room, search distance, joining spaces).
+- Behind the scenes: the other fixed values of the Drawing workspace are now declared in one place. Printed line weights and text sizes are among them; they are candidates for the Drafting Standard later. PDF output is unchanged.
+
+0.1.103 (2026-10-20)
+- Options: about 60 new settings for Sketch and Part, all with the values used until now (nothing looks or works differently):
+  - Colours: over defined, construction, driving and driven dimensions, origin (light and dark), window / crossing selection box, relation symbols, snap markers, Offset Entities warning, drag arrow, model origin, sketches and dimensions shown on the model, feature values.
+  - Sketch: line widths (normal / under the mouse / selected), point size, centre mark, relation symbol size, horizontal / vertical inference angle, text height and line spacing, undo levels, double-click time on a dimension.
+  - Dimensions: decimal places, text height (sketch and model), line width, arrow length, extension line gap and overshoot.
+  - New category Part: undo levels, select distance on the model, and the values new features start with (extrude depth, revolve angle, fillet, chamfer, shell, patterns, Offset Entities).
+  - Feature Preview: colour and edge opacity of the body before the feature, profile fill colour.
+- Behind the scenes: every other fixed value of Sketch and Part (tolerances, small sizes, timings) is now declared in one place, so it can be tuned or shown in Options later without searching the program.
+
+0.1.102 (2026-10-20)
+- Files: every MonoLith document now carries a format number, and opening an older file updates it step by step to the current format. Future changes in how things are saved will keep your existing files working.
+- Files: a file made with a newer MonoLith version still opens, with a warning that saving it in this version may lose what this version does not know.
+- Files: saved documents also note which MonoLith version wrote them.
+
+0.1.101 (2026-10-20)
+- Sketch: fully defined entities are black again (light on an empty plane in dark mode, so they stay visible); under defined entities stay blue, selected entities a brighter blue and a bit thicker.
+
+0.1.100 (2026-10-20)
+- Sketch colours swapped: fully defined entities are yellow, under defined entities blue. Selected entities stay a brighter blue and a bit thicker. Still changeable in Tools > Options > Colours (Sketch).
+
+0.1.99 (2026-10-19)
+- Colours follow one rule: blue = what is (selected, shown as it is), yellow / orange = what will be (under the mouse, preview, snap).
+- Sketch: fully defined entities are blue, under defined entities yellow, selected entities a brighter blue and a bit thicker. All three can be changed in Tools > Options > Colours (Sketch). A selection colour you never changed follows automatically.
+- Drawing: snap markers (corner, edge, opening, scan fit) and the outline snap while dragging are orange.
+- Point cloud: Measure while picking is orange; a closed selection fence and the crop box are blue.
+
+0.1.98 (2026-10-19)
+- Offset Entities: offsetting model edges with rounded corners (arcs) no longer makes the sketch Over Defined.
+- Offset Entities: the side only changes when you drag the arrow through the chain (or tick Reverse); just moving the mouse in the view no longer flips it.
+- Offset Entities: what a click would take lights up under the mouse: the whole chain of a sketch entity or model edge (one entity with Select chain off), or a flat face with a light fill and its edges.
+- Offset Entities: model edges that are not in the sketch plane (for example the bottom outline or a fillet rim) can be picked, projected onto the sketch; Select chain only joins edges at the same depth.
+- Offset Entities: picked chains are shown in the selection blue; hover and the preview use the orange of the preview line.
+
+0.1.97 (2026-10-19)
+- Offset Entities: the drag arrow stays under the mouse while you drag it, and stays at that spot on the chain afterwards.
+- Offset Entities: drag the arrow through the chain to put the offset on the other side (inside / outside), also when that side is not possible yet.
+- Offset Entities: when the offset is not possible (for example larger than a corner radius), the arrow, the value box and the preview turn red; the preview then shows every entity moved by the distance, so you can see where they clash.
+- Offset Entities: click a flat model face (parallel to the sketch) to offset all its edges at once; click it again to remove it.
+- Offset Entities: a dragged distance is shown rounded (5.1, not 5.1000000000001).
+
+0.1.96 (2026-10-19)
+- Offset Entities: the distance now also sits in a value box on the sketch, next to the offset, with a drag arrow. Type a value + Enter to apply it (Enter again = OK, Esc = Cancel), use the mouse wheel over the box, or drag the arrow: the distance follows the mouse (rounded; Shift = finer) and the offset goes to the side the mouse is on.
+- Offset Entities: the offset goes to the side of the chain the mouse is on (inside / outside), and the Reverse box follows. Ticking or unticking Reverse yourself keeps that side for the rest of the command.
+- Value boxes (features and Offset Entities) move to the other side of their arrow near the edge of the view, and clicking into them no longer shifts the whole view sideways.
+- Esc while a check box in a dialog has the focus now cancels the dialog too.
+- A view layout picked right after opening a part (before its first rebuild has finished) is no longer replaced by the layout saved in the file.
+
+0.1.95 (2026-10-18)
+- OK / Cancel buttons (Exit Sketch, every feature, Offset Entities) now sit inside the view you clicked, left of its view cube, and never over another view. They move to a newly clicked view a moment later, so they never jump under the mouse.
+- The view you clicked last (blue border) keeps the view toolbar, the OK / Cancel buttons and the feature value box; just moving the mouse over another view no longer moves them.
+- Display style per view: with several views, Shaded With Edges / Shaded / Wireframe (view toolbar or right-click on empty space) changes only that view; saved with the views.
+- Fillet / Chamfer: click a face to add all its edges; click it again to remove them.
+- One click on an Extrude / Cut in the tree shows its added / removed volume (yellow) over the model, like while editing.
+- Feature dialogs: the value you change (Depth, Radius, Distance, …) is the highlighted field and gets the cursor when the selection is already filled; Esc in a field cancels the dialog.
+- The feature being edited is shown in the theme blue in the tree (was green).
+- Dialogs over the view and value boxes can be moved by their title strip; the dialog remembers its place.
+
+0.1.94 (2026-10-18)
+- New Offset Entities (Sketch tab, next to Convert Entities): click sketch entities or model edges (also edges off the sketch plane) and set a distance; Reverse, Select chain, Bi-directional, Cap ends and Base geometry → construction. The result stays linked: it follows when the base entities change or the model changes, and its distance is one dimension you can double-click and edit. Corners of a chain are trimmed / extended, arcs keep their centre.
+- Model edges and corners light up under the mouse in a sketch in every mode: no tool, Convert Entities, and while drawing.
+- View cube: face labels turn so they always read horizontally; clicking a face keeps the view turned the way its label reads (no more 90° jump). The arrows around the cube have an outline so they stay visible over sketches. Default cube size 16 % (was 22 %).
+
 0.1.93 (2026-10-18)
 - The grid is off by default (Options > Viewports; a grid you switched on yourself stays on). New grid button in the view toolbar to show / hide it in the document.
 - View toolbar: slimmer, and a vertical column at the bottom right of the view cube (in a low view it moves left of the cube).

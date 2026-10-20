@@ -9,14 +9,15 @@ import { api } from '../api.js';
 import { opt } from '../app/options.js';
 import { PC_EXTS } from '../pointcloud.js';
 import { scaleVal } from './sheet.js';
+import { upgradeDoc } from '../../../shared/format.mjs';
 
 export const CLOUD_EXTS = ['lithpcd', ...PC_EXTS];
 export const isCloudSrc = (p) => new RegExp(`\\.(${CLOUD_EXTS.join('|')})$`, 'i').test(p || '');
-// Normal values from Options > Drawings; Fine / Light keep the same ratio to Normal (0.6 / 1.6 and 0.7 / 1.5)
-export const DENSITY = { get fine() { return opt('dotNormal') * 0.6; }, get normal() { return opt('dotNormal'); }, get light() { return opt('dotNormal') * 1.6; } }; // paper mm per dot cell
-export const PIXEL = { get fine() { return opt('pixNormal') * 0.7; }, get normal() { return opt('pixNormal'); }, get light() { return opt('pixNormal') * 1.5; } }; // paper mm per density pixel
+// Normal values from Options > Drawings; Fine / Light keep the same ratio to Normal (0.6 / 1.6 and 0.7 / 1.5: drDotFineK …)
+export const DENSITY = { get fine() { return opt('dotNormal') * opt('drDotFineK'); }, get normal() { return opt('dotNormal'); }, get light() { return opt('dotNormal') * opt('drDotLightK'); } }; // paper mm per dot cell
+export const PIXEL = { get fine() { return opt('pixNormal') * opt('drPixFineK'); }, get normal() { return opt('pixNormal'); }, get light() { return opt('pixNormal') * opt('drPixLightK'); } }; // paper mm per density pixel
 export const PRESETS = { get plan() { return { from: opt('planFrom'), to: opt('planTo') }; }, get slab() { return { from: opt('slabFrom'), to: opt('slabTo') }; } };
-export const cloudDefaults = () => ({ color: 'density', dark: 1, thick: opt('cloudThick'), size: 0.25, density: 'normal', clip: { on: false, ref: 'back', from: 0, to: 1 } });
+export const cloudDefaults = () => ({ color: 'density', dark: 1, thick: opt('cloudThick'), size: opt('drDotSize'), density: 'normal', clip: { on: false, ref: 'back', from: 0, to: 1 } });
 const sepOf = (p) => (p.includes('\\') ? '\\' : '/');
 const dirOf = (p) => p.replace(/[\\/][^\\/]*$/, '');
 const baseOf = (p) => p.split(/[\\/]/).pop();
@@ -29,7 +30,7 @@ export class DrawingClouds {
     if (/\.lithpcd$/i.test(src)) {
       const tab = (this.app.root?.tabs || this.app.tabs || []).find((t) => t.path === src && t.doc?.doc?.kind === 'cloud');
       let d = tab?.doc?.doc;
-      if (!d) { const f = await api.readFile(src); d = JSON.parse(f.text); }
+      if (!d) { const f = await api.readFile(src); d = upgradeDoc(JSON.parse(f.text)).doc; }
       recs = (d.clouds || []).filter((r) => r.visible !== false);
       origin = d.origin || null; partAlign = d.partAlign || null;
       if (!recs.length) throw new Error(`${baseOf(src)} has no visible point clouds`);
@@ -62,7 +63,7 @@ export class DrawingClouds {
         const sh = this.doc.sheets.find((x) => x.id === (it.sheet || ctx?.sheet)) || this.sheet;
         const s = scaleVal(it.scale || (it.sheet ? null : ctx?.scale) || sh.scale);
         const c = o.clip?.on ? { ref: o.clip.ref || 'back', from: +o.clip.from || 0, to: +o.clip.to || 0, level: o.clip.level | 0 } : null;
-        const thick = (it.cloud?.thick ?? ctx?.cloud?.thick ?? 0.3) * 1000;
+        const thick = (it.cloud?.thick ?? ctx?.cloud?.thick ?? opt('drCloudThickFallback')) * 1000;
         const depth = (it.cloud?.depth ?? ctx?.cloud?.depth ?? 0) * 1000; // view depth beyond the cut
         const slab = it.plane ? { p: it.plane.p, n: it.plane.n, lo: -thick / 2 - depth, hi: thick / 2 } : null;
         const raster = !probe && (o.color || 'density') === 'density' ? { pix: (PIXEL[o.density] || PIXEL.normal) / s } : null;
@@ -80,7 +81,7 @@ export class DrawingClouds {
   // finding the room outline; kept in memory per view and scale, not saved in the drawing.
   async roomFit(v, sl = PRESETS.plan) {
     const g = v.geom, clipOn = v.cloud?.clip?.on;
-    const top = Math.abs(v.dir?.[1] || 0) > 0.99;
+    const top = Math.abs(v.dir?.[1] || 0) > opt('drTopViewDot');
     if (clipOn || !top || !isCloudSrc(v.src)) return g?.fit || null;
     const key = `${v.id}|${g?.raster?.s || g?.dots?.s}|${v.cloud?.clip?.level | 0}|${sl.from}|${sl.to}`;
     this._roomFits ||= new Map();
@@ -94,14 +95,14 @@ export class DrawingClouds {
   // the slices room detection uses (room settings: low + high slice; the high one sees walls above
   // furniture, window sills and door heads). A view with its own slice / a side view uses its own sample.
   async roomFits(v, st) {
-    const out = [], top = Math.abs(v.dir?.[1] || 0) > 0.99;
+    const out = [], top = Math.abs(v.dir?.[1] || 0) > opt('drTopViewDot');
     if (v.cloud?.clip?.on || !top) return [v.geom?.fit].filter(Boolean);
     for (const [a, b] of [[st.lowFrom, st.lowTo], [st.highFrom, st.highTo]]) if (b > a) { const f = await this.roomFit(v, { from: a, to: b }); if (f) out.push(f); }
     return out;
   }
   // views whose dots were made for another scale than they now have: recompute (density follows the scale)
   async refreshCloudViews(vs = null) {
-    const list = (vs || this.doc.views).filter((v) => (v.geom?.dots || v.geom?.raster) && isCloudSrc(v.src) && Math.abs((v.geom.dots || v.geom.raster).s / scaleVal(v.scale || this.doc.sheets.find((x) => x.id === v.sheet).scale) - 1) > 0.01);
+    const tol = opt('drCloudRescaleTol'), list = (vs || this.doc.views).filter((v) => (v.geom?.dots || v.geom?.raster) && isCloudSrc(v.src) && Math.abs((v.geom.dots || v.geom.raster).s / scaleVal(v.scale || this.doc.sheets.find((x) => x.id === v.sheet).scale) - 1) > tol);
     if (vs) for (const v of vs) if ((v.geom?.dots || v.geom?.raster) && !list.includes(v)) list.push(v);
     if (!list.length) return;
     const bySrc = new Map();
@@ -136,7 +137,7 @@ export class DrawingClouds {
       field('Colour', sel('color', colors)),
       dens ? field('Darkness', sel('dark', [[0.5, 'Very light'], [0.75, 'Light'], [1, 'Normal'], [1.4, 'Dark'], [2, 'Very dark']])) : field('Point size', sel('size', [0.1, 0.15, 0.2, 0.25, 0.35, 0.5].map((s) => [s, `${s} mm`]))),
       (info?.aligned?.length) ? field('Overlay part', sel('overlay', [['', 'none'], ...info.aligned.map((f) => [f, f.split(/[\\/]/).pop()])], true)) : null,
-      info?.overlayError ? h('p', { class: 'pm-info', style: { margin: '2px 8px', color: '#c0392b' } }, `Overlay: ${info.overlayError}`) : null,
+      info?.overlayError ? h('p', { class: 'pm-info', style: { margin: '2px 8px', color: opt('drErrorText') } }, `Overlay: ${info.overlayError}`) : null,
       v.plane ? field('View depth (m)', sel('depth', [[0, '0 (slice only)'], [0.5, '0.5'], [1, '1'], [2, '2'], [5, '5'], [10, '10'], [1000, 'all (beyond the cut)']], true)) : null,
       v.plane ? field('Slice thickness', sel('thick', [0.05, 0.1, 0.2, 0.3, 0.5, 1, 2].map((t) => [t, `${t} m`]), true)) : null,
       field('Density', sel('density', [['fine', 'Fine'], ['normal', 'Normal'], ['light', 'Light']], true)),
@@ -144,11 +145,11 @@ export class DrawingClouds {
       field('Measured from', ref),
       (c.ref === 'floor' && info?.levels?.length > 1) ? field('Floor level', (() => { const L = info.levels, q = h('select', {}, ...L.map((z, i) => h('option', { value: i, selected: (c.level | 0) === i }, `Level ${i} (${i ? '+' : ''}${fmt((z - L[0]) / 1000, 2)} m)`))); q.addEventListener('change', () => this.setCloudClip(v, { level: +q.value })); return q; })()) : null,
       h('div', { class: 'pp-row' }, h('label', {}, 'From – to (m)'), h('span', { style: { display: 'flex', gap: '4px' } }, num('from', c.from), num('to', c.to))),
-      info ? h('p', { class: 'pm-info', style: { margin: '2px 8px' } }, `Depth of the scan in this view: ${fmt((info.dMax - info.dMin) / 1000, 2)} m${Math.abs(v.dir[1]) > 0.9 ? `; floor found ${fmt((info.floor - info.dMin) / 1000, 2)} m above the lowest point` : ''}. ${D ? `${D.n.toLocaleString()} dots.` : v.geom?.raster ? `Image ${v.geom.raster.w} × ${v.geom.raster.h} px.` : ''}`) : null);
+      info ? h('p', { class: 'pm-info', style: { margin: '2px 8px' } }, `Depth of the scan in this view: ${fmt((info.dMax - info.dMin) / 1000, 2)} m${Math.abs(v.dir[1]) > opt('drPlanViewDot') ? `; floor found ${fmt((info.floor - info.dMin) / 1000, 2)} m above the lowest point` : ''}. ${D ? `${D.n.toLocaleString()} dots.` : v.geom?.raster ? `Image ${v.geom.raster.w} × ${v.geom.raster.h} px.` : ''}`) : null);
   }
   setCloudClip(v, props) {
     this.change(() => { v.cloud = { ...(v.cloud || cloudDefaults()) }; v.cloud.clip = { ...(v.cloud.clip || {}), ...props }; });
     this.refreshCloudViews([v]);
   }
 }
-export function cloudNote() { toast('Section views of point clouds come in the next update', 'info', 4000); }
+export function cloudNote() { toast('Section views of point clouds come in the next update', 'info', opt('drToastNoteMs')); }

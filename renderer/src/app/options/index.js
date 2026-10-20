@@ -1,6 +1,9 @@
 // Options (Tools > Options…): every program setting, read everywhere with opt(key).
 // The settings themselves live per category in ./cats/*.js (one row per setting) — to add one:
 //   1. add a row to the matching cats file (key, label, type, def …), 2. read it with opt('key') where the value is used.
+// Rows with hidden: true are internal values (tolerances, sizes, colours of small marks …): declared here once, not shown
+// in the Options window, never stored — opt() always returns the factory value. Showing one later = remove hidden.
+// No fixed look/behaviour values in code: every such value is a row here (see claude/ekcad-workflow.md, ground-up rules).
 // Values: factory defaults (rows' def) < "My Defaults" file (<CAD Program>\monolith-options.json, IPC options:cfg)
 // < current values (localStorage monolith.options). Pure module (no app imports) so any code can read it.
 import general from './cats/general.js';
@@ -12,9 +15,14 @@ import features from './cats/features.js';
 import drawings from './cats/drawings.js';
 import clouds from './cats/clouds.js';
 import section from './cats/section.js';
+import common from './cats/common.js';
+import sketchvals from './cats/sketchvals.js';
+import partvals from './cats/partvals.js';
+import drawingvals from './cats/drawingvals.js';
 
-export const OPTIONS_DEF = [...general, ...view, ...viewports, ...colours, ...sketch, ...features, ...section, ...drawings, ...clouds];
-export const OPT_CATS = [...new Set(OPTIONS_DEF.map((d) => d.cat))];
+export const OPTIONS_DEF = [...general, ...view, ...viewports, ...colours, ...sketch, ...features, ...section, ...drawings, ...clouds, ...common, ...sketchvals, ...partvals, ...drawingvals];
+export const OPTIONS_SHOWN = OPTIONS_DEF.filter((d) => !d.hidden);
+export const OPT_CATS = [...new Set(OPTIONS_SHOWN.map((d) => d.cat))];
 const TEST = !!globalThis.window?.monolith?.isTest;
 const DEF = Object.fromEntries(OPTIONS_DEF.filter((d) => 'def' in d).map((d) => [d.key, d.def]));
 if (TEST) DEF.dark = false; // e2e tests start light
@@ -33,7 +41,7 @@ export const myDefaults = () => ({ ...DEF, ...(mine || {}) });
 export function clean(o) {
   const r = {};
   for (const d of OPTIONS_DEF) {
-    if (!('def' in d) || !(d.key in (o || {}))) continue;
+    if (d.hidden || !('def' in d) || !(d.key in (o || {}))) continue;
     let v = o[d.key];
     if (d.type === 'bool') v = !!v;
     else if (d.type === 'color') { if (!/^#[0-9a-f]{6}$/i.test(String(v))) continue; }
@@ -60,7 +68,8 @@ function load() {
   return cur;
 }
 export function opt(k) { const c = load(); return k in c ? c[k] : DEF[k]; }
-export function allOpts() { const { _stored, ...c } = load(); return c; }
+const HIDDEN = new Set(OPTIONS_DEF.filter((d) => d.hidden).map((d) => d.key));
+export function allOpts() { const { _stored, ...c } = load(); for (const k of HIDDEN) delete c[k]; return c; }
 // set current values (remembered); returns the keys that changed
 export function setOpts(o) {
   const c = load(), n = clean(o), changed = [];

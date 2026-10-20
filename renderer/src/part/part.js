@@ -11,6 +11,7 @@ import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
 import { opt, optHex } from '../app/options.js';
+import { applyDisplay, paneDisplay, displayItems, setDisplayStyle } from '../displaystyle.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
@@ -73,9 +74,6 @@ export const COLORS = {
   get sel() { return optHex('selColor'); }, get plane() { return optHex('planeColor'); },
 };
 
-// ghost preview colours: added volume, removed volume, body before the feature
-export const GHOST_COL = { boss: 0xf2b630, bossEdge: 0xffc83d, cut: 0xe0463c, cutEdge: 0xff5a4a, prev: 0x7d8aa0 };
-
 export class PartDoc {
   constructor(app, doc) {
     this.app = app;
@@ -98,6 +96,8 @@ export class PartDoc {
     this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
     this.viewport = this.vp = this.viewSet.proxy;
     this.viewSet.onLayout = () => app.syncViewportMenu?.(); // close / maximize from the pane buttons
+    this.viewSet.beforePane = (p) => applyDisplay([this.bodyMesh, this.edgeLines], paneDisplay(this, p)); // style per view
+    this.viewSet.displayItems = (p) => displayItems(this, p);
     this.vp.onContextMenu = (e) => this.viewContextMenu(e);
     this.vp.onMiddleClick = () => this.zoomFit(); // double middle click = Zoom to Fit
     this.scene = this.vp.scene;
@@ -116,13 +116,13 @@ export class PartDoc {
     this.updateSketchDisplay();
     this.updatePlanes();
     this.vp.setView('iso', false);
-    this.vp.fit({ min: [-60, -60, -60], max: [60, 60, 60] });
+    { const s = opt('partEmptyViewMm'); this.vp.fit({ min: [-s, -s, -s], max: [s, s, s] }); }
     this.doc.pointClouds ||= [];
     this.clouds = new CloudManager(app, () => this.doc.pointClouds, () => [this.scene], () => { this.renderTree(); this.vp.requestRender(); });
     for (const f of this.doc.features) if (f.type === 'sketch') fixParallelDims(f); // 0.1.89: parallel-line distances measured from the sketch side
     this._autoLink = true; // older parts: fixed converted geometry on model edges gets linked (Options > Sketch)
     this.regen().then(async () => {
-      if (this.doc.viewLayout && this.viewSet.restore(this.doc.viewLayout)) { /* saved panes + views */ } else if (this.mesh?.bbox) this.vp.fit(this.mesh.bbox);
+      if (this.doc.viewLayout && !this._layoutSet && this.viewSet.restore(this.doc.viewLayout)) { /* saved panes + views */ } else if (this.mesh?.bbox) this.vp.fit(this.mesh.bbox);
       if (this.doc.pointClouds.length) { await this.clouds.loadAll(); if (!this.mesh?.bbox) this.zoomFit(); }
     });
     app.setStatusRight('MMGS');
@@ -135,7 +135,7 @@ export class PartDoc {
   toggleGrid() { this.doc.grid = !this.gridOn; this.syncGrid(); this.app.setStatus(`Grid ${this.doc.grid ? 'on' : 'off'} in this document (Viewport menu: default for all)`); this.app.syncViewportMenu?.(); }
 
   // Viewport menu: layout of 1, 2 or 4 panes (saved in the file with each pane's view)
-  setViewLayout(name) { this.viewSet.setLayout(name, { fit: () => this.zoomFit() }); this.app.setStatus(name === 'single' ? 'Single view' : 'Click in a view to make it the active one (blue border); commands like Zoom to Fit and the standard views act on it'); }
+  setViewLayout(name) { this._layoutSet = true; /* a layout picked before the first rebuild ends is kept (0.1.96) */ this.viewSet.setLayout(name, { fit: () => this.zoomFit() }); this.app.setStatus(name === 'single' ? 'Single view' : 'Click in a view to make it the active one (blue border); commands like Zoom to Fit and the standard views act on it'); }
   resetViews() { this.viewSet.resetViews(() => this.zoomFit()); }
   beforeSave() { const s = this.viewSet.toJSON(); if (s.layout === 'single') delete this.doc.viewLayout; else this.doc.viewLayout = s; }
   // Geometry used for picking: while a feature PropertyManager shows a live
@@ -153,7 +153,7 @@ export class PartDoc {
   }
   clearPickBase() { this.pickOverride = undefined; }
 
-  setDisplay(m) { this.displayMode = m; this.applyMesh(this.mesh); }
+  setDisplay(m) { setDisplayStyle(this, m); }
 
   zoomFit() {
     const box = new THREE.Box3();
@@ -165,7 +165,7 @@ export class PartDoc {
       box.expandByPoint(new THREE.Vector3(...this.sketcher.to3([0, 0])));
     }
     if (this.clouds) box.union(this.clouds.box());
-    if (box.isEmpty()) box.set(new THREE.Vector3(-50, -50, -50), new THREE.Vector3(50, 50, 50));
+    if (box.isEmpty()) { const s = opt('partFitEmptyMm'); box.set(new THREE.Vector3(-s, -s, -s), new THREE.Vector3(s, s, s)); }
     this.vp.fit(box);
   }
 
@@ -180,7 +180,7 @@ export class PartDoc {
   snapshot() { return JSON.stringify(this.doc); }
   commit(label) {
     this.undoStack.push(this._last ?? this.snapshot());
-    if (this.undoStack.length > 80) this.undoStack.shift();
+    if (this.undoStack.length > opt('partUndoLevels')) this.undoStack.shift();
     this.redoStack = [];
     this._last = null;
     this.app.setDirty(true);
@@ -331,13 +331,14 @@ export class PartDoc {
   // Feature preview ("ghost"). Extrude / Revolve: the body as it was before the feature stays solid and the volume the
   // feature adds (yellow) or removes (red) is drawn see-through on top. Other features (fillet, chamfer, shell,
   // patterns): the result is shown solid and the body before the feature as a faint see-through outline.
-  showGhost(res, f) {
+  showGhost(res, f, { overlay = false } = {}) {
     const g = res.ghost, tool = g.tool && (f?.type === 'extrude' || f?.type === 'revolve');
     this.clearGhost();
-    this._ghostArgs = [res, f]; // Options window: redraw with new colours / opacities
-    this.ghost = { op: g.op, tool: tool ? g.tool : null, prev: tool ? null : g.prev, result: res.mesh };
+    this._ghostArgs = [res, f, { overlay }]; // Options window: redraw with new colours / opacities
+    this.ghost = { op: g.op, tool: tool ? g.tool : null, prev: tool ? null : g.prev, result: res.mesh, overlay };
+    if (overlay && !tool) return; // tree click: only the added / removed volume over the model as it is
     // boss: body before + the added volume; cut: the real result (the model updates) + the removed volume on top
-    this.applyMesh(tool && g.op !== 'cut' ? g.prev : res.mesh);
+    if (!overlay) this.applyMesh(tool && g.op !== 'cut' ? g.prev : res.mesh);
     const add = (m, color, faceA, edgeA, behindA) => {
       if (!m?.positions?.length) return;
       const geom = new THREE.BufferGeometry();
@@ -362,9 +363,9 @@ export class PartDoc {
     // colours and opacities: Tools > Options > Feature Preview (faces 8 %, inside 4 %, edges 100 %)
     if (tool) {
       const col = new THREE.Color(opt(g.op === 'cut' ? 'ghostCut' : 'ghostBoss'));
-      edgeCol = col.clone().offsetHSL(0, 0, 0.06).getHex();
+      edgeCol = col.clone().offsetHSL(0, 0, opt('ghostEdgeLighten')).getHex();
       add(g.tool, col.getHex(), opt('ghostFace') / 100, opt('ghostEdge') / 100, opt('ghostBehind') / 100);
-    } else add(g.prev, GHOST_COL.prev, opt('ghostPrev') / 100, 0.35, 0);
+    } else add(g.prev, optHex('ghostPrevColor'), opt('ghostPrev') / 100, opt('ghostPrevEdgePct') / 100, 0);
     this.vp.requestRender();
   }
   // kernel tells which group of edges (same owning features) each fillet / chamfer edge belongs to: kept in the edge
@@ -380,6 +381,27 @@ export class PartDoc {
       });
       delete st.refs;
     }
+  }
+  // 0.1.95: one click on an Extrude / Revolve in the tree shows its added (yellow) / removed volume over the model,
+  // like while its dialog is open; cleared when the selection changes. Results cached per feature + model state.
+  async treeGhost() {
+    const one = this.sel.length === 1 && this.sel[0].kind === 'feature' ? this.F(this.sel[0].id) : null;
+    const want = one && (one.type === 'extrude' || one.type === 'revolve') && !this.app.pm.open && !this.sketcher && !one.suppressed ? one : null;
+    if (!want) { if (this.ghost?.overlay) this.clearGhost(); this._treeGhostId = null; return; }
+    if (this._treeGhostId === want.id && this.ghost?.overlay) return;
+    this._treeGhostId = want.id;
+    const i = this.doc.features.indexOf(want), rb = this.doc.rollback;
+    if (rb != null && i >= rb) return; // rolled back: not built
+    const feats = this.doc.features.slice(0, i + 1), key = want.id + ':' + cacheKey(feats);
+    this._ghostCache ??= new Map();
+    let res = this._ghostCache.get(key);
+    if (!res) {
+      try { res = await api.kernel('regen', { features: feats, ghost: true }); } catch { return; }
+      if (!res?.ghost) return;
+      this._ghostCache.set(key, res); if (this._ghostCache.size > opt('ghostCacheSize')) this._ghostCache.delete(this._ghostCache.keys().next().value);
+    }
+    if (this._treeGhostId !== want.id || this.app.pm.open || this.sketcher) return;
+    this.showGhost(res, want, { overlay: true });
   }
   refreshGhost() { if (this.ghost && this._ghostArgs) this.showGhost(...this._ghostArgs); }
   // Options > Colours changed: recolour body, edges, planes and highlights without a rebuild
@@ -406,26 +428,27 @@ export class PartDoc {
     geom.setIndex(new THREE.BufferAttribute(new Uint32Array(m.indices), 1));
     geom.computeVertexNormals();
 
-    const wire = this.displayMode === 'wire';
     const mat = new THREE.MeshStandardMaterial({
-      color: COLORS.body, metalness: 0.18, roughness: 0.42, side: THREE.DoubleSide,
+      color: COLORS.body, metalness: opt('modelMetalness'), roughness: opt('modelRoughness'), side: THREE.DoubleSide,
       polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
-      transparent: wire, opacity: wire ? 0.0 : 1, depthWrite: !wire,
     });
     const mesh = new THREE.Mesh(geom, mat);
-    mesh.name = 'body';
+    mesh.name = 'body'; mesh.userData.disp = 'body'; // display style per view (displaystyle.js)
     g.add(mesh);
     this.bodyMesh = mesh;
     g.visible = !this.doc.bodyHidden;
     this.pickDefault = makePickData(m, mesh);
-    if (this.displayMode !== 'shaded') {
+    {
       const segs = [];
       for (const e of m.edges) { const p = e.pts; for (let i = 3; i < p.length; i += 3) segs.push(p[i - 3], p[i - 2], p[i - 1], p[i], p[i + 1], p[i + 2]); }
       const eg = new THREE.BufferGeometry();
       eg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(segs), 3));
-      const lines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: COLORS.edge, depthTest: !wire }));
+      const lines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: COLORS.edge }));
+      lines.userData.disp = 'edges';
       g.add(lines);
+      this.edgeLines = lines;
     }
+    applyDisplay([mesh, this.edgeLines], paneDisplay(this));
     this.vp.requestRender();
   }
 
@@ -433,9 +456,9 @@ export class PartDoc {
   planeSize() {
     if (this.mesh?.bbox) {
       const b = this.mesh.bbox;
-      return Math.max(20, Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) * 0.7);
+      return Math.max(opt('planeSizeMin'), Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) * opt('planeSizeFactor'));
     }
-    return 60;
+    return opt('planeSizeDefault');
   }
   updatePlanes() {
     const g = this.planeGroup;
@@ -455,11 +478,11 @@ export class PartDoc {
       const hov = (this.hover?.kind === 'plane' && this.hover.name === name) || this.hoverTreePlane === name;
       const col = sel ? COLORS.sel : hov ? COLORS.hover : COLORS.plane;
       const geom = new THREE.BufferGeometry().setFromPoints([corners[0], corners[1], corners[2], corners[0], corners[2], corners[3]]);
-      const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+      const mesh = new THREE.Mesh(geom, new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: opt('planeOpacityPct') / 100, side: THREE.DoubleSide, depthWrite: false }));
       mesh.userData.plane = name;
       g.add(mesh);
       const lg = new THREE.BufferGeometry().setFromPoints([...corners, corners[0]]);
-      g.add(new THREE.Line(lg, new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.8 })));
+      g.add(new THREE.Line(lg, new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: opt('planeEdgeOpacity') })));
     }
     this.vp.requestRender();
   }
@@ -486,14 +509,14 @@ export class PartDoc {
       const selected = this.sel.some((s) => s.kind === 'sketch' && s.id === f.id);
       const hov = (this.hover?.kind === 'sketch' && this.hover.id === f.id) || (this.hoverFeat && (this.hoverFeat === f.id || this.F(this.hoverFeat)?.sketch === f.id));
       // shown through a double-clicked face / tree hover: bright so it reads on top of the model (dark + light mode)
-      const color = selected ? COLORS.sel : hov ? COLORS.hover : shownBy ? new THREE.Color(opt(document.body.classList.contains('dark') ? 'shownSkDark' : 'shownSkLight')).getHex() : 0x3050a0;
+      const color = selected ? COLORS.sel : hov ? COLORS.hover : shownBy ? new THREE.Color(opt(document.body.classList.contains('dark') ? 'shownSkDark' : 'shownSkLight')).getHex() : optHex('modelSketchColor');
       if (pts.length) {
         const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
         const ls = new THREE.LineSegments(geom, new THREE.LineBasicMaterial({ color, depthTest: !shownBy })); if (shownBy) ls.renderOrder = 5; g.add(ls);
       }
       if (cpts.length) {
         const geom = new THREE.BufferGeometry(); geom.setAttribute('position', new THREE.Float32BufferAttribute(cpts, 3));
-        const ls = new THREE.LineSegments(geom, new THREE.LineDashedMaterial({ color, dashSize: 3 * this.vp.scale, gapSize: 2 * this.vp.scale }));
+        const ls = new THREE.LineSegments(geom, new THREE.LineDashedMaterial({ color, dashSize: opt('modelConstrDash') * this.vp.scale, gapSize: opt('modelConstrGap') * this.vp.scale }));
         ls.computeLineDistances(); g.add(ls);
       }
       if (this.featUI?.sketch === f.id) { const fill = this.featFill(f); if (fill) g.add(fill); }
@@ -533,7 +556,7 @@ export function norm(a) { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a
 export function to3(fr, p) { return [fr.o[0] + fr.x[0] * p[0] + fr.y[0] * p[1], fr.o[1] + fr.x[1] * p[0] + fr.y[1] * p[1], fr.o[2] + fr.x[2] * p[0] + fr.y[2] * p[1]]; }
 export function segDist(p, a, b) {
   const dx = b[0] - a[0], dy = b[1] - a[1];
-  const L2 = dx * dx + dy * dy || 1e-9;
+  const L2 = dx * dx + dy * dy || opt('geomEpsTiny');
   const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
   return Math.hypot(p[0] - a[0] - dx * t, p[1] - a[1] - dy * t);
 }
@@ -546,7 +569,7 @@ export function circle3(pts) {
   const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
   const nn = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
   const nl = Math.hypot(...nn);
-  if (nl < 1e-12) return null;
+  if (nl < opt('geomEpsZero')) return null;
   const nz = nn.map((v) => v / nl);
   const ux = norm(ab), uy = [nz[1] * ux[2] - nz[2] * ux[1], nz[2] * ux[0] - nz[0] * ux[2], nz[0] * ux[1] - nz[1] * ux[0]];
   const L = (p) => { const d = [p[0] - a[0], p[1] - a[1], p[2] - a[2]]; return [d[0] * ux[0] + d[1] * ux[1] + d[2] * ux[2], d[0] * uy[0] + d[1] * uy[1] + d[2] * uy[2]]; };
