@@ -82,6 +82,7 @@ export class SketchText {
     };
     rows.push(num('Height', () => g.h, (v) => { if (v > 0) g.h = v; }, 'mm'));
     rows.push(num('Rotation', () => ((g.rot || 0) * 180) / Math.PI, (v) => { g.rot = (v * Math.PI) / 180; }, '°'));
+    rows.push(num('Curve accuracy', () => g.tol ?? opt('skTextArcTol'), (v) => { if (v >= 0) g.tol = v; }, 'mm'));
     const alignSel = h('select', {}, ['left', 'center', 'right'].map((a) => h('option', { value: a, selected: (g.align || 'left') === a }, a[0].toUpperCase() + a.slice(1))));
     alignSel.addEventListener('change', () => change(() => { g.align = alignSel.value; }));
     rows.push(h('div', { class: 'sp-field' }, h('label', {}, 'Alignment'), alignSel));
@@ -102,8 +103,13 @@ export class SketchText {
     if (pts.length < 2) return;
     this.pushUndo();
     // linked to the model edge (On Edge): follows it when earlier sketches / features change (Options > Sketch)
-    const ref = opt('linkConvert') && this.host?.mesh ? refFromMeshEdge(edge, this.host.mesh.bbox) : null;
-    const fix = (g) => { if (ref) g.onEdge = ref; this.addCons(ref ? { type: 'fix', e: g.id, onEdge: true } : { type: 'fix', e: g.id }); };
+    // 0.1.132: an edge of another component (Edit in Context) → in-context reference in that part's frame
+    const xref = edge.ctx ? refFromMeshEdge(edge.ctx.e, edge.ctx.bbox) : null;
+    const ref = !edge.ctx && opt('linkConvert') && this.host?.mesh ? refFromMeshEdge(edge, this.host.mesh.bbox) : null;
+    const fix = (g) => {
+      if (xref) { g.xref = this.xrefOf(edge.ctx, xref); this.addCons({ type: 'fix', e: g.id, xref: true }); return; }
+      if (ref) g.onEdge = ref; this.addCons(ref ? { type: 'fix', e: g.id, onEdge: true } : { type: 'fix', e: g.id });
+    };
     if (edge.type === 'line') {
       const l = this.addLine(pts[0], pts[pts.length - 1], construction);
       fix(l);

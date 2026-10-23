@@ -5,6 +5,7 @@
 import { h, fmt, toast } from '../ui.js';
 import { api } from '../api.js';
 import { annValue, centroid } from './dims.js';
+import { dragOut, enablePopOut } from '../popout.js';
 import { opt } from '../app/options.js';
 
 const log = (...a) => { try { window.__lithLog?.(...a); } catch {} };
@@ -46,8 +47,8 @@ export class DrawingRooms {
     head.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || e.target.closest('button')) return;
       e.preventDefault();
-      const x0 = e.clientX, y0 = e.clientY, l0 = el.offsetLeft, t0 = el.offsetTop;
-      const mv = (ev) => { const host = this.vp.el.getBoundingClientRect(); el.style.left = Math.max(0, Math.min(host.width - el.offsetWidth, l0 + ev.clientX - x0)) + 'px'; el.style.top = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), t0 + ev.clientY - y0)) + 'px'; };
+      const x0 = e.clientX, y0 = e.clientY, l0 = el.offsetLeft, t0 = el.offsetTop, wr = el.getBoundingClientRect(), grab = [x0 - wr.left, y0 - wr.top];
+      const mv = (ev) => { if (dragOut(el, ev, grab)) { up(); return; } const host = this.vp.el.getBoundingClientRect(); el.style.left = Math.max(0, Math.min(host.width - el.offsetWidth, l0 + ev.clientX - x0)) + 'px'; el.style.top = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), t0 + ev.clientY - y0)) + 'px'; };
       const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); lsSet(LIST_POS, [el.offsetLeft, el.offsetTop]); };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
@@ -59,6 +60,7 @@ export class DrawingRooms {
     const pm = opt('drPopupMarginPx'), x = pos ? pos[0] : pm, y = pos ? pos[1] : Math.max(pm, host.height - el.offsetHeight - pm);
     el.style.left = Math.max(0, Math.min(host.width - el.offsetWidth, x)) + 'px'; el.style.top = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), y)) + 'px';
     this.keepRoomListIn();
+    enablePopOut(el, '.ap-head', 'monolith.roomList'); // 0.1.129: ⧉ = own window
     this.app.cm.refresh();
   }
   // called after every repaint: rebuild only when a name, value or the selection changed
@@ -68,7 +70,8 @@ export class DrawingRooms {
     const sig = JSON.stringify([rows.map((r) => [r.a.id, r.name, r.area.toFixed(4), r.per.toFixed(3)]), this.selAnn?.id, lsGet(LIST_SORT)]);
     if (!force && sig === this._rlSig) return;
     // do not pull a field away from under the cursor while typing a name
-    if (!force && this._rl.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+    const act = this._rl.ownerDocument.activeElement; // (the list may be in its own window, 0.1.129)
+    if (!force && this._rl.contains(act) && act?.tagName === 'INPUT') return;
     this._rlSig = sig;
     const sort = lsGet(LIST_SORT) || { k: 'name', dir: 1 };
     const cmp = { name: (a, b) => coll.compare(a.name, b.name), area: (a, b) => a.area - b.area, per: (a, b) => a.per - b.per, w: (a, b) => a.w - b.w, l: (a, b) => a.l - b.l, where: (a, b) => coll.compare(a.where, b.where) }[sort.k] || ((a, b) => coll.compare(a.name, b.name));

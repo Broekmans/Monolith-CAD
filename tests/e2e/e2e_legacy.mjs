@@ -1,5 +1,6 @@
 // Old-format files: .ekprt opens with path switched to .lithprt; existing .lithprt sibling is preferred;
 // assembly components pointing at .ekprt use the .lithprt next to it
+import { FORMAT } from '../../shared/format.mjs'; // 0.1.115: part format 2
 import { launch } from './common.mjs';
 import fs from 'node:fs';
 const T = await launch('part');
@@ -11,7 +12,7 @@ await win.evaluate(async (p) => { await lithApp.open(p); }, p); await W(2000); a
 console.log('no sibling', await win.evaluate(() => lithApp.cur().path));
 await win.evaluate(() => lithApp.cur().save()); await W(500);
 console.log('saved lith exists', fs.existsSync(np), 'has cache', !!JSON.parse(fs.readFileSync(np, 'utf8')).cache);
-{ const d = JSON.parse(fs.readFileSync(np, 'utf8')); console.log('format', d.version === 1 && /^\d+\.\d+\.\d+$/.test(d.savedWith) ? 'OK' : 'BAD', d.version, d.savedWith); }
+{ const d = JSON.parse(fs.readFileSync(np, 'utf8')); console.log('format', d.version === FORMAT.part && /^\d+\.\d+\.\d+$/.test(d.savedWith) ? 'OK' : 'BAD', d.version, d.savedWith); }
 await win.evaluate(async () => { for (const t of [...lithApp.tabs]) { t.dirty = false; await lithApp.closeTab(t); } });
 await win.evaluate(async (p) => { await lithApp.open(p); }, p); await W(1500);
 console.log('sibling', await win.evaluate(() => lithApp.cur().path));
@@ -30,6 +31,6 @@ console.log('asm comp', await win.evaluate(() => [lithApp.doc.doc.components[0].
   const warn = await win.evaluate(() => [...document.querySelectorAll('.toast.warn')].map((t) => t.textContent).join(' | '));
   console.log('newer', /newer MonoLith version/.test(warn) ? 'OK' : 'BAD', await win.evaluate(() => lithApp.doc.doc.version + ' ' + !!lithApp.doc.mesh));
   await win.evaluate(async () => { await lithApp.open('/tmp/fmt_nov.lithprt'); }); await W(1500); await T.idle();
-  console.log('no version', await win.evaluate(() => lithApp.doc.doc.version === 1 && !!lithApp.doc.mesh ? 'OK' : 'BAD'));
+  console.log('no version', await win.evaluate((v) => lithApp.doc.doc.version === v && !!lithApp.doc.mesh ? 'OK' : 'BAD', FORMAT.part));
 }
 await T.app.close();

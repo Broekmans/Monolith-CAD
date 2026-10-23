@@ -1,11 +1,11 @@
 // Geometry kernel regression tests (run: npm run test:kernel)
-import initOpenCascade from 'opencascade.js/dist/node.js';
+import initOpenCascade from 'replicad-opencascadejs';
 import assert from 'node:assert/strict';
 import * as K from '../kernel/occ.mjs';
 import { parseDxf, planToDxf } from '../renderer/src/io/dxf.js';
 import { initSolver, solve, analyzeDefinition } from '../renderer/src/sketch/solver.js';
 
-await K.initKernel(() => initOpenCascade({ module: { print() {}, printErr() {} } }));
+await K.initKernel(() => initOpenCascade({ print() {}, printErr() {} }));
 await initSolver();
 const near = (a, b, tol = 1e-3) => assert.ok(Math.abs(a - b) <= tol * Math.max(1, Math.abs(b)), `${a} != ${b}`);
 const rect = (id, plane, x0, y0, x1, y1, extra = []) => ({ id, type: 'sketch', plane, geo: [
@@ -31,13 +31,14 @@ test('fillet survives upstream edit', () => {
   f[1].depth = 40;
   assert.equal(K.regenerate(f).status[2].state, 'ok');
 });
-test('STEP and IGES round trip', () => {
+{ // STEP and IGES round trip (IGES through the older build, 0.1.109)
   const body = K.regenerate([rect('s', K.STD_PLANES.Top, 0, 0, 10, 10), { id: 'e', type: 'extrude', sketch: 's', depth: 10, end: 'blind', op: 'boss' }]).body;
-  for (const [txt, fmt] of [[K.writeStep(body), 'step'], [K.writeIges(body), 'iges']]) {
-    const r = K.importToStep(txt, fmt);
+  for (const [txt, fmt] of [[K.writeStep(body), 'step'], [await K.writeIges(body), 'iges']]) {
+    const r = await K.importToStep(txt, fmt);
     near(K.massProps(K.regenerate([{ id: 'i', type: 'import', format: 'step', data: r.step }]).body).volume, 1000);
   }
-});
+  n++; console.log('ok - STEP and IGES round trip');
+}
 test('plan model', () => assert.ok(K.massProps(K.buildPlanModel([{ id: 'w', type: 'wall', a: [0, 0], b: [4000, 0], t: 200, h: 2500 }, { id: 'd', type: 'door', wall: 'w', pos: 1000, w: 900, h: 2100 }])).volume > 0));
 test('sketch solver: fully defined rectangle', () => {
   const sk = { geo: [{ id: 'O', type: 'point', x: 0, y: 0, fixed: true }, { id: 'p1', type: 'point', x: 1, y: 1 }, { id: 'p2', type: 'point', x: 50, y: 2 }, { id: 'p3', type: 'point', x: 52, y: 30 }, { id: 'p4', type: 'point', x: 0, y: 31 },

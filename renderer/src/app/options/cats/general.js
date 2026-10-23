@@ -8,5 +8,8 @@ export default [
   { key: 'toastSec', cat, label: 'Messages stay visible for', type: 'num', def: 3.5, min: 1, max: 30, step: 0.5, unit: 's' },
   { key: 'actionLog', cat, group: 'Logging', label: 'Action log (Logs folder)', type: 'bool', def: true, apply: (a, v) => a.setActionLog?.(v) },
   { key: 'trackOptions', cat, group: 'Logging', label: 'Record my setting changes (Logs\\option-changes.json)', type: 'bool', def: true },
+  { key: 'kernelMulti', cat, group: 'Geometry kernel', label: 'Use all CPU cores for rebuilds (booleans, meshing)', type: 'bool', def: false, oldDefs: [true], apply: (a, v) => a.setKernelMode?.(v) }, // 0.1.114: default off (Wouter's PC: only 0.2 s of 2 s faster on Tekst test)
+  { key: 'kernelThreadsMax', hidden: true, label: 'Multi-thread kernel: at most this many threads', def: 16 },
+  { key: 'logRebuildMs', hidden: true, label: 'Action log: rebuilds that take at least this long are logged with their time (ms)', def: 500 },
   { key: '_dwg', cat, group: 'Files', label: 'DWG converter', type: 'button', text: 'DWG Converter…', run: (a) => a.dwgHelp() },
 ];

@@ -8,6 +8,7 @@ import { h, fmt, contextMenu, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { api } from '../api.js';
 import { opt } from '../app/options.js';
+import { treePad } from '../treeui.js';
 import { loadPart } from '../assembly/assembly.js';
 import { SIZES, SCALES, STD, scaleText, scaleVal, projected, isOrtho, viewRect, frameRect, sheetPrims, sheetSize, drawArea, TB_FIELDS, zoneGrid } from './sheet.js';
 
@@ -501,7 +502,7 @@ export class DrawingDoc {
     if (!tree) return;
     tree.innerHTML = '';
     const row = (o) => {
-      const r = h('div', { class: 'tr-row' + (o.sel ? ' sel' : ''), style: { paddingLeft: 6 + (o.depth || 0) * 16 + 'px' }, title: o.tip || '' },
+      const r = h('div', { class: 'tr-row' + (o.sel ? ' sel' : ''), style: { paddingLeft: treePad(o.depth) + 'px' }, title: o.tip || '' },
         h('span', { class: 'twisty' }), h('span', { class: 'ico sm', html: icon(o.icon) }), h('span', { class: 'tr-label' }, o.label));
       r.addEventListener('click', (e) => o.onClick?.(e));
       r.addEventListener('dblclick', (e) => o.onDbl?.(e));

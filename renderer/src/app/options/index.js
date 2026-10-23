@@ -7,6 +7,7 @@
 // Values: factory defaults (rows' def) < "My Defaults" file (<CAD Program>\monolith-options.json, IPC options:cfg)
 // < current values (localStorage monolith.options). Pure module (no app imports) so any code can read it.
 import general from './cats/general.js';
+import iface from './cats/interface.js';
 import view from './cats/view.js';
 import viewports from './cats/viewports.js';
 import colours from './cats/colours.js';
@@ -19,8 +20,11 @@ import common from './cats/common.js';
 import sketchvals from './cats/sketchvals.js';
 import partvals from './cats/partvals.js';
 import drawingvals from './cats/drawingvals.js';
+import display from './cats/display.js';
+import cloudvals from './cats/cloudvals.js';
+import assembly from './cats/assembly.js';
 
-export const OPTIONS_DEF = [...general, ...view, ...viewports, ...colours, ...sketch, ...features, ...section, ...drawings, ...clouds, ...common, ...sketchvals, ...partvals, ...drawingvals];
+export const OPTIONS_DEF = [...general, ...iface, ...view, ...viewports, ...display, ...colours, ...sketch, ...features, ...assembly, ...section, ...drawings, ...clouds, ...common, ...sketchvals, ...partvals, ...drawingvals, ...cloudvals];
 export const OPTIONS_SHOWN = OPTIONS_DEF.filter((d) => !d.hidden);
 export const OPT_CATS = [...new Set(OPTIONS_SHOWN.map((d) => d.cat))];
 const TEST = !!globalThis.window?.monolith?.isTest;

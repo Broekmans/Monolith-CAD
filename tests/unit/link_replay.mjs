@@ -4,13 +4,13 @@
 // node tests/unit/link_replay.mjs <part> drive Sketch2 158 168 = set Sketch2's dashed size 158 to 168: finds the
 // dimension in an earlier sketch that drives it (driveChain).
 import fs from 'node:fs';
-import initOpenCascade from 'opencascade.js/dist/node.js';
+import initOpenCascade from 'replicad-opencascadejs';
 import * as K from '../../kernel/occ.mjs';
 import { initSolver, solve } from '../../renderer/src/sketch/solver.js';
 import { relinkChain } from '../../renderer/src/part/linkgeom.js';
 import { solveStepped, autoDims } from '../../renderer/src/part/drive.js';
 import { driveChain } from '../../renderer/src/part/drivechain.js';
-await K.initKernel(() => initOpenCascade({ module: { print() {}, printErr() {} } }));
+await K.initKernel(() => initOpenCascade({ print() {}, printErr() {} }));
 await initSolver();
 const doc = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const F = doc.features;

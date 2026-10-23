@@ -45,8 +45,11 @@ const MAX_HELPERS = process.env.MONOLITH_HELPERS != null ? +process.env.MONOLITH
 const helpers = []; // { w, ready, busy, job, idleTimer }
 const regenQueue = []; // { op, args, resolve }
 let mainBusy = 0; // regen jobs currently running on the main worker
+// 0.1.111: multi-thread kernel build (Options > General > Geometry kernel, sent by the renderer at start / on change)
+let kernelMulti = process.env.MONOLITH_KERNEL ? process.env.MONOLITH_KERNEL === 'multi' : false; // 0.1.114: single by default (Options kernelMulti)
+const workerOpts = (helper) => ({ workerData: { multi: kernelMulti && !helper } }); // helpers (parallel part rebuilds) stay single-thread
 function startWorker() {
-  worker = new Worker(pathToFileURL(KERNEL_PATH()));
+  worker = new Worker(pathToFileURL(KERNEL_PATH()), workerOpts());
   worker.on('message', (m) => {
     if (m.ready || m.fatal) { if (m.fatal) console.error('Kernel failed:', m.fatal); return; }
     const p = pending.get(m.id);
@@ -58,7 +61,7 @@ function startWorker() {
   worker.on('error', (e) => { console.error('Kernel worker error', e); for (const p of pending.values()) p.resolve({ __error: String(e) }); pending.clear(); mainBusy = 0; startWorker(); });
 }
 function startHelper() {
-  const h = { w: new Worker(pathToFileURL(KERNEL_PATH())), ready: false, busy: false, job: null, idleTimer: null };
+  const h = { w: new Worker(pathToFileURL(KERNEL_PATH()), workerOpts(true)), ready: false, busy: false, job: null, idleTimer: null };
   helpers.push(h);
   const drop = () => { const i = helpers.indexOf(h); if (i >= 0) helpers.splice(i, 1); clearTimeout(h.idleTimer); };
   h.w.on('message', (m) => {
@@ -107,6 +110,22 @@ function kernel(op, args) {
   });
 }
 
+// switch single / multi-thread build: waits until the kernel is idle, restarts the workers; resolves with the new
+// kernel's info { mode, cores, fallback? }
+async function setKernelMode(multi) {
+  multi = !!multi;
+  if (process.env.MONOLITH_KERNEL) multi = process.env.MONOLITH_KERNEL === 'multi'; // forced (tests, trouble shooting)
+  if (multi !== kernelMulti && worker) {
+    while (pending.size || mainBusy || regenQueue.length || helpers.some((h) => h.busy)) await new Promise((r) => setTimeout(r, 200));
+    kernelMulti = multi;
+    worker.removeAllListeners('error'); worker.terminate();
+    for (const h of helpers.splice(0)) { clearTimeout(h.idleTimer); h.w.terminate(); }
+    startWorker();
+  }
+  kernelMulti = multi;
+  return kernel('info');
+}
+
 function stopWorkers() { worker?.terminate(); pcWorker?.terminate(); for (const h of helpers) h.w.terminate(); }
 
-module.exports = { pcCall, startWorker, kernel, stopWorkers };
+module.exports = { pcCall, startWorker, kernel, stopWorkers, setKernelMode };

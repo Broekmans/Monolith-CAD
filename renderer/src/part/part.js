@@ -1,8 +1,9 @@
 // Part document: SolidWorks/Inventor-style feature-based modeling with a
 // FeatureManager tree, PropertyManager feature dialogs, sketches on planes or
 // faces, rollback, suppression, and live regeneration through the kernel.
-import { cacheKey } from '../meshcache.js';
+import { cacheKey, cachedMesh } from '../meshcache.js';
 import * as THREE from 'three';
+import { clearAsmContext } from './context.js';
 import { Viewport } from '../viewport.js';
 import { ViewSet } from '../viewset.js';
 import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
@@ -12,6 +13,8 @@ import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
 import { opt, optHex } from '../app/options.js';
 import { applyDisplay, paneDisplay, displayItems, setDisplayStyle } from '../displaystyle.js';
+import { resolveAppearance, ensureLook, paneLook, envFor } from '../appearance/look.js';
+import { Stage } from '../appearance/stage.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
@@ -25,6 +28,7 @@ import { PartExchange } from './exchange.js';
 import { PartCommands } from './commands.js';
 import { PartFeatureUI } from './featureui.js';
 import { PartConvertLink } from './convertlink.js';
+import { PartXref } from './xref.js';
 import { PartDimDrag } from './dimdrag.js';
 import { hasLinks } from './linkgeom.js';
 import { fixParallelDims } from './drive.js';
@@ -51,23 +55,26 @@ export const FEATURE_META = {
 };
 export const metaKey = (f) => (f.type === 'extrude' && f.op === 'cut' ? 'extrudeCut' : f.type === 'revolve' && f.op === 'cut' ? 'revolveCut' : f.type);
 
+// appearance = default look of the material (appearance/library.js); 'Not specified' keeps the Part body colour (Options)
 export const MATERIALS = [
   { name: 'Not specified', density: 1.0 },
-  { name: 'Plain Carbon Steel', density: 7.8 },
-  { name: 'AISI 304 Stainless', density: 8.0 },
-  { name: '6061 Aluminium Alloy', density: 2.7 },
-  { name: 'Brass', density: 8.5 },
-  { name: 'Copper', density: 8.9 },
-  { name: 'Titanium Ti-6Al-4V', density: 4.43 },
-  { name: 'ABS', density: 1.04 },
-  { name: 'Nylon 6/6', density: 1.14 },
-  { name: 'Oak', density: 0.75 },
+  { name: 'Plain Carbon Steel', density: 7.8, appearance: 'Satin Steel' },
+  { name: 'AISI 304 Stainless', density: 8.0, appearance: 'Stainless Steel' },
+  { name: '6061 Aluminium Alloy', density: 2.7, appearance: 'Satin Aluminium' },
+  { name: 'Brass', density: 8.5, appearance: 'Brass' },
+  { name: 'Copper', density: 8.9, appearance: 'Copper' },
+  { name: 'Titanium Ti-6Al-4V', density: 4.43, appearance: 'Titanium' },
+  { name: 'ABS', density: 1.04, appearance: 'Matte White Plastic' },
+  { name: 'Nylon 6/6', density: 1.14, appearance: 'Natural Nylon' },
+  { name: 'Oak', density: 0.75, appearance: 'Oak' },
 ];
 
 export function newPartDoc(name = 'Part1') {
   return { kind: 'part', version: 1, name, units: 'mm', material: 'Not specified', features: [], rollback: null, next: 1 };
 }
 
+// JSON with sorted object keys (same features → same text, whatever order their properties were written in)
+export function stableKey(v) { return JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map((q) => [q, x[q]])) : x)); }
 // model colours = Options > Colours (read live, so a change shows after applyColors / the next redraw)
 export const COLORS = {
   get body() { return optHex('bodyColor'); }, get edge() { return optHex('edgeColor'); }, get hover() { return optHex('hoverColor'); },
@@ -96,7 +103,15 @@ export class PartDoc {
     this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
     this.viewport = this.vp = this.viewSet.proxy;
     this.viewSet.onLayout = () => app.syncViewportMenu?.(); // close / maximize from the pane buttons
-    this.viewSet.beforePane = (p) => applyDisplay([this.bodyMesh, this.edgeLines], paneDisplay(this, p)); // style per view
+    this.viewSet.beforePane = (p) => { // style per view; appearance materials follow the part (undo, Options) here
+      const m = paneDisplay(this, p);
+      ensureLook(this.bodyMesh, this.appearance());
+      applyDisplay([this.bodyMesh, this.edgeLines], m);
+      paneLook(p, m, [this.bodyMesh]);
+      const real = m === 'realistic'; // ground shadow / floor reflection (appearance/stage.js), worked out only when shown
+      if (real) { this.stage ||= new Stage(this.scene); this.stage.sync([this.bodyMesh]); this.stage.setEnv(envFor(p.renderer)); }
+      this.stage?.show(real);
+    };
     this.viewSet.displayItems = (p) => displayItems(this, p);
     this.vp.onContextMenu = (e) => this.viewContextMenu(e);
     this.vp.onMiddleClick = () => this.zoomFit(); // double middle click = Zoom to Fit
@@ -121,13 +136,25 @@ export class PartDoc {
     this.clouds = new CloudManager(app, () => this.doc.pointClouds, () => [this.scene], () => { this.renderTree(); this.vp.requestRender(); });
     for (const f of this.doc.features) if (f.type === 'sketch') fixParallelDims(f); // 0.1.89: parallel-line distances measured from the sketch side
     this._autoLink = true; // older parts: fixed converted geometry on model edges gets linked (Options > Sketch)
+    // 0.1.107: the model saved in the file shows at once; the full rebuild runs behind it and replaces it
+    const saved = cachedMesh(this._openCache); this._openCache = null;
+    if (saved) {
+      this.applyMesh(saved);
+      this.savedMesh = { key: cacheKey(this.doc.features, this.doc.rollback ?? undefined), mesh: saved };
+      if (!(this.doc.viewLayout && this.viewSet.restore(this.doc.viewLayout))) this.vp.fit(saved.bbox);
+      this._viewDone = this.camSnap(); // view at open: if the user turns / zooms before the rebuild ends, it is kept
+      this.app.setStatus('Shown as saved, rebuilding the features…');
+      window.__lithLog?.('OPEN saved model shown, rebuilding');
+    }
     this.regen().then(async () => {
-      if (this.doc.viewLayout && !this._layoutSet && this.viewSet.restore(this.doc.viewLayout)) { /* saved panes + views */ } else if (this.mesh?.bbox) this.vp.fit(this.mesh.bbox);
+      const moved = this._viewDone && !this._layoutSet && this.camSnap() !== this._viewDone; this._viewDone = null;
+      if (moved) { /* saved model shown at open and the user already moved the view: keep it */ } else if (this.doc.viewLayout && !this._layoutSet && this.viewSet.restore(this.doc.viewLayout)) { /* saved panes + views */ } else if (this.mesh?.bbox) this.vp.fit(this.mesh.bbox);
       if (this.doc.pointClouds.length) { await this.clouds.loadAll(); if (!this.mesh?.bbox) this.zoomFit(); }
     });
     app.setStatusRight('MMGS');
   }
 
+  camSnap() { const v = this.viewSet.active || this.vp; return JSON.stringify([v.target?.toArray?.(), v.scale, v.camera?.quaternion?.toArray?.()].map((x) => (Array.isArray(x) ? x.map((q) => +q.toFixed(6)) : x))); }
   get title() { return this.doc.name; }
   // grid on the Top plane, or on the sketch plane while sketching; doc.grid overrides the program default
   get gridOn() { return this.doc.grid ?? this.app.gridDefault?.() ?? true; }
@@ -297,9 +324,11 @@ export class PartDoc {
       }
       if (token !== this.regenToken) return null;
       const ghost = !!previewFeatures && !!opts.ghost;
-      const res = await api.kernel('regen', { features, upTo, ghost });
+      const res = ghost ? await this.ghostFor(features) : await api.kernel('regen', { features, upTo, ghost });
+      if (res?.ms && !ghost && res.ms.total >= opt('logRebuildMs')) try { window.__lithLog?.(`REBUILD ${features.length} features: ${(res.ms.rebuild / 1000).toFixed(2)} s rebuild + ${((res.ms.total - res.ms.rebuild) / 1000).toFixed(2)} s mesh`); } catch { /* log optional */ }
       if (token !== this.regenToken) return res;
       this.linkStatus(link, res.status);
+      this.xrefStatus(res.status); // 0.1.132
       if (ghost && res.ghost) this.showGhost(res, features[features.length - 1]);
       else { this.clearGhost(); this.applyMesh(res.mesh); }
       this.mass = res.mass;
@@ -392,21 +421,33 @@ export class PartDoc {
     this._treeGhostId = want.id;
     const i = this.doc.features.indexOf(want), rb = this.doc.rollback;
     if (rb != null && i >= rb) return; // rolled back: not built
-    const feats = this.doc.features.slice(0, i + 1), key = want.id + ':' + cacheKey(feats);
-    this._ghostCache ??= new Map();
-    let res = this._ghostCache.get(key);
-    if (!res) {
-      try { res = await api.kernel('regen', { features: feats, ghost: true }); } catch { return; }
-      if (!res?.ghost) return;
-      this._ghostCache.set(key, res); if (this._ghostCache.size > opt('ghostCacheSize')) this._ghostCache.delete(this._ghostCache.keys().next().value);
-    }
+    const feats = this.doc.features.slice(0, i + 1);
+    let res; try { res = await this.ghostFor(feats); } catch { return; }
+    if (!res?.ghost) return;
     if (this._treeGhostId !== want.id || this.app.pm.open || this.sketcher) return;
     this.showGhost(res, want, { overlay: true });
   }
+  // 0.1.107: feature preview results shared between the tree click and the feature dialog (double click = edit):
+  // the same feature list is calculated once; a request still running is shared too. Key ignores property order.
+  ghostFor(feats) {
+    const key = stableKey(feats);
+    this._ghostCache ??= new Map();
+    let pr = this._ghostCache.get(key);
+    if (pr) { this._ghostCache.delete(key); this._ghostCache.set(key, pr); window.__lithLog?.('PREVIEW shared'); return pr; }
+    const drop = () => { if (this._ghostCache.get(key) === pr) this._ghostCache.delete(key); };
+    pr = api.kernel('regen', { features: feats, ghost: true }).then((r) => { if (!r?.ghost || r.status?.some((x) => x.state === 'error')) drop(); return r; }, (e) => { drop(); throw e; });
+    this._ghostCache.set(key, pr);
+    if (this._ghostCache.size > opt('ghostCacheSize')) this._ghostCache.delete(this._ghostCache.keys().next().value);
+    return pr;
+  }
   refreshGhost() { if (this.ghost && this._ghostArgs) this.showGhost(...this._ghostArgs); }
   // Options > Colours changed: recolour body, edges, planes and highlights without a rebuild
-  applyColors() {
-    this.bodyMesh?.material.color.setHex(COLORS.body);
+  // resolved appearance of the part (own → material → Part body colour of Options), appearance/look.js
+  appearance() {
+    const mat = MATERIALS.find((m) => m.name === this.doc.material);
+    return resolveAppearance(this.doc.appearance, mat?.appearance, { color: COLORS.body, metalness: opt('modelMetalness'), roughness: opt('modelRoughness') });
+  }
+  applyColors() { // body colour: the next draw rebuilds the appearance materials (ensureLook)
     this.bodyGroup?.traverse((o) => { if (o.isLineSegments) o.material.color.setHex(COLORS.edge); });
     this.updatePlanes?.(); this.updateHighlights?.(); this.vp?.requestRender();
   }
@@ -420,7 +461,7 @@ export class PartDoc {
   applyMesh(m) {
     this.mesh = m;
     const g = this.bodyGroup;
-    for (const o of [...g.children]) { g.remove(o); o.geometry?.dispose(); }
+    for (const o of [...g.children]) { g.remove(o); o.geometry?.dispose(); const L = o.userData.look; if (L) { L.shaded.dispose(); L.real.dispose(); } }
     this.clearHighlights();
     if (!m || !m.positions?.length) { this.bodyMesh = null; this.pickDefault = null; this.vp.requestRender(); return; }
     const geom = new THREE.BufferGeometry();
@@ -428,12 +469,9 @@ export class PartDoc {
     geom.setIndex(new THREE.BufferAttribute(new Uint32Array(m.indices), 1));
     geom.computeVertexNormals();
 
-    const mat = new THREE.MeshStandardMaterial({
-      color: COLORS.body, metalness: opt('modelMetalness'), roughness: opt('modelRoughness'), side: THREE.DoubleSide,
-      polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
-    });
-    const mesh = new THREE.Mesh(geom, mat);
+    const mesh = new THREE.Mesh(geom);
     mesh.name = 'body'; mesh.userData.disp = 'body'; // display style per view (displaystyle.js)
+    ensureLook(mesh, this.appearance()); // Shaded + Realistic materials (appearance/look.js)
     g.add(mesh);
     this.bodyMesh = mesh;
     g.visible = !this.doc.bodyHidden;
@@ -525,6 +563,7 @@ export class PartDoc {
   }
 
   dispose() {
+    clearAsmContext(this); // Edit in Context (0.1.130)
     this.clouds?.dispose();
     this.sketcher?.dispose();
     this.vp.dispose();
@@ -588,4 +627,4 @@ export function edgeAxis(ed) {
 }
 
 // mix in methods split off into separate files
-for (const M of [PartPicking, PartTree, PartSketching, PartFeatures, PartExchange, PartCommands, PartFeatureUI, PartConvertLink, PartDimDrag]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(PartDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));
+for (const M of [PartPicking, PartTree, PartSketching, PartFeatures, PartExchange, PartCommands, PartFeatureUI, PartConvertLink, PartXref, PartDimDrag]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(PartDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));

@@ -24,7 +24,7 @@ export class AppFiles {
     if (path) {
       const name = path.split(/[\\/]/).pop();
       let up; try { up = upgradeDoc(docData); } catch (e) { toast(`${name}: ${e.message}`, 'error'); return null; }
-      if (up.upgraded) { window.__lithLog?.('FORMAT', name, `upgraded ${up.kind} format ${up.from} -> ${up.to}`); toast(`${name} was made with an older format and has been updated (it is saved in the new format)`, 'info', 4000); }
+      if (up.upgraded) { window.__lithLog?.('FORMAT', name, `upgraded ${up.kind} format ${up.from} -> ${up.to}`); toast(`${name} was made with an older format. It is updated now and will be saved in the new format when you save it`, 'info', 4000); }
       if (up.newer) { window.__lithLog?.('FORMAT', name, `newer ${up.kind} format ${up.from}`); toast(`${name} was made with a newer ${APP_NAME} version. You can view it; saving it here may lose things this version does not know.`, 'warn', 9000); }
     }
     const t = app.newTab();
@@ -32,8 +32,11 @@ export class AppFiles {
     // old-format file (.ek*): from now on it lives as .lith* next to it; Save writes there directly
     t.path = path ? path.replace(/\.ek(prt|asm|pln)$/i, '.lith$1') : null;
     t.dirty = false;
-    if (docData.kind === 'part') delete docData.cache; // display cache is only for assemblies; rebuilt on save
+    // part: the saved model is shown at once while the features rebuild (0.1.107); not kept in the document itself
+    let openCache = null;
+    if (docData.kind === 'part') { openCache = docData.cache || null; delete docData.cache; }
     t.doc = docData.kind === 'drawing' ? new DrawingDoc(t, docData) : docData.kind === 'cloud' ? new CloudDoc(t, docData) : docData.kind === 'plan' ? new PlanDoc(t, docData) : docData.kind === 'assembly' ? new AssemblyDoc(t, docData) : new PartDoc(t, docData);
+    if (openCache) t.doc._openCache = { ...docData, cache: openCache };
     document.body.dataset.kind = docData.kind;
     t.showPanel('tree');
     t.doc.init();

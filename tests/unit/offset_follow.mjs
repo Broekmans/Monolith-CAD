@@ -1,12 +1,12 @@
 // 0.1.94: offset of model edges follows the model. node tests/unit/offset_follow.mjs <part> <sketch> <dimId> <value> <offsetSketch>
 // Changes one dimension, relinks the chain (as the app does on rebuild) and prints the extent of every offset chain.
 import fs from 'node:fs';
-import initOpenCascade from 'opencascade.js/dist/node.js';
+import initOpenCascade from 'replicad-opencascadejs';
 import * as K from '../../kernel/occ.mjs';
 import { initSolver, solve } from '../../renderer/src/sketch/solver.js';
 import { relinkChain } from '../../renderer/src/part/linkgeom.js';
 import { solveStepped } from '../../renderer/src/part/drive.js';
-await K.initKernel(() => initOpenCascade({ module: { print() {}, printErr() {} } }));
+await K.initKernel(() => initOpenCascade({ print() {}, printErr() {} }));
 await initSolver();
 const [file, skName, dimId, value, offName] = process.argv.slice(2);
 const F = JSON.parse(fs.readFileSync(file, 'utf8')).features;

@@ -159,8 +159,8 @@ export function autoLink(sk, base, fr) {
   const corners = vertices(base);
   let n = 0;
   for (const c of sk.cons || []) {
-    if (c.type !== 'fix' || c.onEdge) continue;
-    const g = G.get(c.e); if (!g || g.onEdge || g.origin) continue;
+    if (c.type !== 'fix' || c.onEdge || c.xref) continue;
+    const g = G.get(c.e); if (!g || g.onEdge || g.xref || g.origin) continue;
     let ref = null;
     if (g.type === 'line') {
       const A = P(g.p1), B = P(g.p2); if (!A || !B) continue;
@@ -204,7 +204,68 @@ export function autoLink(sk, base, fr) {
 }
 
 export const hasLinks = (sk) => sk?.type === 'sketch' && (sk.geo || []).some((g) => g.onEdge);
-export const hasFixed = (sk) => sk?.type === 'sketch' && (sk.cons || []).some((c) => c.type === 'fix' && !c.onEdge);
+export const hasFixed = (sk) => sk?.type === 'sketch' && (sk.cons || []).some((c) => c.type === 'fix' && !c.onEdge && !c.xref);
+export const hasXrefs = (sk) => sk?.type === 'sketch' && (sk.geo || []).some((g) => g.xref);
+
+// ---------- In-context references (0.1.132) ----------
+// Geometry converted from an edge / corner of ANOTHER component while the part is edited in an assembly keeps
+// `g.xref = {asm, comp, compName, file, ref}`; ref = the edge in that component's own part frame (same form as onEdge).
+// Its Fix relation has `xref: true` (not onEdge), so the part's own On Edge links and older versions leave it alone.
+// bases: Map comp id → {edges (line / circle refs in the other part's frame), bbox, m (16, column-major: other part → this part)}
+export const xfPoint = (m, p) => [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12], m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13], m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]];
+// a part's displayed edges as match candidates (same form as the kernel's linkBase edges)
+export function xrefBase(mesh, m) {
+  const bbox = mesh?.bbox;
+  return { bbox, m, edges: (mesh?.edges || []).map((e) => refFromMeshEdge(e, bbox)).filter(Boolean) };
+}
+export function applyXrefs(sk, bases, fr, tolPct = opt('linkTolPct')) {
+  const G = new Map(sk.geo.map((g) => [g.id, g]));
+  const out = { linked: 0, moved: 0, missing: [], outside: [], comps: new Set() };
+  const setP = (id, q) => { const p = G.get(id); if (!p) return; if (d2([p.x, p.y], q) > opt('geomEpsTiny')) out.moved++; p.x = q[0]; p.y = q[1]; };
+  const pair = (i1, i2, A, B) => {
+    const p = G.get(i1), q = G.get(i2); if (!p || !q) return;
+    const keep = d2([p.x, p.y], A) + d2([q.x, q.y], B) <= d2([p.x, p.y], B) + d2([q.x, q.y], A);
+    setP(i1, keep ? A : B); setP(i2, keep ? B : A);
+  };
+  const live = new Set((sk.cons || []).filter((c) => c.type === 'fix' && c.xref).map((c) => c.e)); // Fix deleted → reference gone
+  for (const g of sk.geo) {
+    const x = g.xref; if (!x) continue;
+    if (!live.has(g.id)) { delete g.xref; continue; }
+    out.linked++;
+    const B = bases?.get(x.comp, x);
+    if (!B) { out.outside.push(g.id); continue; } // component not in this context: stays where it is
+    const ref = x.ref, e = matchRef(ref, B, tolPct);
+    if (!e) { out.missing.push(g.id); continue; }
+    out.comps.add(x.comp);
+    const T = (p) => loc2(fr, xfPoint(B.m, p));
+    if (ref.type === 'vertex') { setP(g.id, T(e.p)); x.ref = { ...ref, p: e.p, bb: B.bbox }; continue; }
+    if (g.type === 'line' && e.type === 'line') {
+      let ea = e.a, eb = e.b;
+      const xa = expected(ref.a, ref.bb, B.bbox), xb = expected(ref.b, ref.bb, B.bbox);
+      if (len(sub(ea, xa)) + len(sub(eb, xb)) > len(sub(ea, xb)) + len(sub(eb, xa))) [ea, eb] = [eb, ea];
+      let A = ea, Bp = eb;
+      if (ref.cut) {
+        const u = nrm(sub(eb, ea)), L = len(sub(eb, ea));
+        if (L - ref.cut[0] - ref.cut[1] > opt('geomEps')) { A = [ea[0] + u[0] * ref.cut[0], ea[1] + u[1] * ref.cut[0], ea[2] + u[2] * ref.cut[0]]; Bp = [eb[0] - u[0] * ref.cut[1], eb[1] - u[1] * ref.cut[1], eb[2] - u[2] * ref.cut[1]]; }
+      }
+      pair(g.p1, g.p2, T(A), T(Bp));
+      x.ref = { ...refFromEdge({ ...e, a: ea, b: eb }, B.bbox), ...(ref.cut ? { cut: ref.cut } : {}) };
+      continue;
+    }
+    if ((g.type === 'circle' || g.type === 'arc') && e.type === 'circle') {
+      setP(g.c, T(e.c));
+      if (Math.abs(g.r - e.r) > opt('geomEpsTiny')) out.moved++;
+      g.r = e.r;
+      if (g.type === 'arc') pair(g.s, g.e, T(e.a), T(e.b));
+      x.ref = refFromEdge(e, B.bbox);
+      continue;
+    }
+    out.missing.push(g.id);
+  }
+  return out;
+}
+// geometry ids that a sketch's links hold (own On Edge + in-context references)
+export const linkedIds = (sk) => { const s = new Set(); for (const g of sk.geo) if (g.onEdge || g.xref) [g.id, g.p1, g.p2, g.c, g.s, g.e].forEach((id) => id && s.add(id)); return s; };
 
 export function frameOfPlane(pl) {
   const n = nrm(pl.normal), x = nrm(pl.xDir);
@@ -247,8 +308,7 @@ export async function relinkChain(features, { upTo = features.length, stopAt = I
 export function followLinks(sk, before, solve, maxStep = opt('sizeStepPct') / 100) {
   const target = sk.geo.map((g) => (g.type === 'point' ? [g.x, g.y] : g.r !== undefined ? [g.r] : null));
   const start = before.map((g) => (g.type === 'point' ? [g.x, g.y] : g.r !== undefined ? [g.r] : null));
-  const linked = new Set();
-  for (const g of sk.geo) if (g.onEdge) [g.id, g.p1, g.p2, g.c, g.s, g.e].forEach((id) => id && linked.add(id));
+  const linked = linkedIds(sk);
   let move = 0, size = 1;
   const pts = sk.geo.filter((g) => g.type === 'point');
   if (pts.length) { const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y); size = Math.max(1, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)); }

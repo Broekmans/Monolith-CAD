@@ -2,6 +2,7 @@
 // File management (open/save/import) -> app/files.js, program settings (theme, UI scale) -> app/settings.js.
 import { cacheKey, packMesh } from './meshcache.js';
 import { h, CommandManager, PropertyManager, toast, dialog, promptText, makeDraggable } from './ui.js';
+import { popOut, dock, isPopped, wantsPop } from './popout.js';
 import { icon } from './icons.js';
 import { api } from './api.js';
 import { initActionLog, askLogConsentOnce } from './actionlog.js';
@@ -18,7 +19,7 @@ export const EXT = { part: 'lithprt', plan: 'lithpln', assembly: 'lithasm', clou
 export const extOf = (k) => EXT[k] || 'lithprt';
 
 export const APP_NAME = 'MonoLith';
-export const SLOTS = ['cmd', 'tree', 'props', 'pm', 'views', 'headsUp', 'corner', 'sketchStatus', 'toggles', 'right'];
+export const SLOTS = ['cmd', 'tree', 'props', 'pm', 'views', 'headsUp', 'corner', 'motion', 'sketchStatus', 'toggles', 'right'];
 
 export class App {
   constructor() {
@@ -35,17 +36,16 @@ export class App {
 
   buildLayout() {
     const root = document.getElementById('app');
-    const qa = h('div', { class: 'qa' },
-      h('div', { class: 'brand', html: icon('part') }, h('span', {}, APP_NAME)),
+    const qa = h('div', { class: 'qa' }, // 0.1.128: thin bar; the logo is at the right end of the ribbon (CommandManager)
       ...[['newDoc', 'New (Ctrl+N)', () => this.newDialog()], ['open', 'Open (Ctrl+O)', () => this.open()], ['save', 'Save (Ctrl+S)', () => this.save()],
         ['undo', 'Undo (Ctrl+Z)', () => this.doc?.undo()], ['redo', 'Redo (Ctrl+Y)', () => this.doc?.redo()]]
         .map(([ic, tip, run]) => h('button', { class: 'qa-btn', title: tip, html: icon(ic), onclick: run })),
       h('div', { class: 'doc-title', id: 'docTitle' }, ''),
-      h('button', { class: 'qa-btn qa-opt', title: 'Options (Tools > Options…)', html: icon('gear'), onclick: () => this.optionsDialog() }),
-      h('div', { class: 'busy', id: 'busy' }, h('span', { class: 'spinner' }), 'Rebuilding…'));
+      h('button', { class: 'qa-btn qa-opt', title: 'Options (Tools > Options…)', html: icon('gear'), onclick: () => this.optionsDialog() }));
     this.setTheme(opt('dark'), true); // Tools > Options (app/options.js)
     this.setUiScale(opt('uiScale') / 100, false);
-    this.loadMyDefaults?.(); // first start: "My Defaults" file
+    this.applyInterface(); // 0.1.128
+    Promise.resolve(this.loadMyDefaults?.()).then(() => this.setKernelMode?.(opt('kernelMulti'))); // first start: "My Defaults" file; kernel build (0.1.111)
     this.el = {};
     this.el.cmd = h('div', { class: 'cmdmgr' });
     this.el.tree = h('div', { class: 'panel tree' });
@@ -56,7 +56,8 @@ export class App {
     this.el.views = h('div', { class: 'views' });
     this.el.headsUp = h('div', { class: 'headsup' });
     this.el.corner = h('div', { class: 'corner' });
-    const viewsWrap = h('div', { class: 'views-wrap' }, this.el.views, this.el.headsUp, this.el.corner);
+    this.el.motion = h('div', { class: 'motion-strip', style: { display: 'none' } }); // assembly Motion Study timeline (0.1.119)
+    const viewsWrap = h('div', { class: 'views-wrap' }, this.el.views, this.el.headsUp, this.el.corner, this.el.motion);
     const splitter = h('div', { class: 'splitter' });
     this.el.body = h('div', { class: 'body' }, this.el.left, splitter, viewsWrap);
     // command line (plan)
@@ -70,7 +71,8 @@ export class App {
     this.el.coords = h('span', { class: 'st-coords' });
     this.el.toggles = h('span', { class: 'st-toggles' });
     this.el.right = h('span', { class: 'st-right' });
-    const status = h('div', { class: 'statusbar' }, this.el.status, h('span', { class: 'grow' }), this.el.sketchStatus, this.el.coords, this.el.toggles, this.el.right);
+    const busy = h('div', { class: 'busy', id: 'busy', title: 'Rebuilding…' }, h('span', { class: 'spinner' })); // text via CSS (keeps the status bar's text clean) // 0.1.128: in the status bar (the top bar may be hidden)
+    const status = h('div', { class: 'statusbar' }, this.el.status, h('span', { class: 'grow' }), busy, this.el.sketchStatus, this.el.coords, this.el.toggles, this.el.right);
     this.el.welcome = h('div', { class: 'welcome' });
     this.el.docTabs = h('div', { class: 'doctabs' });
     root.append(qa, this.el.cmd, this.el.body, this.el.cmdline, status, this.el.docTabs, this.el.welcome);
@@ -105,7 +107,7 @@ export class App {
   // ---------- shell API used by documents ----------
   setStatus(t, kind = '') { this.el.status.textContent = t; this.el.status.className = 'st-left ' + kind; }
   setStatusRight(t) { this.el.right.textContent = t; }
-  setCoords(t) { this.el.coords.textContent = t; }
+  setCoords(t) { this._coordsText = t; this.el.coords.textContent = t; } // 0.1.134: per tab (the element is shared by all tabs)
   setSketchStatus(st) {
     this.el.sketchStatus.textContent = st ? st.text : '';
     this.el.sketchStatus.className = 'st-sketch ' + (st?.cls || '');
@@ -142,8 +144,14 @@ export class App {
     pm.classList.toggle('pm-float', !!on);
     const d = makeDraggable(pm, '.pm-header', 'monolith.dlgPos.pm'); // drag by its title strip, place remembered (0.1.95)
     d.off = !on;
-    if (on) { const r = this.el.views.getBoundingClientRect(); Object.assign(pm.style, { left: r.left + 8 + 'px', top: r.top + 8 + 'px', maxHeight: Math.max(200, r.height - 16) + 'px' }); d.apply(); }
-    else { Object.assign(pm.style, { left: '', top: '', maxHeight: '' }); d.reset(); }
+    clearTimeout(this._pmDock);
+    if (on) {
+      if (!isPopped(pm)) { const r = this.el.views.getBoundingClientRect(); Object.assign(pm.style, { left: r.left + 8 + 'px', top: r.top + 8 + 'px', maxHeight: Math.max(200, r.height - 16) + 'px' }); d.apply(); }
+      if (wantsPop('monolith.dlgPos.pm') && !isPopped(pm)) popOut(pm, { key: 'monolith.dlgPos.pm' }); // 0.1.129: it was a window last time
+    } else if (isPopped(pm)) { // a next dialog often follows at once (Mate keeps going): dock only when none came
+      this._pmDock = setTimeout(() => { if (!pm.classList.contains('pm-float')) { dock(pm); Object.assign(pm.style, { left: '', top: '', maxHeight: '' }); d.reset(); this.showPanel(this.panel); } }, 0);
+    } else { Object.assign(pm.style, { left: '', top: '', maxHeight: '' }); d.reset(); }
+    pm._pop?.sync();
   }
   renderLeftTabs() {
     if (!this.isActive()) return;
@@ -221,16 +229,20 @@ export class App {
     const old = app.active;
     if (old === t && app.shown) return;
     const from = app.shown || app.el;
+    if (from.motion !== t.el.motion && isPopped(from.motion)) dock(from.motion); // 0.1.129: the other tab's Motion Study window closes (opens again with its tab)
     for (const k of SLOTS) if (from[k] !== t.el[k]) from[k].replaceWith(t.el[k]);
+    if (old?.doc?._measPop && old !== t) { old.doc._measPop.remove(); old.doc._measPop = null; } // 0.1.134: the Ctrl+click distance popup belongs to its tab
     app.shown = t.el;
     app.active = t;
     document.body.dataset.kind = t.doc ? t.doc.doc.kind : '';
     app.el.welcome.style.display = t === app ? 'block' : 'none';
     app.el.cmdline.style.display = t.cmdOn ? '' : 'none';
+    app.el.coords.textContent = t._coordsText || ''; // 0.1.134: another tab's last coordinates stayed in the corner
     t.renderLeftTabs();
     t.updateTitle();
     t.doc?.vp?.requestRender?.(); t.doc?.vp3?.requestRender?.();
     t.doc?.onActivate?.();
+    if (t.doc?._motionOpen) t.doc.renderMotion?.(); // its Motion Study window again
     t.syncViewportMenu();
     requestAnimationFrame(() => t.doc?.viewSet?.placeHud()); // view toolbar under the active view's cube
   }
@@ -394,6 +406,9 @@ export class App {
       case 'ui-scale': this.uiScaleDialog(); break;
       case 'options': this.optionsDialog(); break;
       case 'ui-scale-reset': this.setUiScale(1); break;
+      case 'ribbon-size': this.applyOptions({ ribbonSize: arg }); break; // 0.1.128
+      case 'qa-bar': this.applyOptions({ qaBar: opt('qaBar') === 'hidden' ? 'thin' : 'hidden' }); break;
+      case 'ribbon-labels': this.applyOptions({ ribbonGroupLabels: !opt('ribbonGroupLabels') }); break;
       case 'new-part': this.newDoc('part'); break;
       case 'new-plan': this.newDoc('plan'); break;
       case 'new-assembly': this.newDoc('assembly'); break;
@@ -416,7 +431,7 @@ export class App {
       case 'shortcuts': this.showShortcuts(); break;
       case 'about': {
         const info = await api.info();
-        dialog({ title: `About ${APP_NAME}`, body: h('div', {}, h('p', {}, h('b', {}, `${APP_NAME} ${info.version}`)), h('p', {}, 'Standalone CAD for engineering parts and architectural plans.'), h('p', { class: 'muted' }, 'Built with Electron, three.js, OpenCascade (opencascade.js, LGPL-2.1) and FreeCAD PlaneGCS (LGPL).')) });
+        dialog({ title: `About ${APP_NAME}`, body: h('div', {}, h('p', {}, h('b', {}, `${APP_NAME} ${info.version}`)), h('p', {}, 'Standalone CAD for engineering parts and architectural plans.'), h('p', { class: 'muted' }, 'Built with Electron, three.js, OpenCascade (replicad-opencascadejs; IGES: opencascade.js — both LGPL-2.1) and FreeCAD PlaneGCS (LGPL).')) });
         break;
       }
       default:
@@ -426,7 +441,8 @@ export class App {
   showShortcuts() {
     const rows = [
       ['Mouse', ''], ['Middle drag', 'Rotate (part) / Pan (plan)'], ['Ctrl + middle drag / right drag', 'Pan'], ['Wheel', 'Zoom at cursor'], ['Alt + left drag', 'Rotate (no middle button)'],
-      ['Part', ''], ['Ctrl+1 … Ctrl+7', 'Front, Back, Left, Right, Top, Bottom, Isometric'], ['Ctrl+8', 'Normal To'], ['F', 'Zoom to fit'], ['Arrow keys', 'Rotate view 15°'],
+      ['Part', ''], ['Ctrl+1 … Ctrl+7', 'Front, Back, Left, Right, Top, Bottom, Isometric'], ['Ctrl+8', 'Normal To'], ['F', 'Zoom to fit'], ['Arrow keys', 'Rotate view 15°'], ['Shift+C', 'Collapse the tree (part and assembly)'],
+      ['Assembly', ''], ['Double-click a component', 'Edit Part (with the assembly around it)'], ['Ctrl+B', 'Rebuild'],
       ['Sketch', ''], ['L / R / C / A', 'Line / Rectangle / Circle / Arc'], ['D', 'Smart Dimension'], ['T', 'Trim'], ['Esc', 'End tool / clear selection'], ['Del', 'Delete selection'],
       ['Point Cloud', ''], ['F', 'Zoom to fit'], ['Ctrl+1 … Ctrl+7', 'Standard views'], ['Del', 'Remove the selected scan from the document'],
       ['Plan', ''], ['Type a command', 'LINE (L), PLINE, REC, CIRCLE (C), ARC, TEXT, DLI, WALL (W), DOOR, WINDOW, MOVE (M), COPY (CO), RO, SC, MI, O, TR, F, X, E'], ['Coordinates', 'x,y   @dx,dy   @dist<angle   or a distance along the cursor'],

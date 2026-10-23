@@ -1,11 +1,24 @@
 // Kernel core: OpenCascade instance (initKernel), vector helpers, shape/topology utilities.
 export let oc = null;
-export const PR = () => new oc.Message_ProgressRange_1();
+export const PR = () => new oc.Message_ProgressRange();
 
 export const __oc = () => oc;
-export async function initKernel(initFn) {
+// opts.parallel (0.1.111): the multi-thread kernel build is loaded — booleans and meshing spread over the CPU cores
+export const kernelOpts = { parallel: false };
+export async function initKernel(initFn, opts = {}) {
   oc = await initFn();
+  Object.assign(kernelOpts, opts);
   return true;
+}
+// Boolean (Cls = 'BRepAlgoAPI_Fuse' | 'BRepAlgoAPI_Cut' | 'BRepAlgoAPI_Common'); with the two shapes in the constructor it
+// runs at once on one core; for several cores it is set up first and built with SetRunParallel
+export function runBool(Cls, a, b) {
+  if (!kernelOpts.parallel) return new oc[Cls](a, b, PR()); // the constructor already runs the operation (no second Build)
+  const op = new oc[Cls](), A = new oc.NCollection_List_TopoDS_Shape(), B = new oc.NCollection_List_TopoDS_Shape();
+  A.Append(a); B.Append(b);
+  op.SetArguments(A); op.SetTools(B); op.SetRunParallel(true);
+  op.Build(PR());
+  return op;
 }
 
 // ---------- small vector helpers ----------
@@ -25,30 +38,42 @@ export function planeFrame(pl) {
 }
 export const to3 = (fr, p) => add(fr.o, add(mul(fr.x, p[0]), mul(fr.y, p[1])));
 
-export const P = (p) => new oc.gp_Pnt_3(p[0], p[1], p[2]);
-export const V = (v) => new oc.gp_Vec_4(v[0], v[1], v[2]);
-export const Dir = (v) => new oc.gp_Dir_4(v[0], v[1], v[2]);
+export const P = (p) => new oc.gp_Pnt(p[0], p[1], p[2]);
+export const V = (v) => new oc.gp_Vec(v[0], v[1], v[2]);
+export const Dir = (v) => new oc.gp_Dir(v[0], v[1], v[2]);
 export const ptArr = (p) => [p.X(), p.Y(), p.Z()];
 
+// Readable text for an error: OCCT exceptions arrive as WebAssembly.Exception (0.1.109) — type + message from the kernel
+export function errText(e) {
+  if (e?.message) return e.message;
+  try {
+    if (typeof WebAssembly.Exception === 'function' && e instanceof WebAssembly.Exception && oc?.getExceptionMessage) {
+      const [type, msg] = oc.getExceptionMessage(e);
+      try { oc.decrementExceptionRefcount?.(e); } catch { /* freed */ }
+      return `The geometry kernel could not do this (${[type, msg].filter(Boolean).join(': ')})`;
+    }
+  } catch { /* plain text below */ }
+  return String(e);
+}
 export function checkValid(s, what) {
   const an = new oc.BRepCheck_Analyzer(s, true, false);
-  if (!an.IsValid_2()) throw new Error(`${what} produced invalid geometry - adjust its parameters`);
+  if (!an.IsValid()) throw new Error(`${what} produced invalid geometry - adjust its parameters`);
   return s;
 }
 export function unify(s) {
   if (globalThis.__noUnify) return s;
   try {
-    const u = new oc.ShapeUpgrade_UnifySameDomain_2(s, true, true, false);
+    const u = new oc.ShapeUpgrade_UnifySameDomain(s, true, true, false);
     u.Build();
     return u.Shape();
   } catch { return s; }
 }
 export function transformed(shape, trsf) {
-  return new oc.BRepBuilderAPI_Transform_2(shape, trsf, true).Shape();
+  return new oc.BRepBuilderAPI_Transform(shape, trsf, true).Shape();
 }
 
 export function bbox(shape) {
-  const b = new oc.Bnd_Box_1();
+  const b = new oc.Bnd_Box();
   oc.BRepBndLib.Add(shape, b, false);
   if (b.IsVoid()) return null;
   const mn = b.CornerMin(), mx = b.CornerMax();
@@ -73,15 +98,64 @@ export function facePlane(n, c) {
   return { origin, normal: n, xDir: norm(xd) };
 }
 
+// ---------- maps (0.1.109: the kernel build has no TopExp map functions — same result with explorers) ----------
+// unique sub-shapes of a type (orientation ignored), 1-based like TopTools_IndexedMapOfShape: FindKey(i), FindIndex(s), Extent()
+// (the build's map classes cannot be created from JS: a small JS map on the shape hash + IsSame does the same)
+const HASH_MAX = 2147483647;
+export class ShapeMap {
+  constructor() { this.keys = []; this.buckets = new Map(); }
+  FindIndex(s) { const b = this.buckets.get(oc.ReplicadShapeHasher.HashCode(s, HASH_MAX)); if (b) for (const i of b) if (this.keys[i - 1].IsSame(s)) return i; return 0; }
+  Add(s) {
+    const h = oc.ReplicadShapeHasher.HashCode(s, HASH_MAX);
+    let b = this.buckets.get(h);
+    if (b) { for (const i of b) if (this.keys[i - 1].IsSame(s)) return i; } else this.buckets.set(h, (b = []));
+    this.keys.push(s); b.push(this.keys.length);
+    return this.keys.length;
+  }
+  FindKey(i) { return this.keys[i - 1]; }
+  Extent() { return this.keys.length; }
+}
+export function shapeMap(shape, type) {
+  const map = new ShapeMap();
+  for (const ex = new oc.TopExp_Explorer(shape, type, oc.TopAbs_ShapeEnum.TopAbs_SHAPE); ex.More(); ex.Next()) map.Add(ex.Current());
+  return map;
+}
+// edges with their faces: { edges: shapeMap, faces(i) -> [face …] unique } (i = edge index, 1-based)
+export function edgeFaces(shape) {
+  const edges = shapeMap(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE);
+  const lists = new Map();
+  for (const fx = new oc.TopExp_Explorer(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE); fx.More(); fx.Next()) {
+    const face = fx.Current();
+    for (const ex = new oc.TopExp_Explorer(face, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE); ex.More(); ex.Next()) {
+      const i = edges.FindIndex(ex.Current());
+      if (i <= 0) continue;
+      const l = lists.get(i) || []; if (!l.some((f) => f.IsSame(face))) l.push(face); lists.set(i, l);
+    }
+  }
+  return { edges, faces: (i) => lists.get(i) || [] };
+}
+// closed polygon wire through 3D points
+export function polygonWire(pts) {
+  const vs = pts.map((q) => new oc.BRepBuilderAPI_MakeVertex(P(q)).Vertex());
+  const mw = new oc.BRepBuilderAPI_MakeWire();
+  for (let i = 0; i < vs.length; i++) mw.Add(new oc.BRepBuilderAPI_MakeEdge(vs[i], vs[(i + 1) % vs.length]).Edge());
+  return mw.Wire();
+}
+export function compoundOf(shapes) {
+  const b = new oc.TopoDS_Builder(), comp = new oc.TopoDS_Compound();
+  b.MakeCompound(comp);
+  for (const s of shapes) b.Add(comp, s);
+  return comp;
+}
+
 // ---------- topology listings (with stable-ish references) ----------
 export function listEdges(shape) {
-  const map = new oc.TopTools_IndexedMapOfShape_1();
-  oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, map);
+  const map = shapeMap(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE);
   const out = [];
   for (let i = 1; i <= map.Extent(); i++) {
-    const e = oc.TopoDS.Edge_1(map.FindKey(i));
+    const e = oc.TopoDS.Edge(map.FindKey(i));
     let ad;
-    try { ad = new oc.BRepAdaptor_Curve_2(e); } catch { continue; }
+    try { ad = new oc.BRepAdaptor_Curve(e); } catch { continue; }
     const f = ad.FirstParameter(), l = ad.LastParameter();
     const mid = ptArr(ad.Value((f + l) / 2));
     const t = ad.GetType();
@@ -92,26 +166,25 @@ export function listEdges(shape) {
 }
 
 export function planeOfFace(face) {
-  const ad = new oc.BRepAdaptor_Surface_2(face, true);
+  const ad = new oc.BRepAdaptor_Surface(face, true);
   if (ad.GetType() !== oc.GeomAbs_SurfaceType.GeomAbs_Plane) return null;
   let n = ptArr(ad.Plane().Position().Direction());
-  if (face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED) n = mul(n, -1);
-  const props = new oc.GProp_GProps_1();
-  oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
+  if (face.Orientation() === oc.TopAbs_Orientation.TopAbs_REVERSED) n = mul(n, -1);
+  const props = new oc.GProp_GProps();
+  oc.BRepGProp.SurfaceProperties(face, props, false, false);
   return facePlane(n, ptArr(props.CentreOfMass()));
 }
 
 export function listFaces(shape) {
-  const map = new oc.TopTools_IndexedMapOfShape_1();
-  oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE, map);
+  const map = shapeMap(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE);
   const out = [];
   for (let i = 1; i <= map.Extent(); i++) {
-    const face = oc.TopoDS.Face_1(map.FindKey(i));
-    const props = new oc.GProp_GProps_1();
-    oc.BRepGProp.SurfaceProperties_1(face, props, false, false);
+    const face = oc.TopoDS.Face(map.FindKey(i));
+    const props = new oc.GProp_GProps();
+    oc.BRepGProp.SurfaceProperties(face, props, false, false);
     const c = ptArr(props.CentreOfMass());
     const area = props.Mass();
-    const ad = new oc.BRepAdaptor_Surface_2(face, true);
+    const ad = new oc.BRepAdaptor_Surface(face, true);
     let plane = null, type = 'surface', axis, r;
     const st = ad.GetType();
     if (st === oc.GeomAbs_SurfaceType.GeomAbs_Plane) {
@@ -119,7 +192,7 @@ export function listFaces(shape) {
       const ax = ad.Plane().Position();
       let n = ptArr(ax.Direction());
       const x = ptArr(ax.XDirection());
-      if (face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED) n = mul(n, -1);
+      if (face.Orientation() === oc.TopAbs_Orientation.TopAbs_REVERSED) n = mul(n, -1);
       void x;
       plane = facePlane(n, c);
     } else if (st === oc.GeomAbs_SurfaceType.GeomAbs_Cylinder) {

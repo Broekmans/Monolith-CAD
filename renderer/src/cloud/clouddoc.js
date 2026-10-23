@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
 import { opt } from '../app/options.js';
+import { treePad } from '../treeui.js';
 import { ViewSet } from '../viewset.js';
 import { h, fmt, contextMenu, toast, dialog, evalNumber, promptText } from '../ui.js';
 import { icon } from '../icons.js';
@@ -15,12 +16,11 @@ import { CloudAnalysis } from './analysis.js';
 import { CloudRegister } from './register.js';
 
 export const CLOUD_EXTS = ['las', 'laz', 'ply', 'xyz', 'pts', 'txt', 'csv'];
-const BUDGETS = [2e6, 5e6, 10e6, 20e6, 40e6];
 const mpts = (n) => (n >= 1e6 ? fmt(n / 1e6, n >= 1e8 ? 0 : 1) + ' M' : n >= 1e3 ? fmt(n / 1e3, 0) + ' k' : String(n));
 const secs = (s) => (s >= 90 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${Math.round(s)} s`);
 
 export function newCloudDoc(name = 'PointCloud1') {
-  return { kind: 'cloud', version: 1, name, origin: null, clouds: [], view: { budget: opt('cloudBudget') * 1e6, edl: opt('cloudEdl'), edlStrength: opt('cloudEdlStrength'), round: false } };
+  return { kind: 'cloud', version: 1, name, origin: null, clouds: [], view: { budget: opt('cloudBudget') * 1e6, edl: opt('cloudEdl'), edlStrength: opt('cloudEdlStrength'), round: opt('pcRoundNew') } };
 }
 
 export class CloudDoc {
@@ -28,7 +28,7 @@ export class CloudDoc {
     this.app = app;
     this.doc = doc;
     doc.clouds ||= [];
-    doc.view = { budget: 10e6, edl: true, edlStrength: 1, round: false, ...(doc.view || {}) };
+    doc.view = { ...opt('pcViewFallback'), ...(doc.view || {}) };
     this.layers = new Map();
     this.selId = null;
     this.selIds = new Set();
@@ -123,7 +123,7 @@ export class CloudDoc {
     const off = api.onCloudProgress((p) => { if (p.req === req) this.showProgress(rec.name, p); });
     let r;
     try { r = rec.cache ? await api.cloudOpenCache(path) : await api.cloudOpen(path, req, opts); } catch (e) { r = { error: e.message }; } finally { off?.(); this.showProgress(null); this.app.setBusy(false); }
-    if (!r || r.error) { rec.missing = r?.error || 'Cannot open'; toast(`Could not open ${rec.name}: ${rec.missing}`, 'error', 7000); this.renderTree(); return null; }
+    if (!r || r.error) { rec.missing = r?.error || 'Cannot open'; toast(`Could not open ${rec.name}: ${rec.missing}`, 'error', opt('pcToastLongMs')); this.renderTree(); return null; }
     delete rec.missing;
     if (!this.doc.origin) this.doc.origin = r.meta.origin;
     const A = r.meta.attrs;
@@ -144,7 +144,7 @@ export class CloudDoc {
     el.innerHTML = '';
     el.append(h('b', {}, name), h('div', {}, `${p.phase}… ${pct}%`),
       h('div', { class: 'cp-bar' }, h('span', { style: { width: pct + '%' } })),
-      h('small', {}, `${mpts(p.done)} of ${mpts(p.total)} points · ${secs(p.elapsed)}${p.eta > 1 ? ` · about ${secs(p.eta)} left` : ''} · RAM ${fmt(p.ram / 1e9, 1)} GB`));
+      h('small', {}, `${mpts(p.done)} of ${mpts(p.total)} points · ${secs(p.elapsed)}${p.eta > opt('pcEtaMinS') ? ` · about ${secs(p.eta)} left` : ''} · RAM ${fmt(p.ram / 1e9, opt('pcRamDec'))} GB`));
     this.app.setStatus(`${name}: ${p.phase} ${pct}%`);
   }
 
@@ -191,7 +191,7 @@ export class CloudDoc {
     this.lastMove = performance.now();
     this.scheduleLOD();
     clearTimeout(this.idleT);
-    this.idleT = setTimeout(() => this.scheduleLOD(), 230);
+    this.idleT = setTimeout(() => this.scheduleLOD(), opt('pcLodIdleMs'));
   }
   scheduleLOD() {
     if (this.lodPending) return;
@@ -200,14 +200,14 @@ export class CloudDoc {
   }
   updateLOD() {
     if (this.disposed) return;
-    const moving = performance.now() - (this.lastMove || 0) < 200;
-    const budget = this.doc.view.budget / (moving ? 4 : 1);
+    const moving = performance.now() - (this.lastMove || 0) < opt('pcMovingMs');
+    const budget = this.doc.view.budget / (moving ? opt('pcMovingDiv') : 1);
     const vis = [...this.layers.values()].filter((l) => l.rec.visible !== false);
     const total = vis.reduce((a, l) => a + l.meta.count, 0) || 1;
     let shown = 0;
     // several panes: every pane gets its own node selection; the GPU budget is shared (a bit more in total)
-    const panes = this.viewSet.panes, k = panes.length > 1 ? 1.5 / panes.length : 1;
-    for (const l of vis) shown += l.update(panes, Math.max(2e5, (budget * k * l.meta.count) / total));
+    const panes = this.viewSet.panes, k = panes.length > 1 ? opt('pcPaneBudgetK') / panes.length : 1;
+    for (const l of vis) shown += l.update(panes, Math.max(opt('pcMinLayerBudget'), (budget * k * l.meta.count) / total));
     this.shown = shown;
     const all = vis.reduce((a, l) => a + l.meta.count, 0);
     this.app.setCoords(all ? `${mpts(shown)} of ${mpts(all)} points shown` : '');
@@ -236,7 +236,7 @@ export class CloudDoc {
     const tree = this.app.el.tree;
     tree.innerHTML = '';
     const row = (o) => {
-      const r = h('div', { class: 'tr-row' + (o.sel ? ' sel' : '') + (o.dim ? ' dim' : '') + (o.err ? ' err' : ''), style: { paddingLeft: 6 + (o.depth || 0) * 16 + 'px' }, title: o.tip || '' },
+      const r = h('div', { class: 'tr-row' + (o.sel ? ' sel' : '') + (o.dim ? ' dim' : '') + (o.err ? ' err' : ''), style: { paddingLeft: treePad(o.depth) + 'px' }, title: o.tip || '' },
         o.eye !== undefined ? h('button', { class: 'mini', title: o.eye ? 'Hide' : 'Show', html: icon(o.eye ? 'eye' : 'eyeOff'), onclick: (e) => { e.stopPropagation(); o.onEye(); } }) : h('span', { class: 'twisty' }),
         h('span', { class: 'ico sm', html: icon(o.icon) }), h('span', { class: 'tr-label' }, o.label), o.err ? h('span', { class: 'tr-err', title: o.err }, '⚠') : null);
       r.addEventListener('click', (e) => o.onClick?.(e));
@@ -286,7 +286,7 @@ export class CloudDoc {
     const wrap = h('div', { class: 'pc-panel' });
     const set = (fn, rerender = false) => { fn(); L?.applyStyle(); this.scheduleLOD(); this.app.setDirty(true); if (rerender) this.renderTree(); };
     const field = (label, input) => h('div', { class: 'pp-row' }, h('label', {}, label), input);
-    const num = (val, fn, d = 3) => { const i = h('input', { type: 'text', value: fmt(val, d) }); i.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') i.blur(); }); i.addEventListener('change', () => { const v = evalNumber(i.value); if (v !== null) set(() => fn(v)); }); return i; };
+    const num = (val, fn, d = opt('pcInputDec')) => { const i = h('input', { type: 'text', value: fmt(val, d) }); i.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') i.blur(); }); i.addEventListener('change', () => { const v = evalNumber(i.value); if (v !== null) set(() => fn(v)); }); return i; };
     wrap.appendChild(h('div', { class: 'sp-sec' }, rec.name));
     if (!L) { wrap.appendChild(h('div', { class: 'pm-msg error' }, rec.missing || 'Not loaded')); wrap.appendChild(h('div', { class: 'pp-inline', style: { margin: '6px 8px' } }, h('button', { class: 'mini txt', onclick: () => this.rebuildCache(rec.id) }, 'Try again'))); return wrap; }
     const M = L.meta, A = M.attrs, O = M.origin;
@@ -318,13 +318,14 @@ export class CloudDoc {
       wrap.append(field('From height (m)', num(zr[0] + O[2], (v) => { rec.heightRange = [v - O[2], (rec.heightRange || zr)[1]]; })),
         field('To height (m)', num(zr[1] + O[2], (v) => { rec.heightRange = [(rec.heightRange || zr)[0], v - O[2]]; })));
     }
-    if (mode === 'class') wrap.append(h('div', { class: 'cloud-legend' }, Object.entries(CLASS_NAMES).slice(0, 10).map(([k, n]) => h('span', {}, `${k} ${n}`))));
+    if (mode === 'class') wrap.append(h('div', { class: 'cloud-legend' }, Object.entries(CLASS_NAMES).slice(0, opt('pcClassLegendN')).map(([k, n]) => h('span', {}, `${k} ${n}`))));
     if (mode === 'single') {
-      const c = h('input', { type: 'color', value: rec.single || '#8a96a8' });
+      const c = h('input', { type: 'color', value: rec.single || opt('pcSingleColor') });
       c.addEventListener('input', () => set(() => { rec.single = c.value; }));
       wrap.append(field('Colour', c));
     }
-    const size = h('input', { type: 'range', min: 1, max: 8, step: 0.5, value: rec.pointSize || 2 });
+    const [psMin, psMax, psStep] = opt('pcPointSizeSlider');
+    const size = h('input', { type: 'range', min: psMin, max: psMax, step: psStep, value: rec.pointSize || opt('pcPointSizeFallback') });
     size.addEventListener('input', () => set(() => { rec.pointSize = +size.value; }));
     wrap.append(field('Point size', size));
     // height section
@@ -334,7 +335,7 @@ export class CloudDoc {
     if (rec.clip?.on) {
       wrap.append(field('From (m)', num(rec.clip.min + O[2], (v) => { rec.clip.min = v - O[2]; })), field('To (m)', num(rec.clip.max + O[2], (v) => { rec.clip.max = v - O[2]; })));
       wrap.append(h('div', { class: 'pp-inline', style: { margin: '4px 8px' } },
-        h('button', { class: 'mini txt', title: 'Slice 1.0–1.3 m above the lowest floor, for walls', onclick: () => set(() => { rec.clip = { on: true, min: M.bbox[2] + 1.0, max: M.bbox[2] + 1.3 }; }, true) }, 'Floor plan slice')));
+        h('button', { class: 'mini txt', title: `Slice ${opt('pcSliceFrom').toFixed(1)}–${opt('pcSliceTo').toFixed(1)} m above the lowest floor, for walls`, onclick: () => set(() => { rec.clip = { on: true, min: M.bbox[2] + opt('pcSliceFrom'), max: M.bbox[2] + opt('pcSliceTo') }; }, true) }, 'Floor plan slice')));
     }
     // info
     const ro = (k, v, tip) => h('div', { class: 'pp-row ro', title: tip || '' }, h('label', {}, k), h('span', {}, v));
@@ -342,11 +343,11 @@ export class CloudDoc {
     wrap.append(h('div', { class: 'sp-sec' }, 'Information'),
       rec.derived ? ro('Made by edit', `${rec.derived.op} of ${rec.derived.from.join(', ')}`) : ro('File', rec.path.split(/[\\/]/).pop(), rec.path),
       rec.transform ? ro('Transform', 'moved/rotated (applied at export)') : null,
-      rec.registration ? ro('Aligned to', `${rec.registration.ref} (RMS ${fmt(((rec.registration.icpRms ?? rec.registration.pairsRms) || 0) * 1000, 1)} mm)`) : null,
+      rec.registration ? ro('Aligned to', `${rec.registration.ref} (RMS ${fmt(((rec.registration.icpRms ?? rec.registration.pairsRms) || 0) * 1000, opt('pcMmDec'))} mm)`) : null,
       ro('Format', M.info?.format || ''),
       ro('Points', M.count.toLocaleString()),
-      ro('Size (m)', `${fmt(b[3] - b[0], 2)} × ${fmt(b[4] - b[1], 2)} × ${fmt(b[5] - b[2], 2)}`),
-      ro('Lowest / highest Z', `${fmt(b[2] + O[2], 3)} / ${fmt(b[5] + O[2], 3)}`),
+      ro('Size (m)', `${fmt(b[3] - b[0], opt('pcSizeDec'))} × ${fmt(b[4] - b[1], opt('pcSizeDec'))} × ${fmt(b[5] - b[2], opt('pcSizeDec'))}`),
+      ro('Lowest / highest Z', `${fmt(b[2] + O[2], opt('pcCoordDec'))} / ${fmt(b[5] + O[2], opt('pcCoordDec'))}`),
       ro('Fields', [A.rgb ? 'RGB' : null, A.intensity ? 'intensity' : null, A.classification ? 'classification' : null, ...A.fields.map((f) => f.name)].filter(Boolean).join(', ') || '—'),
       ro('Cache', L.cachePath.split(/[\\/]/).pop(), L.cachePath),
       M.info?.software ? ro('Made by', M.info.software) : null);
@@ -358,11 +359,12 @@ export class CloudDoc {
     const v = this.doc.view;
     const wrap = h('div', { class: 'pc-panel' }, h('div', { class: 'sp-sec' }, 'Display'));
     const field = (label, input) => h('div', { class: 'pp-row' }, h('label', {}, label), input);
-    const bud = h('select', { title: 'Most points drawn at the same time. Lower = smoother on slower graphics cards.' }, BUDGETS.map((n) => h('option', { value: n, selected: n === v.budget }, mpts(n) + ' points')));
+    const bud = h('select', { title: 'Most points drawn at the same time. Lower = smoother on slower graphics cards.' }, opt('pcBudgets').map((n) => h('option', { value: n, selected: n === v.budget }, mpts(n) + ' points')));
     bud.addEventListener('change', () => this.setView({ budget: +bud.value }));
     const edl = h('input', { type: 'checkbox', checked: v.edl });
     edl.addEventListener('change', () => this.setView({ edl: edl.checked }));
-    const str = h('input', { type: 'range', min: 0.2, max: 3, step: 0.1, value: v.edlStrength });
+    const [esMin, esMax, esStep] = opt('pcEdlSlider');
+    const str = h('input', { type: 'range', min: esMin, max: esMax, step: esStep, value: v.edlStrength });
     str.addEventListener('input', () => { this.doc.view.edlStrength = +str.value; this.vp.requestRender(); this.app.setDirty(true); });
     const rnd = h('input', { type: 'checkbox', checked: !!v.round });
     rnd.addEventListener('change', () => this.setView({ round: rnd.checked }));
@@ -385,8 +387,8 @@ export class CloudDoc {
     try {
       const r = await api.cloudExport(L.id, out, format, req, rec.transform || null);
       if (r?.error) throw new Error(r.error);
-      toast(`Exported ${r.written.toLocaleString()} points to ${out.split(/[\\/]/).pop()}`, 'ok', 4000);
-    } catch (e) { toast('Export failed: ' + e.message, 'error', 7000); } finally { off?.(); this.showProgress(null); this.app.setBusy(false); }
+      toast(`Exported ${r.written.toLocaleString()} points to ${out.split(/[\\/]/).pop()}`, 'ok', opt('pcToastNoteMs'));
+    } catch (e) { toast('Export failed: ' + e.message, 'error', opt('pcToastLongMs')); } finally { off?.(); this.showProgress(null); this.app.setBusy(false); }
   }
 
   // ======================= keys & misc =======================

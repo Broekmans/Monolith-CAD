@@ -5,7 +5,7 @@ const C = 'Colours', DG = 'Drawing', D = 'Drawings';
 export default [
   // ---- shown in Options: Colours > Drawing ----
   { key: 'drSelColor', cat: C, group: DG, label: 'Selected view, annotation, section line', type: 'color', def: '#2a6fd6' },
-  { key: 'drPreviewColor', cat: C, group: DG, label: 'Preview of the view / annotation being placed', type: 'color', def: '#2a6fd6' },
+  { key: 'drPreviewColor', cat: C, group: DG, label: 'Preview of the view / annotation being placed', type: 'color', def: '#f2b630', oldDefs: ['#2a6fd6'] }, // yellow = what will be (Wouter 20-10, 0.1.105)
   { key: 'drSnapColor', cat: C, group: DG, label: 'Snap marker, fitted scan wall', type: 'color', def: '#ff8a00' },
   { key: 'drHandleColor', cat: C, group: DG, label: 'Grips of a selected room / area outline', type: 'color', def: '#2a6fd6' },
   // ---- shown in Options: Drawings ----

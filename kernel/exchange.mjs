@@ -1,13 +1,15 @@
 // Kernel file exchange: STEP / IGES read & write, assembly export.
-import { oc, PR } from './core.mjs';
+import { oc, PR, compoundOf } from './core.mjs';
 import { tessellate } from './mesh.mjs';
+import { igesToStep, stepToIges } from './iges.mjs';
 
-export function readStepText(text, fmt = 'step') {
-  const path = `/in_${Date.now()}.${fmt === 'iges' ? 'igs' : 'stp'}`;
+// STEP text -> shape (IGES: convert with igesToStep first)
+export function readStepText(text) {
+  const path = `/in_${Date.now()}.stp`;
   oc.FS.writeFile(path, text);
-  const reader = fmt === 'iges' ? new oc.IGESControl_Reader_1() : new oc.STEPControl_Reader_1();
+  const reader = new oc.STEPControl_Reader();
   const st = reader.ReadFile(path);
-  if (st !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) throw new Error(`Could not read ${fmt.toUpperCase()} file`);
+  if (st !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) { oc.FS.unlink(path); throw new Error('Could not read STEP file'); }
   reader.TransferRoots(PR());
   const shape = reader.OneShape();
   oc.FS.unlink(path);
@@ -18,7 +20,7 @@ export function readStepText(text, fmt = 'step') {
 // ---------- exchange ----------
 export function writeStep(shape) {
   if (!shape) throw new Error('Nothing to export');
-  const w = new oc.STEPControl_Writer_1();
+  const w = new oc.STEPControl_Writer();
   const st = w.Transfer(shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true, PR());
   if (st !== oc.IFSelect_ReturnStatus.IFSelect_RetDone) throw new Error('STEP transfer failed');
   const path = '/out.step';
@@ -30,35 +32,24 @@ export function writeStep(shape) {
 
 // assembly: each part body placed with a 4x4 column-major matrix, written as one compound
 export function assemblyShape(parts) {
-  const builder = new oc.BRep_Builder();
-  const comp = new oc.TopoDS_Compound();
-  builder.MakeCompound(comp);
-  let n = 0;
+  const shapes = [];
   for (const { body, m } of parts) {
     if (!body) continue;
-    const t = new oc.gp_Trsf_1();
+    const t = new oc.gp_Trsf();
     t.SetValues(m[0], m[4], m[8], m[12], m[1], m[5], m[9], m[13], m[2], m[6], m[10], m[14]);
-    builder.Add(comp, new oc.BRepBuilderAPI_Transform_2(body, t, true).Shape());
-    n++;
+    shapes.push(new oc.BRepBuilderAPI_Transform(body, t, true).Shape());
   }
-  if (!n) throw new Error('Nothing to export');
-  return comp;
+  if (!shapes.length) throw new Error('Nothing to export');
+  return compoundOf(shapes);
 }
 
-export function writeIges(shape) {
+export async function writeIges(shape) {
   if (!shape) throw new Error('Nothing to export');
-  const w = new oc.IGESControl_Writer_2('MM', 1); // 1 = B-rep (solid) mode
-  w.AddShape(shape, PR());
-  w.ComputeModel();
-  const path = '/out.igs';
-  w.Write_2(path, false);
-  const txt = oc.FS.readFile(path, { encoding: 'utf8' });
-  oc.FS.unlink(path);
-  return txt;
+  return stepToIges(writeStep(shape));
 }
 
 // Convert an IGES/STEP file into STEP text so it can be stored in a part.
-export function importToStep(text, format) {
-  const shape = readStepText(text, format);
-  return { step: format === 'step' ? text : writeStep(shape), mesh: tessellate(shape) };
+export async function importToStep(text, format) {
+  const step = format === 'iges' ? await igesToStep(text) : text;
+  return { step, mesh: tessellate(readStepText(step)) };
 }

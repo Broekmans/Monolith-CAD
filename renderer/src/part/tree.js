@@ -4,9 +4,11 @@ import * as THREE from 'three';
 import { Viewport } from '../viewport.js';
 import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
 import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
+import { openAppearance } from '../appearance/popup.js';
+import { appearanceSource } from '../appearance/look.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
-import { treeRow, folderOpen, toggleFolder } from '../treeui.js';
+import { treeRow, folderOpen, toggleFolder, rangeItems } from '../treeui.js';
 import { api } from '../api.js';
 import { sketchCurves, sampleCurve } from '../../../shared/profile.mjs';
 import { solve as solveSketch, measure as measureDim, DIM_TYPES } from '../sketch/solver.js';
@@ -25,9 +27,11 @@ export class PartTree {
     const consumedBy = new Map();
     for (const f of this.doc.features) if (f.sketch) consumedBy.set(f.sketch, f.id);
     const selKeys = new Set(this.sel.map((s) => s.key));
+    const owners = this.ownerFeats(); // 0.1.133: features that made the picked faces / edges
+    this._treeItems = new Map(); // 0.1.134: rows for Shift+click ranges
     const add = (o) => tree.appendChild(treeRow(o));
     const folder = (key, dflt, o) => { const open = folderOpen(this, key, dflt); add({ icon: 'folder', ...o, twisty: open, onTwisty: () => toggleFolder(this, key), data: { folder: key } }); return open; };
-    add({ icon: 'part', label: `${this.doc.name}  (Default)`, onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Rename…', run: () => this.renamePart() }]) });
+    add({ icon: 'part', label: `${this.doc.name}  (Default)`, onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Rename…', run: () => this.renamePart() }, { label: 'Appearance…', icon: 'realistic', run: () => this.editAppearance() }, { label: 'Collapse All', key: 'Shift+C', run: () => this.collapseTree() }]) });
     add({ icon: 'massProps', label: `Material <${this.doc.material}>`, depth: 1, onDbl: () => this.editMaterial(), onMenu: (e) => contextMenu(e.clientX, e.clientY, [{ label: 'Edit Material…', run: () => this.editMaterial() }]) });
     // Solid Bodies
     const hasBody = !!this.bodyMesh;
@@ -76,20 +80,21 @@ export class PartTree {
       const s = st.get(f.id);
       const isSk = f.type === 'sketch';
       const key = (isSk ? 'sketch:' : 'feature:') + f.id;
+      this._treeItems.set(key, { kind: isSk ? 'sketch' : 'feature', id: f.id, key });
       const children = this.doc.features.filter((x) => x.type === 'sketch' && consumedBy.get(x.id) === f.id);
       const isOpen = this.expanded.has(f.id);
       const vis = isSk ? (f.visible ?? !consumed.has(f.id)) : undefined;
       add({
-        icon: FEATURE_META[metaKey(f)]?.icon || 'sketch', label: f.name, depth: depth + 1,
-        sel: selKeys.has(key), dim: i >= roll || f.suppressed, err: s?.state === 'error' ? s.error : null, warn: s?.state === 'warn' ? s.error : null,
+        icon: FEATURE_META[metaKey(f)]?.icon || 'sketch', label: f.name + this.xrefMark(f), depth: depth + 1,
+        sel: selKeys.has(key) || owners.has(f.id), dim: i >= roll || f.suppressed, err: s?.state === 'error' ? s.error : null, warn: s?.state === 'warn' ? s.error : null,
         editing: f.id === editingSketch || f.id === this.editingId,
         eye: vis, onEye: () => this.toggleSketchVisible(f),
         twisty: children.length ? isOpen : undefined, onTwisty: () => { if (isOpen) this.expanded.delete(f.id); else this.expanded.add(f.id); this.renderTree(); },
-        onClick: (e) => this.clickItem({ kind: isSk ? 'sketch' : 'feature', id: f.id, key }, e.ctrlKey || e.shiftKey),
+        onClick: (e) => this.treeClick({ kind: isSk ? 'sketch' : 'feature', id: f.id, key }, e),
         onDbl: () => (isSk ? this.editSketch(f.id) : this.editFeature(f.id)),
         onMenu: (e) => this.featureMenu(e, f, i),
         onEnter: () => this.setHoverFeat(f.id), onLeave: () => this.setHoverFeat(null),
-        tip: s?.error || '', data: depth === 0 ? { fi: i } : { item: key },
+        tip: [s?.error, this.xrefState(f) ? this.xrefTip(f) : ''].filter(Boolean).join('\n'), data: depth === 0 ? { fi: i, item: key } : { item: key },
       });
       if (isOpen) for (const c of children) featureRow(c, this.doc.features.indexOf(c), depth + 1);
     };
@@ -100,6 +105,24 @@ export class PartTree {
     });
     if (roll >= this.doc.features.length) tree.appendChild(this.rollbackBar());
     this.app.cm.refresh();
+  }
+  // 0.1.134: Shift+click = all features between the last clicked one and this one; Ctrl+click = add / remove
+  treeClick(it, e) {
+    if (e.shiftKey && !this.app.pm.current) {
+      const r = rangeItems(this.app.el.tree, this._treeItems || new Map(), this._treeAnchor, it.key);
+      if (r) { this.sel = e.ctrlKey ? [...this.sel.filter((s) => !r.some((x) => x.key === s.key)), ...r] : r; this.afterSelection(); this.app.setStatus(`${r.length} features selected`); return; }
+    }
+    this._treeAnchor = it.key;
+    this.clickItem(it, e.ctrlKey || e.shiftKey);
+  }
+  selectedFeatures() { return this.sel.filter((s) => s.kind === 'feature' || s.kind === 'sketch').map((s) => this.F(s.id)).filter(Boolean); }
+  // 0.1.133: Shift+C — every folder and every feature's sketch list closed
+  collapseTree() {
+    this.expanded?.clear();
+    this._treeOpen ??= {};
+    for (const k of Object.keys(this._treeOpen)) this._treeOpen[k] = false;
+    this.renderTree();
+    this.app.setStatus('Tree collapsed (Shift+C)');
   }
   toggleBody() { this.beginChange(); this.doc.bodyHidden = !this.doc.bodyHidden; if (!this.doc.bodyHidden) delete this.doc.bodyHidden; this.commit(); this.bodyGroup.visible = !this.doc.bodyHidden; this.renderTree(); this.vp.requestRender(); }
   togglePlaneShown(name) {
@@ -159,25 +182,29 @@ export class PartTree {
       const vis = f.visible ?? !consumed;
       items.push({ label: vis ? 'Hide' : 'Show', icon: vis ? 'eyeOff' : 'eye', run: () => this.toggleSketchVisible(f) });
       items.push({ label: 'Export Sketch to DXF…', icon: 'export', run: () => this.exportSketchDxf(f) });
+      if (this.xrefState(f)) items.push({ label: 'Break External References', icon: 'fix', run: () => this.breakXrefs(f) }); // 0.1.132
     } else {
       items.push({ label: 'Edit Feature', icon: FEATURE_META[metaKey(f)]?.icon, run: () => this.editFeature(f.id) });
       if (f.sketch) items.push({ label: 'Edit Sketch', icon: 'sketch', run: () => this.editSketch(f.sketch) });
     }
     items.push('-');
-    if (f.type !== 'sketch') items.push({ label: f.suppressed ? 'Unsuppress' : 'Suppress', run: () => { this.beginChange(); f.suppressed = !f.suppressed; this.commit(); this.renderTree(); this.regen(); } });
+    const group = this.sel.some((s) => s.id === f.id) ? this.selectedFeatures() : [f], many = group.length > 1 ? ` (${group.length})` : ''; // 0.1.134: right-click acts on all selected
+    if (f.type !== 'sketch') items.push({ label: (f.suppressed ? 'Unsuppress' : 'Suppress') + many, run: () => { this.beginChange(); const on = !f.suppressed; for (const g of group) if (g.type !== 'sketch') g.suppressed = on; this.commit(); this.renderTree(); this.regen(); } });
     items.push({ label: 'Roll Back', icon: 'history', run: () => this.setRollback(i) });
     if (this.doc.rollback !== null && this.doc.rollback !== undefined) items.push({ label: 'Roll to End', run: () => this.setRollback(null) });
     items.push({ label: 'Rename…', run: async () => { const n = await promptText('Rename feature', f.name); if (n) { this.beginChange(); f.name = n; this.commit(); this.renderTree(); } } });
-    items.push('-', { label: 'Delete', icon: 'delete', key: 'Del', run: () => this.deleteFeature(f.id) });
+    items.push('-', { label: 'Delete' + many, icon: 'delete', key: 'Del', run: () => this.deleteFeatures(group.map((g) => g.id)) });
     contextMenu(e.clientX, e.clientY, items);
   }
 
-  deleteFeature(id) {
-    const f = this.F(id);
-    if (!f) return;
-    const dependents = this.doc.features.filter((x) => x.sketch === id || (x.features || []).includes(id));
+  deleteFeature(id) { this.deleteFeatures([id]); }
+  // 0.1.134: several features in one undo step
+  deleteFeatures(ids) {
+    ids = ids.filter((id) => this.F(id));
+    if (!ids.length) return;
+    const dependents = this.doc.features.filter((x) => !ids.includes(x.id) && (ids.includes(x.sketch) || (x.features || []).some((k) => ids.includes(k))));
     this.beginChange();
-    const kill = new Set([id]);
+    const kill = new Set(ids);
     // the feature's sketch is kept (it becomes a stand-alone sketch in the tree again)
     for (const d of dependents) kill.add(d.id);
     const roll = this.doc.rollback;
@@ -192,6 +219,13 @@ export class PartTree {
   async renamePart() {
     const n = await promptText('Part name', this.doc.name);
     if (n) { this.beginChange(); this.doc.name = n; this.commit(); this.renderTree(); this.app.updateTitle(); }
+  }
+  // Appearance popup for the part (stored in the part file; Reset = back to the material's appearance)
+  editAppearance() {
+    openAppearance(this, {
+      title: 'Part', name: this.doc.name, holder: () => this.doc, resolve: () => this.appearance(), clearLabel: 'Reset to Material',
+      source: () => { const s = appearanceSource(this.doc.appearance, MATERIALS.find((m) => m.name === this.doc.material)?.appearance); return s === 'own' ? 'Set on this part' : s === 'material' ? `From the material (${this.doc.material})` : 'Part body colour (Options > Colours)'; },
+    });
   }
   async editMaterial() {
     const sel = h('select', {}, MATERIALS.map((m) => h('option', { value: m.name, selected: m.name === this.doc.material }, `${m.name}  (${m.density} g/cm³)`)));

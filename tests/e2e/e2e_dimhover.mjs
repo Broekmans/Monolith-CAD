@@ -9,7 +9,7 @@ await win.evaluate((p) => lithApp.open(p), '/tmp/hv/h.lithprt'); await W(5000); 
 await win.evaluate(() => { const d = lithApp.doc; d.setViewLayout('single'); d.editSketch(d.doc.features.find((f) => f.name === 'Sketch3').id); }); await W(2500); await idle();
 await win.evaluate(() => { const d = lithApp.doc; d.vp.normalTo(d.sketcher.fr); }); await W(800);
 await T.btn('Smart Dimension'); await W(300);
-for (const v of [10, 40, -20]) {
+for (const v of [10, 30, -20]) { // 0.1.109: 30 (not 40): at the zoom after a finished rebuild the corner (79, 42) is within pick distance of 40
   const [x, y] = await T.P(79, v); await win.mouse.move(x - 20, y); await win.mouse.move(x, y, { steps: 4 }); await W(200);
   const r = await win.evaluate(() => { const s = lithApp.doc.sketcher; return { hover: s.hover, mh: s.modelHover ? Object.keys(s.modelHover)[0] : null }; });
   const px = await win.evaluate(([x, y]) => { const vp = lithApp.doc.vp.pane, r = vp.el.getBoundingClientRect(), d = window.devicePixelRatio || 1; const c = vp.ctx.getImageData(Math.round((x - r.left) * d), Math.round((y - r.top) * d), 1, 1).data; return [c[0], c[1], c[2], c[3]]; }, [x, y]);

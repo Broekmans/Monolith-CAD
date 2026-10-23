@@ -3,9 +3,10 @@
 // display (mesh.mjs) and handles STEP / IGES exchange (exchange.mjs). Shared helpers: core.mjs.
 
 import { sketchCurves, findRegions, arcSweep } from '../shared/profile.mjs';
-import { oc, PR, add, sub, mul, dot, len, norm, planeFrame, to3, P, V, Dir, ptArr, checkValid, unify, transformed, bbox, diag, listEdges, planeOfFace, listFaces } from './core.mjs';
+import { oc, PR, add, sub, mul, dot, len, norm, planeFrame, to3, P, V, Dir, ptArr, checkValid, unify, transformed, bbox, diag, listEdges, planeOfFace, listFaces, shapeMap, edgeFaces, polygonWire, compoundOf, errText, runBool } from './core.mjs';
 import { readStepText } from './exchange.mjs';
 import { faceOwners } from './mesh.mjs';
+import { factoryOf } from '../renderer/src/app/options/index.js';
 export * from './core.mjs';
 export * from './mesh.mjs';
 export * from './exchange.mjs';
@@ -15,20 +16,19 @@ function edgeFromCurve(fr, s) {
   const c = s.cur;
   if (c.kind === 'line') {
     const a = to3(fr, s.reversed ? c.b : c.a), b = to3(fr, s.reversed ? c.a : c.b);
-    return new oc.BRepBuilderAPI_MakeEdge_3(P(a), P(b)).Edge();
+    return new oc.BRepBuilderAPI_MakeEdge(P(a), P(b)).Edge();
   }
   if (c.kind === 'circle') {
-    const circ = new oc.gp_Circ_2(new oc.gp_Ax2_3(P(to3(fr, c.c)), Dir(fr.n)), c.r);
-    return new oc.BRepBuilderAPI_MakeEdge_8(circ).Edge();
+    const circ = new oc.gp_Circ(new oc.gp_Ax2(P(to3(fr, c.c)), Dir(fr.n)), c.r);
+    return new oc.BRepBuilderAPI_MakeEdge(circ).Edge();
   }
   // arc: build through three points so orientation follows traversal
   const sw = arcSweep(c);
   const mid = c.a0 + sw / 2;
   const pm = [c.c[0] + c.r * Math.cos(mid), c.c[1] + c.r * Math.sin(mid)];
   const pa = s.reversed ? c.b : c.a, pb = s.reversed ? c.a : c.b;
-  const mk = new oc.GC_MakeArcOfCircle_4(P(to3(fr, pa)), P(to3(fr, pm)), P(to3(fr, pb)));
-  const h = new oc.Handle_Geom_Curve_2(mk.Value().get());
-  return new oc.BRepBuilderAPI_MakeEdge_24(h).Edge();
+  const mk = new oc.GC_MakeArcOfCircle(P(to3(fr, pa)), P(to3(fr, pm)), P(to3(fr, pb)));
+  return new oc.BRepBuilderAPI_MakeEdge(mk.Value()).Edge();
 }
 
 // Closed outline (e.g. text glyph) -> wire of straight edges at sharp
@@ -55,8 +55,8 @@ function smoothWire(pts) {
   if (!starts.length) starts = [0, Math.floor(n / 3), Math.floor((2 * n) / 3)];
   const verts = new Map();
   const V = (i) => { if (!verts.has(i)) verts.set(i, new oc.BRepBuilderAPI_MakeVertex(P(pts[i])).Vertex()); return verts.get(i); };
-  const mw = new oc.BRepBuilderAPI_MakeWire_1();
-  const straight = (run) => { for (let j = 1; j < run.length; j++) mw.Add_1(new oc.BRepBuilderAPI_MakeEdge_2(V(run[j - 1]), V(run[j])).Edge()); };
+  const mw = new oc.BRepBuilderAPI_MakeWire();
+  const straight = (run) => { for (let j = 1; j < run.length; j++) mw.Add(new oc.BRepBuilderAPI_MakeEdge(V(run[j - 1]), V(run[j])).Edge()); };
   for (let k = 0; k < starts.length; k++) {
     const i0 = starts[k], i1 = starts[(k + 1) % starts.length];
     const run = [i0];
@@ -69,12 +69,12 @@ function smoothWire(pts) {
     const margin = chord * 0.03 + 1e-6;
     let ok = false;
     try {
-      const arr = new oc.TColgp_Array1OfPnt_2(1, run.length);
+      const arr = new oc.NCollection_Array1_gp_Pnt(1, run.length);
       P3.forEach((q, j) => arr.SetValue(j + 1, P(q)));
-      const fit = new oc.GeomAPI_PointsToBSpline_2(arr, 2, 5, oc.GeomAbs_Shape.GeomAbs_C1, chord * 1e-4);
+      const fit = new oc.GeomAPI_PointsToBSpline(arr, 2, 5, oc.GeomAbs_Shape.GeomAbs_C1, chord * 1e-4);
       if (fit.IsDone()) {
         const hc = fit.Curve();
-        const c = hc.get();
+        const c = hc;
         const f = c.FirstParameter(), l = c.LastParameter();
         ok = true;
         for (let s2 = 0; s2 <= 48 && ok; s2++) {
@@ -82,8 +82,8 @@ function smoothWire(pts) {
           for (let d = 0; d < 3; d++) if (q[d] < mn[d] - margin || q[d] > mx[d] + margin) { ok = false; break; }
         }
         if (ok) {
-          const me = new oc.BRepBuilderAPI_MakeEdge_27(new oc.Handle_Geom_Curve_2(c), V(run[0]), V(run[run.length - 1]));
-          if (me.IsDone()) mw.Add_1(me.Edge()); else ok = false;
+          const me = new oc.BRepBuilderAPI_MakeEdge(c, V(run[0]), V(run[run.length - 1]));
+          if (me.IsDone()) mw.Add(me.Edge()); else ok = false;
         }
       }
     } catch { ok = false; }
@@ -93,8 +93,36 @@ function smoothWire(pts) {
   return mw.Wire();
 }
 
-// Exact glyph contour: straight edges and Bezier edges sharing vertices.
-function bezierWire(segs) {
+// Glyph curve (Bezier control points, 3D) -> chain of lines and 3-point arcs, each within `tol` of the curve
+// (0.1.108: planes and cylinders cut 3-4x faster than Bezier faces, and every later feature on the body too).
+function bezPt(c, t) {
+  let q = c;
+  while (q.length > 1) { const nx = []; for (let i = 0; i < q.length - 1; i++) nx.push(add(mul(q[i], 1 - t), mul(q[i + 1], t))); q = nx; }
+  return q[0];
+}
+const cross3 = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+const ARC_CHECK = Array.from({ length: 15 }, (_, i) => (i + 1) / 16).filter((f) => f !== 0.5);
+export function bezierArcs(c, tol, maxSplit = factoryOf('skTextArcMaxSplit'), t0 = 0, t1 = 1, depth = 0) {
+  const a = bezPt(c, t0), b = bezPt(c, t1), m = bezPt(c, (t0 + t1) / 2);
+  const within = (dev) => ARC_CHECK.every((f) => dev(bezPt(c, t0 + (t1 - t0) * f)) <= tol);
+  const ab = sub(b, a), L = len(ab);
+  // distance to the line piece a-b (beyond its ends: to the nearest end)
+  const lineDev = (p) => { const t = dot(sub(p, a), ab) / (L * L || 1e-24); return t < 0 || t > 1 ? Math.min(len(sub(p, a)), len(sub(p, b))) : len(cross3(sub(p, a), ab)) / (L || 1e-12); };
+  if (L > 1e-12 && lineDev(m) <= tol && within(lineDev)) return [{ a, b, m: null }];
+  const am = sub(m, a), n = cross3(ab, am), n2 = dot(n, n);
+  if (n2 > 1e-24) {
+    const ctr = add(a, mul(add(mul(cross3(n, ab), dot(am, am)), mul(cross3(am, n), dot(ab, ab))), 1 / (2 * n2)));
+    const r = len(sub(a, ctr));
+    // on the arc piece (same side of the chord as m) and near the circle
+    const side = (p) => dot(cross3(ab, sub(p, a)), n);
+    if (depth >= maxSplit || within((p) => (side(p) * n2 < -1e-12 * n2 ? Infinity : Math.abs(len(sub(p, ctr)) - r)))) return [{ a, b, m }];
+  } else if (depth >= maxSplit) return [{ a, b, m: null }];
+  const tm = (t0 + t1) / 2;
+  return [...bezierArcs(c, tol, maxSplit, t0, tm, depth + 1), ...bezierArcs(c, tol, maxSplit, tm, t1, depth + 1)];
+}
+
+// Glyph contour: straight edges and (tol > 0) arcs / (tol 0) exact Bezier edges, sharing vertices.
+function bezierWire(segs, tol = 0) {
   const verts = [];
   const vertexAt = (p) => {
     for (const v of verts) if (Math.abs(v.p[0] - p[0]) < 1e-7 && Math.abs(v.p[1] - p[1]) < 1e-7 && Math.abs(v.p[2] - p[2]) < 1e-7) return v.v;
@@ -102,16 +130,29 @@ function bezierWire(segs) {
     verts.push({ p, v });
     return v;
   };
-  const mw = new oc.BRepBuilderAPI_MakeWire_1();
+  const mw = new oc.BRepBuilderAPI_MakeWire();
   for (const seg of segs) {
     const v0 = vertexAt(seg[0]), v1 = vertexAt(seg[seg.length - 1]);
-    if (seg.length === 2) { mw.Add_1(new oc.BRepBuilderAPI_MakeEdge_2(v0, v1).Edge()); continue; }
-    const arr = new oc.TColgp_Array1OfPnt_2(1, seg.length);
+    if (seg.length === 2) { mw.Add(new oc.BRepBuilderAPI_MakeEdge(v0, v1).Edge()); continue; }
+    if (tol > 0) {
+      const parts = bezierArcs(seg, tol);
+      let prev = v0;
+      for (let k = 0; k < parts.length; k++) {
+        const pc = parts[k], vb = k === parts.length - 1 ? v1 : vertexAt(pc.b);
+        if (!pc.m) { mw.Add(new oc.BRepBuilderAPI_MakeEdge(prev, vb).Edge()); prev = vb; continue; }
+        const arc = new oc.GC_MakeArcOfCircle(P(pc.a), P(pc.m), P(pc.b));
+        const me = new oc.BRepBuilderAPI_MakeEdge(arc.Value(), prev, vb);
+        if (!me.IsDone()) return null;
+        mw.Add(me.Edge()); prev = vb;
+      }
+      continue;
+    }
+    const arr = new oc.NCollection_Array1_gp_Pnt(1, seg.length);
     seg.forEach((q, j) => arr.SetValue(j + 1, P(q)));
-    const bz = new oc.Geom_BezierCurve_1(arr);
-    const me = new oc.BRepBuilderAPI_MakeEdge_27(new oc.Handle_Geom_Curve_2(bz), v0, v1);
+    const bz = new oc.Geom_BezierCurve(arr);
+    const me = new oc.BRepBuilderAPI_MakeEdge(bz, v0, v1);
     if (!me.IsDone()) return null;
-    mw.Add_1(me.Edge());
+    mw.Add(me.Edge());
   }
   return mw.IsDone() ? mw.Wire() : null;
 }
@@ -119,40 +160,37 @@ function bezierWire(segs) {
 function wireFromLoop(fr, loop) {
   const lc = loop.curves.length === 1 ? loop.curves[0].cur : null;
   if (lc && lc.kind === 'poly' && lc.segs && !globalThis.__noSmooth) {
-    try { const w = bezierWire(lc.segs.map((seg) => seg.map((q) => to3(fr, q)))); if (w) return w; } catch { /* fall back */ }
+    try { const w = bezierWire(lc.segs.map((seg) => seg.map((q) => to3(fr, q))), lc.tol ?? factoryOf('skTextArcTol')); if (w) return w; } catch { /* fall back */ }
   }
   if (loop.curves.length === 1 && loop.curves[0].cur.kind === 'poly') {
     const pts = loop.curves[0].cur.pts.map((q) => to3(fr, q));
     let wire = null;
     if (!globalThis.__noSmooth) { try { wire = smoothWire(pts); } catch { wire = null; } }
     if (wire) return wire;
-    const mp = new oc.BRepBuilderAPI_MakePolygon_1();
-    for (const q of pts) mp.Add_1(P(q));
-    mp.Close();
-    return mp.Wire();
+    return polygonWire(pts);
   }
-  const mw = new oc.BRepBuilderAPI_MakeWire_1();
-  for (const s of loop.curves) mw.Add_1(edgeFromCurve(fr, s));
+  const mw = new oc.BRepBuilderAPI_MakeWire();
+  for (const s of loop.curves) mw.Add(edgeFromCurve(fr, s));
   if (!mw.IsDone()) throw new Error('Could not build a closed wire from the sketch');
   return mw.Wire();
 }
 
 // Planar face of a region: outer loop with its holes (no booleans needed).
 function regionFace(fr, region) {
-  const mf = new oc.BRepBuilderAPI_MakeFace_15(wireFromLoop(fr, region.outer), true);
+  const mf = new oc.BRepBuilderAPI_MakeFace(wireFromLoop(fr, region.outer), true);
   if (!mf.IsDone()) throw new Error('Could not build a face from the sketch');
   let face = mf.Face();
   if (!region.holes.length) return face;
   for (const h of region.holes) {
     const w = wireFromLoop(fr, h);
-    const add = new oc.BRepBuilderAPI_MakeFace_22(face, w);
+    const add = new oc.BRepBuilderAPI_MakeFace(face, w);
     if (!add.IsDone()) throw new Error('Could not add a hole to the sketch face');
     face = add.Face();
   }
-  const fix = new oc.ShapeFix_Face_2(face);
-  fix.FixOrientation_1();
+  const fix = new oc.ShapeFix_Face(face);
+  fix.FixOrientation();
   fix.Perform();
-  return oc.TopoDS.Face_1(fix.Face());
+  return oc.TopoDS.Face(fix.Face());
 }
 
 function faceFromLoop(fr, loop) {
@@ -161,19 +199,16 @@ function faceFromLoop(fr, loop) {
     let wire = null;
     try { wire = smoothWire(pts); } catch { wire = null; }
     if (!wire) {
-      const mp = new oc.BRepBuilderAPI_MakePolygon_1();
-      for (const q of pts) mp.Add_1(P(q));
-      mp.Close();
-      wire = mp.Wire();
+      wire = polygonWire(pts);
     }
-    const mf = new oc.BRepBuilderAPI_MakeFace_15(wire, true);
+    const mf = new oc.BRepBuilderAPI_MakeFace(wire, true);
     if (!mf.IsDone()) throw new Error('Could not build a face from the sketch text');
     return mf.Face();
   }
-  const mw = new oc.BRepBuilderAPI_MakeWire_1();
-  for (const s of loop.curves) mw.Add_1(edgeFromCurve(fr, s));
+  const mw = new oc.BRepBuilderAPI_MakeWire();
+  for (const s of loop.curves) mw.Add(edgeFromCurve(fr, s));
   if (!mw.IsDone()) throw new Error('Could not build a closed wire from the sketch');
-  const mf = new oc.BRepBuilderAPI_MakeFace_15(mw.Wire(), true);
+  const mf = new oc.BRepBuilderAPI_MakeFace(mw.Wire(), true);
   if (!mf.IsDone()) throw new Error('Could not build a face from the sketch');
   return mf.Face();
 }
@@ -206,31 +241,24 @@ function regionSolids(sk, makeSolid) {
   }
   // Regions of one sketch never overlap, so a compound is a valid tool body
   // (much faster than fusing them one by one, e.g. for sketch text).
-  const builder = new oc.BRep_Builder();
-  const comp = new oc.TopoDS_Compound();
-  builder.MakeCompound(comp);
-  for (const s of solids) builder.Add(comp, s);
-  return comp;
+  return compoundOf(solids);
 }
 
 // ---------- booleans / transforms ----------
 function boolFuse(a, b) {
-  const op = new oc.BRepAlgoAPI_Fuse_3(a, b, PR());
-  op.Build(PR());
+  const op = runBool('BRepAlgoAPI_Fuse', a, b);
   if (!op.IsDone()) throw new Error('Boolean union failed');
   return unify(op.Shape());
 }
 function boolCut(a, b) {
-  const op = new oc.BRepAlgoAPI_Cut_3(a, b, PR());
-  op.Build(PR());
+  const op = runBool('BRepAlgoAPI_Cut', a, b);
   if (!op.IsDone()) throw new Error('Boolean cut failed');
   return unify(op.Shape());
 }
 // feature preview of a cut: only the volume really removed from the body (not the whole Through All tool)
 export function removedVolume(body, tool) { return boolCommon(body, tool); }
 function boolCommon(a, b) {
-  const op = new oc.BRepAlgoAPI_Common_3(a, b, PR());
-  op.Build(PR());
+  const op = runBool('BRepAlgoAPI_Common', a, b);
   if (!op.IsDone()) throw new Error('Boolean intersect failed');
   return unify(op.Shape());
 }
@@ -266,14 +294,13 @@ function edgeDir(e) {
 // edge on a pocket that moved far (camera slot 43 mm) is found again as the same edge of that pocket's edge group.
 function edgeGroups(shape, stages, edges) {
   const own = faceOwners(stages, shape);
-  const fmap = new oc.TopTools_IndexedMapOfShape_1(); oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE, fmap);
-  const anc = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
-  oc.TopExp.MapShapesAndAncestors(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_FACE, anc);
+  const fmap = shapeMap(shape, oc.TopAbs_ShapeEnum.TopAbs_FACE);
+  const ef = edgeFaces(shape);
   for (const e of edges) {
     const keys = new Set();
     try {
-      const i = anc.FindIndex(e.edge);
-      if (i > 0) { const l = anc.FindFromIndex(i); if (l.Size() > 0) for (const f of [l.First_1(), l.Last_1()]) { const fi = fmap.FindIndex(f); if (fi > 0 && own[fi - 1]) keys.add(own[fi - 1]); } }
+      const i = ef.edges.FindIndex(e.edge);
+      if (i > 0) for (const f of ef.faces(i)) { const fi = fmap.FindIndex(f); if (fi > 0 && own[fi - 1]) keys.add(own[fi - 1]); }
     } catch { /* no owners */ }
     e.owners = [...keys].sort().join('+');
   }
@@ -387,15 +414,15 @@ function buildExtrudeTool(f, sk, body) {
     // SolidWorks convention: a cut goes into the material by default
     dir = mul(dir, -1);
   }
-  let tool = regionSolids(sk, (face) => new oc.BRepPrimAPI_MakePrism_1(face, V(mul(dir, depth)), false, true).Shape());
+  let tool = regionSolids(sk, (face) => new oc.BRepPrimAPI_MakePrism(face, V(mul(dir, depth)), false, true).Shape());
   if (f.end === 'midplane') {
-    const t = new oc.gp_Trsf_1();
-    t.SetTranslation_1(V(mul(dir, -depth / 2)));
+    const t = new oc.gp_Trsf();
+    t.SetTranslation(V(mul(dir, -depth / 2)));
     tool = transformed(tool, t);
   }
   if (f.end === 'throughAll' && f.op === 'cut' && f.bothSides) {
-    const t = new oc.gp_Trsf_1();
-    t.SetTranslation_1(V(mul(dir, -depth / 2)));
+    const t = new oc.gp_Trsf();
+    t.SetTranslation(V(mul(dir, -depth / 2)));
     tool = transformed(tool, t);
   }
   return tool;
@@ -404,10 +431,10 @@ function buildExtrudeTool(f, sk, body) {
 function buildRevolveTool(f, sk, sketches) {
   const ax = f.axis?.line ? axisFromSketchLine(sk, f.axis.line) : resolveAxis(f.axis, sketches);
   const ang = ((Number(f.angle) || 360) * Math.PI) / 180 * (f.reverse ? -1 : 1);
-  const axis = new oc.gp_Ax1_2(P(ax.p), Dir(ax.d));
+  const axis = new oc.gp_Ax1(P(ax.p), Dir(ax.d));
   return regionSolids(sk, (face) => {
-    if (Math.abs(Math.abs(ang) - 2 * Math.PI) < 1e-9) return new oc.BRepPrimAPI_MakeRevol_2(face, axis, false).Shape();
-    return new oc.BRepPrimAPI_MakeRevol_1(face, axis, ang, false).Shape();
+    if (Math.abs(Math.abs(ang) - 2 * Math.PI) < 1e-9) return new oc.BRepPrimAPI_MakeRevol(face, axis, false).Shape();
+    return new oc.BRepPrimAPI_MakeRevol(face, axis, ang, false).Shape();
   });
 }
 
@@ -492,7 +519,7 @@ export function regenerate(features, opts = {}) {
         case 'fillet': {
           if (!body) throw new Error('No body to fillet');
           const mk = new oc.BRepFilletAPI_MakeFillet(body, oc.ChFi3d_FilletShape.ChFi3d_Rational);
-          for (const e of matchEdges(body, f.edges || [], refCtx)) mk.Add_2(Number(f.radius), e);
+          for (const e of matchEdges(body, f.edges || [], refCtx)) mk.Add(Number(f.radius), e);
           mk.Build(PR());
           if (!mk.IsDone()) throw new Error('Fillet failed - try a smaller radius');
           body = checkValid(mk.Shape(), 'Fillet');
@@ -501,7 +528,7 @@ export function regenerate(features, opts = {}) {
         case 'chamfer': {
           if (!body) throw new Error('No body to chamfer');
           const mk = new oc.BRepFilletAPI_MakeChamfer(body);
-          for (const e of matchEdges(body, f.edges || [], refCtx)) mk.Add_2(Number(f.distance), e);
+          for (const e of matchEdges(body, f.edges || [], refCtx)) mk.Add(Number(f.distance), e);
           mk.Build(PR());
           if (!mk.IsDone()) throw new Error('Chamfer failed - try a smaller distance');
           body = checkValid(mk.Shape(), 'Chamfer');
@@ -509,8 +536,8 @@ export function regenerate(features, opts = {}) {
         }
         case 'shell': {
           if (!body) throw new Error('No body to shell');
-          const list = new oc.TopTools_ListOfShape_1();
-          for (const fc of matchFaces(body, f.faces || [])) list.Append_1(fc);
+          const list = new oc.NCollection_List_TopoDS_Shape();
+          for (const fc of matchFaces(body, f.faces || [])) list.Append(fc);
           const mk = new oc.BRepOffsetAPI_MakeThickSolid();
           mk.MakeThickSolidByJoin(body, list, -Math.abs(Number(f.thickness)), 1e-3,
             oc.BRepOffset_Mode.BRepOffset_Skin, false, false, oc.GeomAbs_JoinType.GeomAbs_Arc, false, PR());
@@ -532,8 +559,8 @@ export function regenerate(features, opts = {}) {
             const d = resolveAxis(f.direction, sketches).d;
             const dir = f.reverse ? mul(d, -1) : d;
             for (let k = 1; k < (f.count | 0); k++) {
-              const t = new oc.gp_Trsf_1();
-              t.SetTranslation_1(V(mul(dir, Number(f.spacing) * k)));
+              const t = new oc.gp_Trsf();
+              t.SetTranslation(V(mul(dir, Number(f.spacing) * k)));
               copies.push(t);
             }
           } else if (f.type === 'circularPattern') {
@@ -542,14 +569,14 @@ export function regenerate(features, opts = {}) {
             const total = ((Number(f.angle) || 360) * Math.PI) / 180;
             const step = Math.abs(total - 2 * Math.PI) < 1e-9 ? total / n : total / Math.max(1, n - 1);
             for (let k = 1; k < n; k++) {
-              const t = new oc.gp_Trsf_1();
-              t.SetRotation_1(new oc.gp_Ax1_2(P(ax.p), Dir(ax.d)), step * k);
+              const t = new oc.gp_Trsf();
+              t.SetRotation(new oc.gp_Ax1(P(ax.p), Dir(ax.d)), step * k);
               copies.push(t);
             }
           } else {
             const pl = STD_PLANES[f.plane] || f.plane;
-            const t = new oc.gp_Trsf_1();
-            t.SetMirror_3(new oc.gp_Ax2_3(P(pl.origin), Dir(pl.normal)));
+            const t = new oc.gp_Trsf();
+            t.SetMirror(new oc.gp_Ax2(P(pl.origin), Dir(pl.normal)));
             copies.push(t);
           }
           for (const s of src) for (const t of copies) body = applyOp(body, transformed(s.shape, t), s.op);
@@ -572,7 +599,7 @@ export function regenerate(features, opts = {}) {
       status.push({ id: f.id, state: 'ok', ...(refCtx.info.length ? { refs: refCtx.info } : {}) });
     } catch (err) {
       failed = true;
-      status.push({ id: f.id, state: 'error', error: String(err.message || err) });
+      status.push({ id: f.id, state: 'error', error: errText(err) });
     }
   }
   return { body, status, stages, tools };
@@ -611,11 +638,8 @@ export function buildPlanModel(entities) {
   let body = null;
   const solids = [];
   const box = (corners2d, z0, z1) => {
-    const mw = new oc.BRepBuilderAPI_MakePolygon_1();
-    for (const c of corners2d) mw.Add_1(P(W(c[0], c[1], z0)));
-    mw.Close();
-    const face = new oc.BRepBuilderAPI_MakeFace_15(mw.Wire(), true).Face();
-    return new oc.BRepPrimAPI_MakePrism_1(face, V([0, z1 - z0, 0]), false, true).Shape();
+    const face = new oc.BRepBuilderAPI_MakeFace(polygonWire(corners2d.map((c) => W(c[0], c[1], z0))), true).Face();
+    return new oc.BRepPrimAPI_MakePrism(face, V([0, z1 - z0, 0]), false, true).Shape();
   };
   for (const w of walls) {
     const [ax, ay] = w.a, [bx, by] = w.b;

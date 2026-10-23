@@ -1,0 +1,4 @@
+{
+  "//": "0.1.112: these files are also loaded by the kernel worker from app.asar.unpacked (no package.json there) - ES modules",
+  "type": "module"
+}

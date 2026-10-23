@@ -7,12 +7,12 @@
 import * as THREE from 'three';
 import { h, fmt, toast } from '../ui.js';
 import { api } from '../api.js';
+import { opt, optHex } from '../app/options.js';
 import { SCAN_TO_WORLD } from './layer.js';
 import { loadPart } from '../assembly/assembly.js';
 import { IDENT, apply, compose, invert, solvePairs, fromFrame, toFrame, angleDeg } from '../../../shared/rigid.mjs';
 
-const C_MOV = '#ff8c00', C_REF = '#00b4d8';
-const mm = (v) => (v === v ? fmt(v * 1000, 1) + ' mm' : '—');
+const mm = (v) => (v === v ? fmt(v * 1000, opt('pcMmDec')) + ' mm' : '—');
 const fileName = (p) => p.split(/[\\/]/).pop();
 // {R,t} (document frame) <-> THREE.Matrix4
 const toM4 = (T) => new THREE.Matrix4().set(T.R[0], T.R[1], T.R[2], T.t[0], T.R[3], T.R[4], T.R[5], T.t[1], T.R[6], T.R[7], T.R[8], T.t[2], 0, 0, 0, 1);
@@ -87,10 +87,10 @@ export class CloudRegister {
       for (const r of [st.mov, st.ref]) if (r.visible === false) { r.visible = true; this.layers.get(r.id).applyStyle(); }
     }
     const opts = (list) => list.map((r) => ({ value: r.id, label: r.name }));
-    const sp = Math.max(0.002, this.spacingEstimate(this.layers.get(st.ref.id)));
+    const sp = Math.max(opt('pcMinSpacing'), this.spacingEstimate(this.layers.get(st.ref.id)));
     const pm = this.app.pm.show({
       title: part ? 'Align Part' : 'Align Clouds', iconName: part ? 'part' : 'cloud',
-      values: { mov: st.mov?.id, ref: st.ref.id, file: st.file || '', level: false, maxDist: part ? 10 : 20, iters: 40, overlap: 90 },
+      values: { mov: st.mov?.id, ref: st.ref.id, file: st.file || '', level: false, maxDist: part ? opt('pcIcpPartDist') : opt('pcIcpCloudDist'), iters: opt('pcIcpIters'), overlap: opt('pcIcpOverlap') },
       message: part ? 'Click a point on the part (orange), then the same spot on the scan (blue). 3 pairs or more; then Refine. The scan keeps its coordinates.'
         : 'Click a point on the moving cloud (orange), then the same spot on the reference (blue). 3 pairs or more; then Refine. Backspace removes the last click.',
       fields: [
@@ -112,7 +112,7 @@ export class CloudRegister {
           { key: 'iters', type: 'number', label: 'Max. iterations', min: 1, step: 10 },
           { key: 'overlap', type: 'number', label: 'Overlap', unit: '%', min: 10, step: 5 },
           { type: 'buttons', buttons: [{ label: 'Refine with ICP', icon: 'rotate', run: () => this.regICP() }] },
-          { type: 'info', key: 'icp', text: `The clouds must already be roughly aligned (within the start search distance). Typical point spacing: ${fmt(sp * 100, 1)} cm.` }] },
+          { type: 'info', key: 'icp', text: `The clouds must already be roughly aligned (within the start search distance). Typical point spacing: ${fmt(sp * 100, opt('pcSpacingDec'))} cm.` }] },
       ],
       onChange: (v, key) => this.regChange(v, key),
       onOk: () => this.regApply(),
@@ -165,13 +165,13 @@ export class CloudRegister {
     g.setIndex(new THREE.BufferAttribute(r.mesh.indices, 1));
     g.computeBoundingBox();
     st.partBox = g.boundingBox.clone();
-    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xe0a030, transparent: true, opacity: 0.3, depthWrite: false, side: THREE.DoubleSide }));
+    const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: opt('pcPartFillColor'), transparent: true, opacity: opt('pcPartOpacityAlign'), depthWrite: false, side: THREE.DoubleSide }));
     st.pickMesh = mesh;
     st.preview.add(mesh);
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 25), new THREE.LineBasicMaterial({ color: 0xff8c00, depthTest: false, transparent: true }));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, opt('pcPartEdgeAngle')), new THREE.LineBasicMaterial({ color: optHex('pcPartEdgeColor'), depthTest: false, transparent: true }));
     edges.renderOrder = 10; st.preview.add(edges);
     const b = st.partBox;
-    info.textContent = `${fileName(file)}: ${(r.mesh.indices.length / 3).toLocaleString()} triangles, ${fmt(b.max.x - b.min.x, 2)} × ${fmt(b.max.y - b.min.y, 2)} × ${fmt(b.max.z - b.min.z, 2)} m`;
+    info.textContent = `${fileName(file)}: ${(r.mesh.indices.length / 3).toLocaleString()} triangles, ${fmt(b.max.x - b.min.x, opt('pcSizeDec'))} × ${fmt(b.max.y - b.min.y, opt('pcSizeDec'))} × ${fmt(b.max.z - b.min.z, opt('pcSizeDec'))} m`;
     const saved = this.doc.partAlign?.[file];
     st.pairs = []; st.half = null; st.D = IDENT(); st.icp = null;
     if (saved) st.base = new THREE.Matrix4().fromArray(saved);
@@ -252,11 +252,11 @@ export class CloudRegister {
     el.append(...rows);
     let msg = st.pairs.length < need ? `${st.pairs.length} pair${st.pairs.length === 1 ? '' : 's'} – ${need - st.pairs.length} more needed${st.half ? ' (now click the reference)' : ''}.`
       : `${st.pairs.length} pairs · RMS ${mm(st.solve?.rms)}${st.half ? ' · now click the reference' : ''}`;
-    if (st.solve) msg += ` · rotation ${fmt(angleDeg(st.D.R), 3)}° · shift ${fmt(Math.hypot(...this.regShift()), 3)} m`;
+    if (st.solve) msg += ` · rotation ${fmt(angleDeg(st.D.R), opt('pcRegDec'))}° · shift ${fmt(Math.hypot(...this.regShift()), opt('pcRegDec'))} m`;
     el.append(h('div', { class: 'pm-info' }, msg));
     if (st.solve && st.pairs.length > need) {
       const worst = st.solve.res.indexOf(Math.max(...st.solve.res));
-      if (st.solve.res[worst] > 3 * st.solve.rms && st.solve.res[worst] > 0.02) el.append(h('div', { class: 'pm-msg error' }, `Pair ${worst + 1} does not fit the others well – check or remove it.`));
+      if (st.solve.res[worst] > opt('pcPairOutlierK') * st.solve.rms && st.solve.res[worst] > opt('pcPairOutlierMin')) el.append(h('div', { class: 'pm-msg error' }, `Pair ${worst + 1} does not fit the others well – check or remove it.`));
     }
   }
   // movement of the moving side's centre (m), for display
@@ -278,7 +278,7 @@ export class CloudRegister {
       for (let k = 0; k < I.length; k++) { q.fromArray(P, I[k] * 3).applyMatrix4(M); tris[k * 3] = q.x; tris[k * 3 + 1] = q.y; tris[k * 3 + 2] = q.z; }
       mov = { tris };
     } else mov = { cloud: { id: this.layers.get(st.mov.id).id, transform: st.mov.transform || null } };
-    const spec = { mov, ref: { cloud: { id: this.layers.get(st.ref.id).id, transform: st.ref.transform || null } }, docOrigin: O, maxDist: v.maxDist / 100, iters: Math.round(v.iters), overlap: Math.max(0.1, Math.min(1, v.overlap / 100)), level: !!v.level, minDist: Math.max(0.001, this.spacingEstimate(this.layers.get(st.ref.id)) / 2) };
+    const spec = { mov, ref: { cloud: { id: this.layers.get(st.ref.id).id, transform: st.ref.transform || null } }, docOrigin: O, maxDist: v.maxDist / 100, iters: Math.round(v.iters), overlap: Math.max(opt('pcIcpOverlapMin'), Math.min(1, v.overlap / 100)), level: !!v.level, minDist: Math.max(opt('pcIcpMinDistMin'), this.spacingEstimate(this.layers.get(st.ref.id)) / opt('pcIcpMinDistDiv')) };
     const req = Math.random();
     this.busy = true; this.app.setBusy(true); this.app.cm.refresh();
     const off = api.onCloudProgress((p) => { if (p.req === req) this.showProgress('Refine (ICP)', p); });
@@ -292,8 +292,8 @@ export class CloudRegister {
     st.D = compose(fromFrame(r.T, O), st.D);
     st.icp = r; st.solve = null; st.pairs = [];
     this.regPlace(); this.regPanel();
-    out.textContent = `ICP: RMS ${mm(r.rms)} · overlap ${fmt(r.overlap * 100, 0)}% · ${r.iterations} iterations · ${r.sample.toLocaleString()} sample points (${fmt(r.seconds, 1)} s). Total: rotation ${fmt(angleDeg(st.D.R), 3)}°, shift ${fmt(Math.hypot(...this.regShift()), 3)} m.`;
-    if (r.overlap < 0.3) out.textContent += ' Low overlap: check the result.';
+    out.textContent = `ICP: RMS ${mm(r.rms)} · overlap ${fmt(r.overlap * 100, opt('pcOverlapDec'))}% · ${r.iterations} iterations · ${r.sample.toLocaleString()} sample points (${fmt(r.seconds, opt('pcSecDec'))} s). Total: rotation ${fmt(angleDeg(st.D.R), opt('pcRegDec'))}°, shift ${fmt(Math.hypot(...this.regShift()), opt('pcRegDec'))} m.`;
+    if (r.overlap < opt('pcIcpLowOverlap')) out.textContent += ' Low overlap: check the result.';
     this.regLast = r; // (tests)
   }
   regApply() {
@@ -308,7 +308,7 @@ export class CloudRegister {
       if (!st.solve && !st.icp) { this.regEnd(true); return true; }
       st.mov.registration = { ref: st.ref.name, pairs: st.solve ? st.pairs.length : 0, pairsRms: st.solve?.rms ?? null, icpRms: st.icp?.rms ?? null, overlap: st.icp?.overlap ?? null, level: !!st.pm.values.level, date: new Date().toISOString(), D: st.D };
       this.undoStack.push(st.snap); this.redoStack = [];
-      this.app.setStatus(`${st.mov.name} aligned to ${st.ref.name}: rotation ${fmt(angleDeg(st.D.R), 3)}°, shift ${fmt(Math.hypot(...this.regShift()), 3)} m`);
+      this.app.setStatus(`${st.mov.name} aligned to ${st.ref.name}: rotation ${fmt(angleDeg(st.D.R), opt('pcRegDec'))}°, shift ${fmt(Math.hypot(...this.regShift()), opt('pcRegDec'))} m`);
     }
     this.regEnd(false);
     this.app.setDirty(true);
@@ -325,27 +325,28 @@ export class CloudRegister {
   drawPairs(ctx, hover) {
     const st = this.reg; if (!st) return;
     const S = (a) => this.absToScreen(a);
-    const dot = (q, col, n) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(q[0], q[1], 4.5, 0, Math.PI * 2); ctx.fill(); if (n) { ctx.font = 'bold 12px sans-serif'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.strokeText(n, q[0] + 7, q[1] - 7); ctx.fillText(n, q[0] + 7, q[1] - 7); } };
+    const C_MOV = opt('pcMovColor'), C_REF = opt('pcRefColor'), to = opt('pcPairTextOff');
+    const dot = (q, col, n) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(q[0], q[1], opt('pcPairDotR'), 0, Math.PI * 2); ctx.fill(); if (n) { ctx.font = opt('pcPairFont'); ctx.lineWidth = opt('pcPairHaloW'); ctx.strokeStyle = opt('pcPairHalo'); ctx.strokeText(n, q[0] + to, q[1] - to); ctx.fillText(n, q[0] + to, q[1] - to); } };
     st.pairs.forEach((p, i) => {
       const a = S(apply(st.D, p.a)), b = S(p.b);
-      ctx.strokeStyle = 'rgba(216,27,216,0.8)'; ctx.lineWidth = 1.2; ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = opt('pcPairLine'); ctx.lineWidth = opt('pcPairLineW'); ctx.setLineDash(opt('pcPairDash'));
       ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); ctx.setLineDash([]);
       dot(a, C_MOV, String(i + 1)); dot(b, C_REF, String(i + 1));
     });
     if (st.half) dot(S(apply(st.D, st.half)), C_MOV, String(st.pairs.length + 1));
-    if (hover) { const q = S(hover.abs); ctx.strokeStyle = hover.side === 'mov' ? C_MOV : C_REF; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(q[0], q[1], 7, 0, Math.PI * 2); ctx.stroke(); }
+    if (hover) { const q = S(hover.abs); ctx.strokeStyle = hover.side === 'mov' ? C_MOV : C_REF; ctx.lineWidth = opt('pcToolLineW'); ctx.beginPath(); ctx.arc(q[0], q[1], opt('pcHoverRingR'), 0, Math.PI * 2); ctx.stroke(); }
   }
 
   // ---------------- report ----------------
   async exportRegReport(rec = this.selRec()) {
     const g = rec?.registration; if (!g) return;
-    const T = rec.transform || IDENT(), f = (x) => x.toFixed(9);
+    const T = rec.transform || IDENT(), f = (x) => x.toFixed(opt('pcReportRDec'));
     const lines = [`Registration of ${rec.name}`, `Reference: ${g.ref}`, `Date: ${g.date}`, g.level ? 'Mode: level only (rotation about Z)' : 'Mode: full rotation',
-      g.pairs ? `Point pairs: ${g.pairs}, RMS ${mm(g.pairsRms)}` : 'Point pairs: none', g.icpRms != null ? `ICP: RMS ${mm(g.icpRms)}, overlap ${fmt(g.overlap * 100, 1)}%` : 'ICP: not used',
-      `Rotation of this step: ${fmt(angleDeg(g.D.R), 4)} deg`, '', 'Total transformation (absolute coordinates, row by row; p\' = M p):',
-      ...[0, 1, 2].map((i) => `${f(T.R[i * 3])} ${f(T.R[i * 3 + 1])} ${f(T.R[i * 3 + 2])} ${T.t[i].toFixed(6)}`), '0 0 0 1', ''];
+      g.pairs ? `Point pairs: ${g.pairs}, RMS ${mm(g.pairsRms)}` : 'Point pairs: none', g.icpRms != null ? `ICP: RMS ${mm(g.icpRms)}, overlap ${fmt(g.overlap * 100, opt('pcReportPctDec'))}%` : 'ICP: not used',
+      `Rotation of this step: ${fmt(angleDeg(g.D.R), opt('pcReportDegDec'))} deg`, '', 'Total transformation (absolute coordinates, row by row; p\' = M p):',
+      ...[0, 1, 2].map((i) => `${f(T.R[i * 3])} ${f(T.R[i * 3 + 1])} ${f(T.R[i * 3 + 2])} ${T.t[i].toFixed(opt('pcReportTDec'))}`), '0 0 0 1', ''];
     const def = (this.app.path ? this.app.path.replace(/[^\\/]*$/, '') : '') + `${rec.name.replace(/\.[^.]+$/, '')} registration.txt`;
     const p = await api.saveFile({ defaultPath: def, filters: [{ name: 'Text', extensions: ['txt'] }], text: lines.join('\r\n') });
-    if (p) toast(`Saved report to ${fileName(p)}`, 'ok', 3000);
+    if (p) toast(`Saved report to ${fileName(p)}`, 'ok', opt('pcToastOkMs'));
   }
 }

@@ -151,6 +151,8 @@ export class PartFeatures {
       if (!alive) return;
       const f = build(v);
       if (!f) { this.regen(base); return; }
+      // editing: same id + name as the stored feature, so an unchanged feature reuses the tree-click preview (0.1.107)
+      if (edit) { const old = this.doc.features.find((x) => x.id === edit.editId); if (old) { f.id = old.id; f.name = old.name; } }
       this.regen([...base, f], { ghost: true });
     };
     if (edit) this.regen(base);

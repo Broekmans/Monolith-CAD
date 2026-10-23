@@ -1,3 +1,182 @@
+0.1.136 (2026-10-23)
+- View: rotating with the middle mouse button now turns the model about the point you click on, so the model no longer swings out of view when the view's centre is far away. Click on empty space and it turns about the centre of what is visible. A small orange dot shows the rotation centre while you drag. Settings in Options › View / Mouse: "Rotate about the point under the mouse (middle drag)" (on by default; switch it off for the old behaviour) and "Show the rotation centre while rotating". The view cube and the arrow keys turn about the view's centre as before.
+
+0.1.135 (2026-10-23)
+- Motion Study plays faster at higher Playback Speed: Play and Save Animation solve the mates in bigger pieces (still stopped at limits and dead points, and refused pieces are halved as before) and start every piece from the motion of the previous one. On the Bucket assembly 3× needs about 1.3 solves per frame instead of 3–6.
+- Play keeps the screen smooth: when solving the mates takes longer than one frame allows, the rest of the move goes to the next frame and the playhead stays where the model is. The Motion Study bar then shows "Playing at about 6× instead of 10×", and the log says so once when the play stops. Save Animation always solves every frame completely.
+- Log: the MOTION line now also shows the solves per step.
+
+0.1.134 (2026-10-23)
+- Assemblies: after a part changed (e.g. edited in context), mates no longer jump to the face on the other side of a plate. Before, an Angle mate could come back 180° off and a Motion Study then swung the arm through the base.
+- Mates: right-click an Angle mate › Flip Mate Alignment (the angle measured the other way round, 180° further) or a Distance mate › Flip Dimension (to the other side); the model follows, one undo step.
+- Motion Study takes over: while it is open, the mates its steps use follow the timeline only — their value and Limits in the tree do not apply (the tree shows "(Motion Study)"), and playing, scrubbing or Save Animation never change the mates in the tree and make no undo steps. Closing the study puts the model back at the tree values.
+- Motion Study steps: own name (Name field in the step popup, double-click or right-click › Rename), own Flip for this study only (step popup or right-click), several steps selected with Ctrl / Shift+click (names and bars; dragging one of them moves them all), right-click › Delete Steps (n) / Delete key for all selected.
+- Trees (part and assembly): Shift+click selects everything between the last clicked row and this one, Ctrl+click adds or removes one; right-click › Delete / Suppress (and Lock Rotation) act on all selected (one undo step); Delete key too. Clicking a row no longer opens / closes other components (a double-click could land on another row).
+- Ctrl+click two faces or edges (part or assembly): a small movable box shows the normal distance (parallel planes / lines, a line parallel to a plane) or the minimum distance and the angle, plus the centre distance and ΔX ΔY ΔZ; the value also shows in the bottom-right corner. Options › General › Measure.
+- The numbers in the bottom-right corner were the cursor position of the last sketch (they stayed after Exit Sketch and in other tabs); they now read "Sketch X … Y … mm" while sketching only.
+- Options › Interface › Tree: new defaults indent 4 px and row height 16 px.
+
+0.1.133 (2026-10-23)
+- Edit Part / Edit Feature from the assembly keeps the view: the part opens looking the same way, at the same zoom, with the part on the same spot of the screen (it no longer jumps to the part's own view). Return to Assembly does the same the other way round. Options › Assembly › Edit in Context (on).
+- Double-clicking a component (in the view or in the tree) opens Edit Part.
+- Clicking a face or edge of a component in the view highlights that component in the tree, opens it and scrolls to it (also components without mates).
+- In a part, clicking a face or edge highlights the feature that made it in the tree.
+- Shift+C collapses the tree (part and assembly; also while sketching), also in the right-click menu of the top row as Collapse All.
+
+0.1.132 (2026-10-23)
+- Edit in Context: sketches can now use the edges and corners of the other components — Convert Entities, Smart Dimension to their edges, relations, and snapping to their corners, midpoints and centres. This geometry gets an "In Context" relation and follows those components: each time you edit the part from the assembly again (Edit Part / Edit Feature), it moves to where the referenced edges are now (one undo step), the sketch is solved and the part rebuilt.
+- The tree marks such sketches and features with "->" (and "->?" when the part is open on its own — then the geometry just stays where it is). In the assembly the component reads "->", with a warning when the other components changed or moved since (right-click › Edit Part updates it). Right-click a sketch › Break External References keeps the geometry as plain fixed geometry.
+- Options › Assembly › Edit in Context: "Use the edges of the other components in sketches" (on).
+
+0.1.131 (2026-10-22)
+- Assemblies: when a part gets bigger or smaller (e.g. an arm made longer), mates now stay on the right faces — a hole near the end of the part is found near the new end, and holes of another size are not taken. Before, the mates could jump to other holes or faces and give mate errors. The assembly remembers each part's size for this (saved with the assembly).
+- Return to Assembly (Edit in Context): when the part has rebuild errors, the question says so and lists them (Save anyway / Don't Save / Cancel).
+- Repaired Bucket assembly Arm-1 (length back to 300; the 800-long copy is kept as "Arm-1 (800 before repair).lithprt").
+
+0.1.130 (2026-10-22)
+- Assemblies: expanding a component now shows the part's own tree — Front / Top / Right Plane and all its features and sketches (greyed when suppressed or below the rollback bar). Hover over a feature to see the faces it made on that component.
+- Edit in Context: right-click a component › Edit Part, or double-click a feature (right-click › Edit Feature / Edit Sketch). The part opens in its own tab with the rest of the assembly shown around it, transparent and in place, and the feature's dialog or the sketch opens. A bar shows what you are editing, with Context (show / hide the other components) and Return to Assembly. Return asks to save the part when it changed; the assembly then reloads it (all instances) and solves its mates again.
+- Options > Assembly > Edit in Context: show the other components, their opacity; colour in Colours > Assembly.
+
+0.1.129 (2026-10-22)
+- Popups in their own windows: every movable popup and dialog (Mate and feature dialogs, step popup, Drive, Save Animation, Appearance, the drawing's annotation popup and Room List, dialogs such as Rename) has a ⧉ button in its title strip, or can simply be dragged past the edge of the MonoLith window. It then becomes a real window you can put on another screen. It opens there again next time; ⧉ in that window puts it back inside MonoLith. Closing the window closes the popup. Esc, Enter and Delete keep working in it.
+- Motion Study in its own window: ⧉ in its bar. The 3D view then uses the full height; closing the window closes the Motion Study. It opens as a window again next time until you put it back with ⧉.
+- The Mate dialog keeps its window while you go on mating (OK → next mate in the same window).
+
+0.1.128 (2026-10-22)
+- More compact layout (Options > Interface, also in the Interface menu):
+  - Ribbon buttons Large / Medium / Small (new default Medium; Small = icon with the text beside it), a Ribbon size % to scale them, and the group names under the buttons can be switched off. Button text is always on one line.
+  - The bar above the ribbon (New, Open, Save, Undo, Redo, file name) is thin and quiet now, and can be hidden. The "Rebuilding…" sign moved to the status bar.
+  - The MonoLith logo is now a dim silhouette at the right end of the ribbon.
+  - Tree: less indent per level (10 px, adjustable) and lower rows (20 px, adjustable) — part, assembly, drawing and point cloud trees.
+- Motion Study: drag its top edge to make it taller or lower, and drag the line after the step names to make that column wider or narrower. Both are remembered.
+
+0.1.127 (2026-10-22)
+- Assemblies: the Origin folder in the tree now has the assembly's own Front Plane, Top Plane and Right Plane (fixed at the world origin). Expanding a component shows the Front / Top / Right Plane of its part (they move with the component).
+- Mate to planes: with Mate open, click a plane in the tree (or a shown plane in the view) — e.g. "Top Plane@Assembly1" or "Front Plane@Pin<1>". Coincident, Parallel, Perpendicular, Distance, Angle and Width work with planes; the mate shows as e.g. "Coincident1 (Top Plane, Pin<1>)". Drive and the Motion Study work with these mates too.
+- Planes show when you hover over them, select them or use them in a mate; the eye in the tree keeps a plane shown (saved with the assembly). Right-click a plane: Mate, Normal To, Show / Hide.
+- The Mate dialog now floats over the view (like the feature dialogs in parts), so the tree stays visible while mating.
+- Assemblies saved with this version open in older versions with the "newer version" warning.
+
+0.1.126 (2026-10-21)
+- Motion Study: Playback Speed in the bar (0.1× … 10×). Play runs the timeline at that speed; it is saved with the assembly (one undo step).
+- Save Animation: new Speed (×) field — slow motion (0.5× = the video is twice as long) or faster (2×). It starts at the bar's Playback Speed.
+- Save Animation: an MP4 with a high Quality at a big size (e.g. 4K with 128 Mbit/s) said "cannot be made on this PC". The video encoder takes at most about 288 Mbit/s; the quality is now lowered to the most it takes, with a message. The H.264 level now follows size × frame rate, and when a frame rate is really too high the message says up to which frame rate it works.
+- Save Animation: the log now splits the time per frame into motion, drawing and waiting for the encoder (it said "encoding 0 ms").
+
+0.1.125 (2026-10-21)
+- Save Animation: new Loops field — the motion (or the back-and-forth cycle with Reciprocate) is in the file that many times, one after the other. Default in Options > Assembly > Save Animation.
+- Save Animation: bigger picture sizes 2560 × 1440 and 3840 × 2160 (4K).
+
+0.1.124 (2026-10-21)
+- Motion Study: every step now has its own start time. Drag a bar anywhere on the timeline, also before the steps above it; the other bars stay where they are. The step popup has Start (s) with the buttons After previous / With previous instead of Starts + Delay. When two steps move the same mate, the one that starts later takes over from where the mate is at that moment (no jump).
+- Motion Study: change the order of the steps by dragging a step name up or down, or by dragging a bar up or down onto another row (the times stay). One undo step per drag.
+- Assemblies saved with 0.1.119–0.1.123 are converted when you open them; the motion plays as before. Once saved they open in older versions with the "newer version" warning.
+- Save Animation: it could hang while making a video (Cancel did nothing). Now it gives up with a message when the video encoder or file writing stops answering, Cancel and Esc always stop it, and the rest of the program cannot be clicked while it works (Play during saving mixed up the frames). The video encoder is the software one by default (the same on every PC); Options > Assembly > Save Animation > Video encoder lets you try the graphics card. The log now shows the start of every save and where it stopped.
+- Motion Study: clicking a bar, a step name or the ruler while the motion plays gave an error; the first click now pauses.
+
+0.1.123 (2026-10-21)
+- Motion Study / Drive: new "Suppress while editing" tick box in the step popup and in the Drive popup. It switches that mate and its Limits off for a moment, so you can drag the model where you want it and take the value with Current. Untick it (or close the popup, or press Play) and the mate is on again with the value it has then; if that is outside its Limits the model moves back to the nearest limit. It is never saved; only the new value is one undo step. The tree shows the mate greyed with "(suppressed while editing)".
+- Motion Study: the step popup shows the mate's value now (Now), live while you drag the model or play the motion.
+- Drive: Current buttons next to Minimum and Maximum.
+- Motion Study: delete a step with the Delete key (click its bar first) or by right-clicking a bar or step name › Delete Step (also Edit Step…). Deleting a step is logged.
+- Motion Study: a step whose mate is suppressed in the tree now shows that mate in the Mate list (marked "suppressed") with a warning, instead of showing another mate.
+
+0.1.122 (2026-10-21)
+- Motion Study: drag a step bar on the timeline to move it, or drag its left or right end to change when it starts or how long it takes. Bars snap to the ends of the other bars and to steps of 0.1 s (Options > Assembly > Motion Study). A bar dragged into the previous step starts "with the previous step"; a gap becomes a Delay. A click without moving still opens the step. One undo step per drag.
+- Motion Study: new Delay (s) field in the step popup — the wait after the previous step (or after its start, for "with the previous step").
+- Motion Study: new Save Animation button. Saves the motion as an MP4 video (H.264), a WebM video (VP9) or an animated GIF, from the view you clicked last. Choose the size (as the view, 854 × 480, 1280 × 720, 1920 × 1080), frames per second, start to end or start to end and back (one cycle, when Reciprocate is on), quality, and whether the view cube and triad are shown. Every frame is drawn one by one, so the file plays smoothly also on a slow PC. A progress bar with Cancel shows while it works; afterwards the model goes back to where it was (Options > Assembly > Save Animation, with the defaults of the popup).
+- Log: the MOTION lines now show how many times the motion was stopped at a limit (it always said "false"), and changes to a step in the step popup are logged.
+
+0.1.121 (2026-10-21)
+- Assembly: moving the mouse over a mate in the tree highlights its faces and edges in the view (in the hover colour, also when they are inside or behind other parts). This works in the Mates folder and in the "Mates in …" folders under the components. Options > Assembly > Mates: highlight strength.
+- Assembly: a part that was highlighted under the mouse no longer stays highlighted when the mouse leaves the view.
+
+0.1.120 (2026-10-21)
+- Motion Study: new Reciprocate button next to Loop. The motion plays forward, then backward, then forward again, until you press Pause. Loop and Reciprocate are one choice at a time (click again to switch it off) and are saved with the assembly.
+- Drive: new Reciprocate button (⇄) — back and forth between the Minimum and the Maximum until Pause.
+
+0.1.119 (2026-10-21)
+- Assembly: Distance and Angle mates can have Limits (Edit Mate › Limits: Minimum / Maximum). Between them the part is free to move; dragging stops at the limits.
+- Assembly: Angle mates now measure a signed angle about their turning axis (the pin of a crank), so they go past 180° and a new Angle or Distance mate starts at the value it has now.
+- Assembly: Drive (right-click a Distance or Angle mate › Drive…, or the Drive button): a slider between the Minimum and Maximum moves the model, with Play ◀ / Play ▶ over a set time. Past a dead point or the end of travel the model stops and says so. Every slider drag or play is one undo step and the model stays where it ended.
+- Assembly: Motion Study (button in the new Motion group): a timeline under the view. Add Step: a mate from one value to another in a number of seconds, after or together with the previous step, smooth or at constant speed. Play / Pause / to start / to end / Loop; drag on the time ruler to scrub. The steps are saved in the assembly. Options > Assembly > Motion Study: timeline height, default step time, smooth start; Options > Colours > Assembly: step bar and time line colours.
+
+0.1.118 (2026-10-21)
+- Assembly: concentric mates can lock the rotation ("Lock rotation" in the Mate panel). Bolts, nuts and washers then no longer spin about their axis while you move the parts. New concentric mates on Toolbox parts get it automatically (Options > Assembly). Right-click a mate › Lock / Unlock Rotation, or right-click one or more components › Lock Rotation (all their concentric mates at once).
+- Assembly: right-click a Toolbox part › Edit Toolbox Definition… changes its standard, size and length (e.g. DIN 933 M24x80 → M20x100). Several selected Toolbox parts of the same kind are changed together. The mates stay on the same faces; one undo step.
+- Assembly: dragging small parts (washers, nuts) is faster.
+- Assembly tree: the "Mates in …" folder under a component now shows the assembly's file name.
+
+0.1.117 (2026-10-21)
+- Assembly: dragging a part now stops at the end of its travel instead of pulling the mates apart. The mates stay closed during the whole drag; past the limit the parts wait, and they follow the mouse again as soon as you move back.
+- Assembly: a mechanism no longer flips to its other position when you drag it past a dead point and back (e.g. a crank with a slider). Going back, the parts retrace the positions they had during the drag. Fast mouse moves are worked out in smaller steps for the same reason.
+- While a drag is held at a limit the status bar says so ("end of travel"). Each drag writes a DRAG line to the Action log (steps, how often it stopped at a limit, largest mate error, time per step).
+- The message after opening an older file now says it "will be saved in the new format when you save it" (the file itself is not changed by opening it).
+
+0.1.116 (2026-10-21)
+- Assembly: the mates of each component are also listed under that component in the tree (folder "Mates in <assembly>"). Click, double-click (Edit Mate) and right-click work there just like in the Mates folder.
+- Assembly: clicking a part in the view (or in the tree) expands it in the tree and scrolls to it. It closes again when you pick another part; components you expanded yourself stay open. Options > Assembly: "Expand the selected component in the tree" (on).
+
+0.1.115 (2026-10-21)
+- Fix: parts saved before 18-10 could lose a sketch line that was converted from a model edge. The sketch then had an open contour and later fillets lost their edges (e.g. Stonex-01-001-000: Boss-Extrude2, Fillet1, Fillet2, Fillet5). Such lines are restored when the part is opened; the file itself changes only when you save it.
+- Part files are now saved as format 2 (older MonoLith versions open them with a warning).
+
+0.1.114 (2026-10-21)
+- Realistic: in dark mode the studio background is now dark (was white). Two new colours in Options > Display > Realistic: Studio background top / bottom (dark mode).
+- Realistic: stronger, wider ground shadow. Besides the contact shadow there is now a soft shadow around the model, so standing or flat parts also show a shadow past their edges. Ground shadow strength 55 % -> 75 %; new setting Ground shadow spread (default 10 % of the model size, 0 = contact shadow only).
+- Geometry kernel: single-thread is now the default (multi-thread gave only about 0.2 s on a 2 s rebuild). Options > General > Geometry kernel still switches it on for heavy parts.
+
+0.1.113 (2026-10-21)
+- Fix: Options > General > Geometry kernel ("Use all CPU cores for rebuilds") had no effect in 0.1.111 and 0.1.112 - the kernel always ran multi-thread. Switching it now really changes the kernel (it waits until a running rebuild is done).
+- The log now shows which kernel is used, at start and after every switch, e.g. "KERNEL multi (24 cores, 16 threads)" or "KERNEL single (24 cores)".
+
+0.1.112 (2026-10-21)
+- Fix: since 0.1.108 an installed MonoLith could not rebuild any part ("Kernel error: … Named export 'factoryOf' not found"). The geometry kernel could not read the program settings it needs in the installed folder. It works again; nothing in your files was changed.
+
+0.1.111 (2026-10-21)
+- The geometry kernel can now use all CPU cores: cuts, joins and meshing are split over several cores. This is on by default; Tools > Options > General > Geometry kernel switches it off and on (the kernel restarts when no rebuild is running). The gain depends on the PC and the model and is largest for heavy cuts; the Action log now records the kernel mode at start ("KERNEL multi (… cores, … threads)") and every rebuild that takes longer than half a second, with its time, so the two settings can be compared.
+- Parts that rebuild in parallel when an assembly opens keep using one core each (they already run side by side).
+
+0.1.110 (2026-10-21)
+- Realistic display style: textures. Brushed Steel, Knurled Steel (new), Cast Iron, Galvanised Steel, Oak, Walnut, Pine, Birch Plywood and Textured Black Plastic now show their surface: brushed streaks, diamond knurl, cast blotches, wood grain or a fine grain. The texture follows the part's shape without any setup, and a moved component keeps its texture.
+- Appearance popup: new Texture choice (None, Brushed, Wood, Cast, Knurl, Grain) to put a texture on any appearance, and Texture scale (¼× to 4×). Both are saved with the part or component and can be undone.
+- Realistic display style: a soft shadow on the ground under the model. It is worked out again only when the model changes, not when you turn the view.
+- Floor reflection (mirror image of the model in the ground, fading out): Tools > Options > Display, off by default.
+- Options > Display > Realistic: Textures on/off, Texture relief, Ground shadow on/off + strength, Floor reflection on/off + strength. The Shaded styles look exactly as before.
+
+0.1.109 (2026-10-21)
+- Much faster geometry: MonoLith now uses a newer build of the geometry kernel (OpenCascade). Every feature rebuilds faster, and parts with sketch text gain the most. Example: the "Tekst test" part rebuilds in about 8 s (35 s in 0.1.108, 100 s in 0.1.107). Hidden-line drawing views and section views are about twice as fast.
+- Results are the same as before: volumes, faces, edges, references and drawings were checked against 0.1.108 on the test parts.
+- IGES import and export still work; they use the previous kernel build, which loads only when you open or save an IGES file (the first time takes a few seconds longer).
+- Error messages from the geometry kernel now say what went wrong instead of showing a number.
+
+0.1.108 (2026-10-21)
+- Sketch text in features is about 3× faster: the letter curves are now built from arcs and straight lines (max 0.01 mm off the font curve) instead of free-form curves. Features after the text gain as well, because the body is easier to cut. Example: the "Tekst test" part rebuilds in 35 s instead of 100 s.
+- Sketch Text panel: new field Curve accuracy (mm). Smaller = closer to the font, slower; 0 = exact font curves (as before, slow). New text takes the value from Options > Sketch > Text (new text: curve accuracy in features, default 0.01 mm). Text made before this version uses 0.01 mm.
+
+0.1.107 (2026-10-20)
+- Faster: every Extruded / Revolved Boss and Cut, and section views in drawings, are calculated once instead of twice (the geometry kernel did the work twice). Parts rebuild about twice as fast; features with sketch text gain the most (e.g. 47 s → 25 s for a text cut).
+- Opening a part: the model as it was saved shows at once; the features rebuild in the background ("Rebuilding…" top right) and the model is updated when that is done. Turn or zoom the view meanwhile and it stays as you set it.
+- Double click on a feature (edit): the yellow / red preview of the single click is used at once and is not calculated a second time. Opening the same feature again without changes shows its preview straight away.
+- Sketch text is still slow to cut or extrude (every letter curve becomes a surface); a faster way for text follows later.
+
+0.1.106 (2026-10-20)
+- New display style Realistic (Display Style menu, per view like the others): studio reflections on metal and glossy surfaces, clear coat on paint and gloss plastic, see-through glass, a studio background and softer lamps. Edges are off in Realistic; switch them on with "Edges in Realistic" in the same menu.
+- Appearances: right-click the part name in the tree (or a face in the view) > Appearance… opens a small popup with a library (metals, plastics, paints, rubber, wood, glass) and Colour, Roughness, Metalness and Opacity. Saved in the part. "Reset to Material" goes back to the material's appearance. Every change can be undone.
+- Materials now come with a matching appearance (steel = satin steel, stainless, aluminium, brass, copper, titanium, ABS = matte white plastic, nylon, oak). Parts with "Not specified" keep the Part body colour from Options, so they look the same as before.
+- Assemblies: components show their part's appearance. Right-click a component > Appearance… sets an override in the assembly only (the part file is not changed); "Clear Appearance Override" removes it. Parts without appearance or material keep the colours used until now.
+- Shaded and Shaded With Edges show the appearance colour; the reflections, gloss and textures are for Realistic.
+- Options > Display: Edges in Realistic, studio background on/off and colours, reflection strength, brightness, lamps in Realistic.
+- Wood grain, brushed metal and other textures plus a ground shadow follow in the next update.
+
+0.1.105 (2026-10-20)
+- Drawing: the preview while placing a view, section line or annotation is yellow now (what will be), like the feature preview in parts. Options > Colours > Drawing; if you never changed it, it follows the new default.
+- Options: 23 new Point Cloud settings, all with the values used until now (nothing looks or works differently):
+  - Colours (Point Cloud): selected fence / crop box / measurement, preview while drawing or picking, measurements, single cloud colour, Align points (moving / reference), part preview edges.
+  - Point Clouds: points shown of a scan in a part or plan, floor plan slice from / to, snap distance and decimals for measuring, undo levels, crop box grip distance, subsample spacing, noise filter (neighbours, deviation), normals neighbours, Cloud to Cloud / Cloud to Part max. distance, Align start distances, ICP iterations and overlap.
+- Behind the scenes: the other fixed values of the Point Cloud workspace are now declared in one place.
+
 0.1.104 (2026-10-20)
 - Options: 20 new Drawing settings, all with the values used until now (nothing looks or works differently):
   - Colours (Drawing): selected view / annotation / section line, preview while placing, snap marker and fitted scan wall, grips of a selected room outline.

@@ -139,4 +139,5 @@ npm run test:kernel       # geometry kernel tests (Node, no UI)
 - dxf-parser (MIT)
 - opentype.js (MIT)
 - laz-perf (Apache-2.0)
+- mp4-muxer, webm-muxer (MIT) and gifenc (MIT): Save Animation in the assembly Motion Study
 - DejaVu fonts (Bitstream Vera / DejaVu license, see renderer/fonts/DejaVu-LICENSE.txt)

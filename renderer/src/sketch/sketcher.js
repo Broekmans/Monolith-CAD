@@ -77,13 +77,15 @@ export const REL_DEFS = {
   symmetric: { label: 'Symmetric', icon: 'symmetric', glyph: '⇹' },
   fix: { label: 'Fix', icon: 'fix', glyph: '⚓' },
   onEdge: { label: 'On Edge', icon: 'fix', glyph: '⊏' },
+  inContext: { label: 'In Context', icon: 'fix', glyph: '->' }, // 0.1.132: fixed on an edge of another component
   offsetRel: { label: 'Offset', icon: 'parallel', glyph: '⫽' },
   offsetEnd: { label: 'Offset End', icon: 'coincident', glyph: '•' },
   offsetPerp: { label: 'Offset End', icon: 'perpendicular', glyph: '⊥' },
 };
 // relation shown in lists / glyphs: a Fix made by Convert Entities that is linked to the model reads "On Edge"
-export const relDef = (c) => (c.type === 'fix' && c.onEdge ? REL_DEFS.onEdge : REL_DEFS[c.type]);
+export const relDef = (c) => (c.type === 'fix' && c.xref ? REL_DEFS.inContext : c.type === 'fix' && c.onEdge ? REL_DEFS.onEdge : REL_DEFS[c.type]);
 
+const NO_CTX = Object.freeze([]);
 export function newSketch(id, name, plane, planeName) {
   return { id, type: 'sketch', name, plane, planeName, geo: [{ id: 'O', type: 'point', x: 0, y: 0, fixed: true, origin: true }], cons: [], next: 1 };
 }
@@ -248,7 +250,7 @@ export class Sketcher {
     }
     if (best) return best;
     const M = this.modelSnapGeo();
-    for (const v of M.verts) { const d = dist(p, v); if (d < bd) { bd = d; best = { pt: v, ref: { kind: 'model', what: 'vertex' } }; } }
+    for (const v of M.verts) { const d = dist(p, v); if (d < bd) { bd = d; best = { pt: v, ref: { kind: 'model', what: 'vertex', ctx: v.ctx } }; } }
     if (best) return best;
     // midpoints
     for (const m of M.mids) if (dist(p, m) < thr) return { pt: m, ref: { kind: 'model', what: 'mid' } };
@@ -294,16 +296,21 @@ export class Sketcher {
   // Model (feature) edges projected into the sketch plane, cached per mesh.
   // Edges lying in the sketch plane are used; if none (offset plane), all edges are projected.
   modelSnapGeo() {
-    const mesh = this.host.mesh;
-    if (this._msg && this._msg.mesh === mesh) return this._msg.geo;
+    const mesh = this.host.mesh, ctx = this.ctxEdges();
+    if (this._msg && this._msg.mesh === mesh && this._msg.ctx === ctx) return this._msg.geo;
     const geo = { verts: [], mids: [], centers: [], segs: [], edges: [] };
     const f = this.fr;
-    if (mesh?.edges?.length) {
+    if (mesh?.edges?.length || ctx.length) {
       const tolP = opt('skInPlaneTol'), eps = opt('geomEps'), res = opt('skSnapVertexKeyRes');
       const loc = (x, y, z) => { const d = [x - f.o[0], y - f.o[1], z - f.o[2]]; return [d[0] * f.x[0] + d[1] * f.x[1] + d[2] * f.x[2], d[0] * f.y[0] + d[1] * f.y[1] + d[2] * f.y[2], d[0] * f.n[0] + d[1] * f.n[1] + d[2] * f.n[2]]; };
-      const all = mesh.edges.map((e) => { const q = []; for (let i = 0; i + 2 < e.pts.length; i += 3) q.push(loc(e.pts[i], e.pts[i + 1], e.pts[i + 2])); return { e, q }; }).filter((x) => x.q.length >= 2);
-      const inPlane = all.filter((x) => x.q.every((q) => Math.abs(q[2]) < tolP));
-      const use = inPlane.length ? inPlane : all;
+      const proj = (list) => list.map((e) => { const q = []; for (let i = 0; i + 2 < e.pts.length; i += 3) q.push(loc(e.pts[i], e.pts[i + 1], e.pts[i + 2])); return { e, q }; }).filter((x) => x.q.length >= 2);
+      const own = proj(mesh?.edges || []), other = proj(ctx);
+      const inPlaneOf = (list) => list.filter((x) => x.q.every((q) => Math.abs(q[2]) < tolP));
+      const inPlane = inPlaneOf(own);
+      // 0.1.132: edges of the other components (Edit in Context) — all can be picked; snapping like the part's own edges:
+      // the ones in the sketch plane, or all of them projected when none lies in it
+      const all = [...own, ...other], otherIn = inPlaneOf(other);
+      const use = [...(inPlane.length ? inPlane : own), ...(otherIn.length ? otherIn : other)];
       // every model edge projected on the sketch plane, for picking an edge to dimension / relate to (0.1.93: also
       // edges off the plane, e.g. the side of a filleted rim; in-plane and front-most edges win when they overlap)
       geo.pickEdges = [];
@@ -314,6 +321,8 @@ export class Sketcher {
         geo.pickEdges.push({ e, pts, inPlane: q.every((v) => Math.abs(v[2]) < tolP), depth: q.reduce((a, v) => a + v[2], 0) / q.length, flat: q.every((v) => Math.abs(v[2] - q[0][2]) < tolP) });
       }
       const key = (v) => Math.round(v[0] * res) + ',' + Math.round(v[1] * res);
+      // a corner of another component remembers where it is in that part (for its in-context reference)
+      const ctxV = (v, e, end) => { if (!e.ctx) return v; const o = e.ctx.e.pts, k = end ? o.length - 3 : 0; v.ctx = { ...e.ctx, p: [o[k], o[k + 1], o[k + 2]] }; return v; };
       const seen = new Set();
       const addV = (arr, v) => { if (!seen.has(key(v) + arr.tag)) { seen.add(key(v) + arr.tag); arr.push(v); } };
       geo.verts.tag = 'v'; geo.mids.tag = 'm'; geo.centers.tag = 'c';
@@ -323,7 +332,7 @@ export class Sketcher {
         let len = 0; for (let i = 1; i < pts.length; i++) len += dist(pts[i - 1], pts[i]);
         if (len < eps) continue; // edge seen end-on
         const closed = dist(a, b) < eps;
-        if (!closed) { addV(geo.verts, a); addV(geo.verts, b); }
+        if (!closed) { addV(geo.verts, ctxV(a, e, 0)); addV(geo.verts, ctxV(b, e, 1)); }
         if (e.type === 'line' && !closed) addV(geo.mids, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
         else if (e.type === 'circle' && pts.length >= 3) {
           const cc = circleFrom3(pts[0], pts[Math.floor(pts.length / 3)], pts[Math.floor((2 * pts.length) / 3)]);
@@ -334,9 +343,29 @@ export class Sketcher {
         for (let i = 1; i < pts.length; i++) if (dist(pts[i - 1], pts[i]) > opt('geomEpsTiny')) geo.segs.push([pts[i - 1], pts[i]]);
       }
     }
-    this._msg = { mesh, geo };
+    this._msg = { mesh, ctx, geo };
     return geo;
   }
+  // 0.1.132: edges of the other components while the part is edited in an assembly, in this part's frame. Each edge
+  // carries ctx = {comp, compName, file, asm, e (the edge in its own part), bbox (of that part)} → in-context reference.
+  ctxEdges() {
+    const c = this.host?._ctx;
+    if (!c || !opt('asmXrefs') || !c.items?.length) return NO_CTX; // the same empty list: modelSnapGeo stays cached
+    if (c._edges) return c._edges;
+    const out = [];
+    for (const it of c.items) {
+      const m = it.m, mesh = it.mesh; if (!mesh?.edges?.length) continue;
+      for (const e of mesh.edges) {
+        const p = e.pts, q = new Array(p.length);
+        for (let i = 0; i + 2 < p.length; i += 3) { const x = p[i], y = p[i + 1], z = p[i + 2]; q[i] = m[0] * x + m[4] * y + m[8] * z + m[12]; q[i + 1] = m[1] * x + m[5] * y + m[9] * z + m[13]; q[i + 2] = m[2] * x + m[6] * y + m[10] * z + m[14]; }
+        out.push({ id: `ctx:${it.comp}:${e.id}`, type: e.type, pts: q, ctx: { comp: it.comp, compName: it.name, file: it.file, asm: c.asmPath, e, bbox: mesh.bbox } });
+      }
+    }
+    c._edges = out;
+    return out;
+  }
+  // in-context reference record for a corner / edge of another component (ctx from ctxEdges)
+  xrefOf(ctx, ref) { return { asm: ctx.asm, comp: ctx.comp, compName: ctx.compName, file: ctx.file, ref }; }
   // Select-mode click on a model corner or edge: create (or reuse) fixed construction reference
   // geometry for it and add it to the selection, so relations like Coincident / Midpoint can be added.
   // is there a model corner / edge under p (without making reference geometry)? Smart Dimension's second pick
@@ -372,7 +401,7 @@ export class Sketcher {
     if (bv) {
       const k = 'v:' + key(bv);
       id = this.sk.geo.find((g) => g.refKey === k || (g.refKey && g.type === 'point' && dist([g.x, g.y], bv) < opt('skRefMatchTol')))?.id;
-      if (!id) { this.pushUndo(); id = this.addPoint(bv[0], bv[1], { refKey: k }); this.fixOnModel(id, bv); }
+      if (!id) { this.pushUndo(); id = this.addPoint(bv[0], bv[1], { refKey: k }); this.fixOnModel(id, bv, bv.ctx); }
     } else {
       const be = this.pickModelEdge(p, thr * opt('skEdgePickFactor'));
       if (!be) return false;
@@ -410,8 +439,9 @@ export class Sketcher {
     return id;
   }
   // Fix a point on a model corner; linked (On Edge) so it follows the corner when the model changes (Options > Sketch)
-  fixOnModel(pid, p2) {
+  fixOnModel(pid, p2, ctx = null) {
     const g = this.sk.geo.find((x) => x.id === pid), mesh = this.host?.mesh;
+    if (g && ctx) { g.xref = this.xrefOf(ctx, { type: 'vertex', p: ctx.p, bb: ctx.bbox }); this.addCons({ type: 'fix', e: pid, xref: true }); return; } // corner of another component (0.1.132)
     if (g && p2 && mesh && opt('linkConvert')) { g.onEdge = { type: 'vertex', p: this.to3(p2), bb: mesh.bbox }; this.addCons({ type: 'fix', e: pid, onEdge: true }); }
     else this.addCons({ type: 'fix', e: pid });
   }
@@ -420,7 +450,7 @@ export class Sketcher {
     if (!snap?.ref) return;
     const r = snap.ref;
     if (r.kind === 'model') {
-      if (r.what === 'vertex') { const p = this.sk.geo.find((g) => g.id === pid); this.fixOnModel(pid, p ? [p.x, p.y] : null); } // corner: linked
+      if (r.what === 'vertex') { const p = this.sk.geo.find((g) => g.id === pid); this.fixOnModel(pid, p ? [p.x, p.y] : null, r.ctx); } // corner: linked
       else if (r.what !== 'edge') this.addCons({ type: 'fix', e: pid });
       return;
     }

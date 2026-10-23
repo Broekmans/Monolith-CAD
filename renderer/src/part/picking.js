@@ -1,6 +1,8 @@
 // Part: picking, highlights, overlay, double-click feature dims, tree hover
 // Methods are mixed into PartDoc (see part.js); `this` is the PartDoc.
 import { paneDisplay } from '../displaystyle.js';
+import { showPairMeasure, closePairMeasure } from '../measurepop.js';
+import { entityOf } from '../../../shared/measure.mjs';
 import * as THREE from 'three';
 import { Viewport, navHeld } from '../viewport.js';
 import { Sketcher, SKETCH_TOOLS, newSketch } from '../sketch/sketcher.js';
@@ -106,14 +108,37 @@ export class PartPicking {
     window.__lithLog?.(`FACE EDGES face ${p.id} ${items.length} edges → ${next.length} in ${box.key}`);
     return true;
   }
+  // 0.1.133: the features that made the picked faces / edges (face.feat; an edge = the later of its two faces' features)
+  ownerFeats() {
+    const out = new Set(), m = this.mesh; if (!m || !this.sel?.length) return out;
+    const order = new Map(this.doc.features.map((f, i) => [f.id, i]));
+    for (const s of this.sel) {
+      if (s.kind === 'face') { const f = m.faces.find((x) => x.id === s.id); if (f?.feat) out.add(f.feat); }
+      else if (s.kind === 'edge') {
+        const e = m.edges.find((x) => x.id === s.id);
+        const feats = (e?.faces || []).map((id) => m.faces.find((x) => x.id === id)?.feat).filter(Boolean);
+        if (feats.length) out.add(feats.reduce((a, b) => ((order.get(b) ?? -1) > (order.get(a) ?? -1) ? b : a)));
+      }
+    }
+    return out;
+  }
   afterSelection() {
     this.treeGhost?.();
     this.updateHighlights();
     this.updatePlanes();
     this.updateSketchDisplay();
     this.renderTree();
+    { const o = [...this.ownerFeats()][0]; if (o) this.app.el.tree?.querySelector(`.tr-row.sel[data-item="feature:${o}"], .tr-row.sel[data-fi="${this.doc.features.findIndex((f) => f.id === o)}"]`)?.scrollIntoView({ block: 'nearest' }); }
     this.app.cm.refresh();
     this.showSelectionInfo();
+    this.pairMeasure();
+  }
+  // 0.1.134: two faces / edges selected (Ctrl+click) → distance popup + status bar corner
+  pairMeasure() {
+    const two = !this.sketcher && !this.app.pm.open && this.mesh && this.sel.length === 2 && this.sel.every((s) => s.kind === 'face' || s.kind === 'edge');
+    if (!two) { closePairMeasure(this); return; }
+    const [A, B] = this.sel.map((s) => entityOf(this.mesh, s.kind, s.id));
+    showPairMeasure(this, A, B, this.sel.map((s) => this.selItem(s).label), this.viewSet?.root || this.vp.el);
   }
   selItem(p) {
     const label = {

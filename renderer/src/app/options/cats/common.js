@@ -2,6 +2,9 @@
 // messages, geometric tolerances. Rows with hidden: true are internal (not in the Options window, always factory).
 export default [
   // ---- shown in Options ----
+  { key: 'measPair', cat: 'General', group: 'Measure', label: 'Ctrl+click two faces / edges: show the distance between them (popup + status bar)', type: 'bool', def: true },
+  { key: 'measPairDecimals', cat: 'General', group: 'Measure', label: 'Ctrl+click distance: decimal places', type: 'num', def: 3, min: 0, max: 6, step: 1 },
+  { key: 'measParTol', hidden: true, label: 'Ctrl+click distance: directions count as parallel within (1 − cos)', def: 1e-6 },
   { key: 'dimLineW', cat: 'Dimensions', group: 'Dimension lines', label: 'Dimension and extension line width', type: 'num', def: 1, min: 0.5, max: 4, step: 0.1, unit: 'px' },
   { key: 'dimDecimals', cat: 'Dimensions', group: 'Dimension lines', label: 'Decimal places', type: 'num', def: 2, min: 0, max: 6, step: 1 },
   { key: 'dimArrowLen', cat: 'Dimensions', group: 'Dimension lines', label: 'Arrow length', type: 'num', def: 9, min: 3, max: 30, step: 1, unit: 'px' },

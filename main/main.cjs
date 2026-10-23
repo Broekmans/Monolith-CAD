@@ -12,7 +12,7 @@ const ROOT = path.join(__dirname, '..');
 const RENDERER = path.join(ROOT, 'renderer');
 const isTest = !!process.env.MONOLITH_TEST;
 const { listProjects, createProject, openFolder, projectsRoot } = require('./projects.cjs');
-const { pcCall, startWorker, kernel, stopWorkers } = require('./kernel.cjs');
+const { pcCall, startWorker, kernel, stopWorkers, setKernelMode } = require('./kernel.cjs');
 const { optionsCfg, trackOptions, writeDump, draftStd, logDir, pruneLogs, getLogCfg, setLogCfg, writeLog, getRecent, addRecent } = require('./settings.cjs');
 const { dwgToDxf, dxfToDwg, converterStatus, setODAPath, listFonts } = require('./tools.cjs');
 const { setupCloudIPC, stopCloudWorkers } = require('./cloudio.cjs');
@@ -28,6 +28,14 @@ function createWindow(query = {}) {
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   windows.add(win);
+  // 0.1.129: popups / the Motion Study can become their own windows (renderer popout.js: window.open('about:blank') +
+  // the live panel moved into it). Same process and origin as the main window; no menu; stays above its main window.
+  win.webContents.setWindowOpenHandler(({ url }) => (url === 'about:blank' || url === '' ? {
+    action: 'allow',
+    overrideBrowserWindowOptions: { parent: win, useContentSize: true, autoHideMenuBar: true, minimizable: false, fullscreenable: false, backgroundColor: '#2a2f38', icon: path.join(ROOT, 'build', 'icon.png'),
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } },
+  } : { action: 'deny' }));
+  win.webContents.on('did-create-window', (child) => { try { child.setMenu(null); } catch { /* ok */ } });
   const qs = new URLSearchParams(query).toString();
   win.loadURL(`monolith://app/index.html${qs ? '?' + qs : ''}`);
   win.once('ready-to-show', () => { win.maximize(); win.show(); });
@@ -41,7 +49,8 @@ function createWindow(query = {}) {
 }
 
 function send(cmd, arg) {
-  const w = BrowserWindow.getFocusedWindow() || [...windows][0];
+  let w = BrowserWindow.getFocusedWindow() || [...windows][0];
+  if (w && !windows.has(w)) w = w.getParentWindow?.() || [...windows][0]; // 0.1.129: a popup window → its main window
   w?.webContents.send('menu', cmd, arg);
 }
 
@@ -109,6 +118,10 @@ function buildMenu() {
       { type: 'separator' },
       { label: 'UI Scale…', click: () => send('ui-scale') },
       { label: 'Reset UI Scale (100%)', click: () => send('ui-scale-reset') },
+      { type: 'separator' },
+      { label: 'Ribbon Buttons', submenu: [['large', 'Large'], ['medium', 'Medium'], ['small', 'Small']].map(([v, l]) => ({ label: l, click: () => send('ribbon-size', v) })) },
+      { label: 'Show / Hide Quick Access Bar', click: () => send('qa-bar') },
+      { label: 'Show / Hide Ribbon Group Names', click: () => send('ribbon-labels') },
     ] },
     { label: '&Tools', submenu: [
       { label: 'Options…', click: () => send('options') },
@@ -146,6 +159,7 @@ function setupIPC() {
   ipcMain.on('ui:dark', (_e, d) => { if (uiDark !== !!d) { uiDark = !!d; buildMenu(); } });
   ipcMain.on('ui:zoom', (e, f) => { const z = Math.min(2, Math.max(0.6, +f || 1)); e.sender.setZoomFactor(z); });
   ipcMain.handle('kernel', (_e, op, args) => kernel(op, args));
+  ipcMain.handle('kernel:mode', (_e, multi) => setKernelMode(multi));
   ipcMain.handle('file:open', async (e, opts = {}) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: opts.filters });
@@ -168,6 +182,7 @@ function setupIPC() {
     addRecent(r.filePath); buildMenu();
     return r.filePath;
   });
+  ipcMain.handle('file:writeBytes', (_e, p, bytes) => { fs.writeFileSync(p, Buffer.from(bytes.buffer ?? bytes, bytes.byteOffset ?? 0, bytes.byteLength ?? bytes.length)); return true; }); // 0.1.122 Save Animation
   ipcMain.handle('file:write', (_e, p, text) => { fs.writeFileSync(p, text, /\.pdf$/i.test(p) ? 'latin1' : 'utf8'); addRecent(p); return true; });
   ipcMain.handle('dwg:toDxf', async (_e, p) => { try { const r = await dwgToDxf(p); return { ok: true, text: r.text, via: r.via }; } catch (err) { return { ok: false, error: String(err.message || err), status: converterStatus() }; } });
   ipcMain.handle('dwg:fromDxf', async (_e, text, outPath) => { try { return { ok: true, ...(await dxfToDwg(text, outPath)) }; } catch (err) { return { ok: false, error: String(err.message || err), status: converterStatus() }; } });
@@ -187,7 +202,7 @@ function setupIPC() {
     if (!listFonts().some((f) => f.path === p)) throw new Error('Unknown font');
     return new Uint8Array(fs.readFileSync(p));
   });
-  ipcMain.handle('info', () => ({ version: app.getVersion(), occt: '7.6 (WASM)', electron: process.versions.electron }));
+  ipcMain.handle('info', () => ({ version: app.getVersion(), occt: (() => { try { return 'replicad-opencascadejs ' + require('replicad-opencascadejs/package.json').version + ' (WASM)'; } catch { return 'WASM'; } })(), electron: process.versions.electron }));
   ipcMain.handle('openExternal', (_e, url) => { if (/^https:\/\//.test(url)) shell.openExternal(url); });
 }
 

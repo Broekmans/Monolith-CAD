@@ -1,0 +1,21 @@
+// 0.1.134: shared/measure.mjs measurePair (Ctrl+click two faces / edges). node tests/unit/measure.mjs
+import { measurePair } from '../../shared/measure.mjs';
+let fails = 0;
+const ok = (n, c, i = '') => { console.log(`${c ? 'ok  ' : 'FAIL'} ${n} ${i}`); if (!c) fails++; };
+const near = (a, b, t = 1e-6) => a != null && Math.abs(a - b) < t;
+const quad = (z, x0 = 0, x1 = 10, y0 = 0, y1 = 10, n = [0, 0, 1]) => ({ kind: 'face', geo: { t: 'plane', p: [x0, y0, z], n }, c: [(x0 + x1) / 2, (y0 + y1) / 2, z], tris: [[[x0, y0, z], [x1, y0, z], [x1, y1, z]], [[x0, y0, z], [x1, y1, z], [x0, y1, z]]], segs: [] });
+const line = (a, b) => { const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], l = Math.hypot(...d); return { kind: 'edge', geo: { t: 'axis', p: a, d: d.map((v) => v / l) }, c: a.map((v, i) => (v + b[i]) / 2), tris: [], segs: [[a, b]] }; };
+let r = measurePair(quad(0), quad(25, 3, 8, 3, 8, [0, 0, -1]));
+ok('parallel planes (opposite normals): normal distance 25', near(r.normal, 25) && near(r.min, 25) && near(r.angle, 0), JSON.stringify(r));
+r = measurePair(quad(0), quad(25, 30, 40, 0, 10));
+ok('parallel planes side by side: normal 25, minimum > 25', near(r.normal, 25) && r.min > 25 + 1, JSON.stringify(r));
+r = measurePair(line([0, 0, 0], [10, 0, 0]), line([0, 7, 0], [10, 7, 0]));
+ok('parallel lines: 7', near(r.normal, 7) && near(r.min, 7));
+r = measurePair(line([0, 0, 0], [10, 0, 0]), line([5, -5, 3], [5, 5, 3]));
+ok('crossing lines: no normal, minimum 3 (segment–segment), angle 90', r.normal == null && near(r.min, 3) && near(r.angle, 90), JSON.stringify(r));
+r = measurePair(quad(0), line([0, 0, 12], [10, 5, 12]));
+ok('line parallel to a plane: 12, angle 0', near(r.normal, 12) && near(r.angle, 0), JSON.stringify(r));
+const tilted = { ...quad(0), geo: { t: 'plane', p: [0, 0, 0], n: [0, Math.SQRT1_2, Math.SQRT1_2] } };
+r = measurePair(quad(0), tilted);
+ok('planes at 45°: no normal distance, angle 45', r.normal == null && near(r.angle, 45, 1e-9), JSON.stringify(r));
+console.log(fails ? `${fails} FAIL` : 'all ok'); process.exit(fails ? 1 : 0);

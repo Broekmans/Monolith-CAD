@@ -21,7 +21,7 @@ export function sketchCurves(sketch, { includeConstruction = false } = {}) {
       const a = pts.get(g.p);
       if (!a || !g.outline) continue;
       const segs = textSegs(g, [a.x, a.y]);
-      textLoops(g, [a.x, a.y]).forEach((loop, i) => out.push({ id: g.id, kind: 'poly', pts: loop, segs: segs?.[i], construction: !!g.construction }));
+      textLoops(g, [a.x, a.y]).forEach((loop, i) => out.push({ id: g.id, kind: 'poly', pts: loop, segs: segs?.[i], ...(g.tol != null ? { tol: g.tol } : {}), construction: !!g.construction }));
       continue;
     }
     if (g.type === 'line') {

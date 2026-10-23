@@ -1,6 +1,7 @@
 // Eye-Dome Lighting: darkens points that lie behind their screen neighbours, so the shape of a scan
 // reads clearly without normals. The scene is drawn into a texture (colour + depth), then shaded.
 import * as THREE from 'three';
+import { opt } from '../app/options.js';
 
 const VERT = `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 const FRAG = `
@@ -31,7 +32,7 @@ export class EDLPass {
     this.rt = null;
     this.mat = new THREE.ShaderMaterial({
       vertexShader: VERT, fragmentShader: FRAG, depthTest: false, depthWrite: false,
-      uniforms: { tColor: { value: null }, tDepth: { value: null }, px: { value: new THREE.Vector2() }, strength: { value: 1 }, radius: { value: 1.4 }, depthToPx: { value: 1 } },
+      uniforms: { tColor: { value: null }, tDepth: { value: null }, px: { value: new THREE.Vector2() }, strength: { value: 1 }, radius: { value: opt('pcEdlRadius') }, depthToPx: { value: 1 } },
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat);
     this.quad.frustumCulled = false;
@@ -61,6 +62,7 @@ export class EDLPass {
     u.tColor.value = this.rt.texture; u.tDepth.value = this.rt.depthTexture;
     u.px.value.set(1 / size.x, 1 / size.y);
     u.strength.value = strength;
+    u.radius.value = opt('pcEdlRadius');
     u.depthToPx.value = ((cam.far - cam.near) / vp.scale) * dpr; // 1 depth unit = (far-near) mm
     r.render(this.qscene, this.qcam);
   }

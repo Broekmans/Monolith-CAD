@@ -4,6 +4,7 @@
 // (drawing defaults + company standard file, import / export).
 import { h, fmt, toast } from '../ui.js';
 import { api } from '../api.js';
+import { dragOut, enablePopOut } from '../popout.js';
 import { opt } from '../app/options.js';
 import { annValue } from './dims.js';
 import { fitData, roomAt } from './fit.js';
@@ -67,8 +68,8 @@ export class DrawingProps {
     head.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || e.target.closest('button')) return;
       e.preventDefault();
-      const x0 = e.clientX, y0 = e.clientY, l0 = el.offsetLeft, t0 = el.offsetTop;
-      const mv = (ev) => { const host = this.vp.el.getBoundingClientRect(); const x = Math.max(0, Math.min(host.width - el.offsetWidth, l0 + ev.clientX - x0)), y = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), t0 + ev.clientY - y0)); el.style.left = x + 'px'; el.style.top = y + 'px'; };
+      const x0 = e.clientX, y0 = e.clientY, l0 = el.offsetLeft, t0 = el.offsetTop, wr = el.getBoundingClientRect(), grab = [x0 - wr.left, y0 - wr.top];
+      const mv = (ev) => { if (dragOut(el, ev, grab)) { up(); return; } const host = this.vp.el.getBoundingClientRect(); const x = Math.max(0, Math.min(host.width - el.offsetWidth, l0 + ev.clientX - x0)), y = Math.max(0, Math.min(host.height - opt('drPopupKeepPx'), t0 + ev.clientY - y0)); el.style.left = x + 'px'; el.style.top = y + 'px'; };
       const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); setPropsPos([el.offsetLeft, el.offsetTop]); };
       window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
     });
@@ -126,6 +127,7 @@ export class DrawingProps {
       btn('Set as default', 'Use this item\'s look for new annotations in this drawing (Drafting Standard)', () => { const s = { ...(a.style || {}) }; if (!Object.keys(s).length) { toast('Nothing changed on this item yet'); return; } this.change(() => { this.doc.style = { ...(this.doc.style || {}), ...s }; }); log('STYLE drawing default', JSON.stringify(s)); toast('Drawing default updated'); }),
       btn('Reset', 'Back to the drawing default', () => this.annSet(a, () => { delete a.style; }, 'reset'))));
     this.vp.el.appendChild(el);
+    enablePopOut(el, '.ap-head', 'monolith.drProps'); // 0.1.129: ⧉ = own window (remembered for the next box)
   }
   // room look + detection values -> drawing default + company standard file (used for every new room)
   async saveMyStandard(a) {

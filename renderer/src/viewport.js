@@ -147,7 +147,7 @@ export class Viewport {
     // section view: clip everything; back faces of solids show as the cut face colour
     const sec = this.section;
     this.scene.traverse((o) => {
-      if (o.userData.isCap) { o.visible = !!sec; return; }
+      if (o.userData.isCap) { o.visible = !!sec && !o.parent?.material?.transparent; return; }
       if (!sec || !o.isMesh || o.userData.capDone || o.material?.side !== THREE.DoubleSide || o.material.transparent) return;
       o.userData.capDone = true;
       const cap = new THREE.Mesh(o.geometry, new THREE.MeshBasicMaterial({ color: 0xc8553d, side: THREE.BackSide }));
@@ -156,10 +156,13 @@ export class Viewport {
       o.add(cap);
     });
     r.clippingPlanes = sec ? [new THREE.Plane(new THREE.Vector3(...sec.n), sec.c)] : [];
+    // Realistic display style: tone mapping for the model only (set per view by appearance/look.js paneLook)
+    r.toneMapping = this._toneMap || THREE.NoToneMapping; r.toneMappingExposure = this._toneExp ?? 1;
     if (this.renderScene) this.renderScene(r); else r.render(this.scene, this.camera);
+    r.toneMapping = THREE.NoToneMapping; r.toneMappingExposure = 1;
     r.clippingPlanes = [];
     if (this.mode === '3d') this.grid.render(r, this);
-    if (this.mode === '3d') {
+    if (this.mode === '3d' && !this._noHud) {
       const s = 90;
       r.setViewport(8, 8, s, s);
       r.clearDepth();
@@ -174,7 +177,26 @@ export class Viewport {
       g.clearRect(0, 0, o.width, o.height);
       g.drawImage(src, 0, src.height - o.height, o.width, o.height, 0, 0, o.width, o.height);
     }
-    this._drawOverlay();
+    if (!this._capture) this._drawOverlay();
+  }
+
+  // 0.1.122 (Save Animation): draw this view into renderer r at W × H pixels (pixel ratio 1) with the same camera,
+  // showing at least everything the view shows now (other aspect ratio = more on the sides or above/below).
+  // hud = also the view cube and axis triad. Returns screen px per output px (for the background gradient).
+  renderCapture(r, W, H, hud = false) {
+    const keep = { renderer: this.renderer, out: this.out, width: this.width, height: this.height, scale: this.scale };
+    const k = Math.max((this.width * this.scale) / W, (this.height * this.scale) / H);
+    try {
+      this.renderer = r; this.out = null; this.width = W; this.height = H; this.scale = k;
+      this._capture = true; this._noHud = !hud;
+      this._render();
+    } finally {
+      Object.assign(this, keep);
+      this._capture = false; this._noHud = false;
+      this._updateCamera();
+      this.requestRender();
+    }
+    return k / keep.scale;
   }
 
   _drawOverlay() {
@@ -195,6 +217,11 @@ export class Viewport {
       }
     }
     if (this.section) { try { drawSecHandles(this, ctx); } catch (e) { console.error(e); } } else this._secHit = null;
+    if (this._pivotMark) { // 0.1.136: the point the view turns about (while middle-dragging)
+      const [px, py] = this.toScreen(this._pivotMark), rr = opt('rotatePivotMarkPx');
+      ctx.save(); ctx.beginPath(); ctx.arc(px, py, rr, 0, Math.PI * 2);
+      ctx.fillStyle = opt('rotatePivotColor'); ctx.fill(); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.stroke(); ctx.restore();
+    }
     for (const d of this.overlayDrawers) {
       ctx.save();
       try { d(ctx, this); } catch (e) { console.error(e); }
@@ -255,6 +282,10 @@ export class Viewport {
       if (this.mode === 'plan' || e.shiftKey || e.button === 2) kind = 'pan';
       if (e.ctrlKey) kind = 'zoom';
       drag = { kind, x: e.clientX, y: e.clientY, moved: false, button: e.button, t: performance.now() };
+      if (kind === 'rotate' && this.mode !== 'plan' && opt('rotateAboutCursor')) { // 0.1.136: turn about the point under the mouse
+        const r = el.getBoundingClientRect();
+        try { drag.pivot = this.pivotAt(e.clientX - r.left, e.clientY - r.top); } catch (err) { console.error(err); }
+      }
     });
     el.addEventListener('pointermove', (e) => {
       if (!drag) return;
@@ -262,7 +293,10 @@ export class Viewport {
       if (Math.abs(dx) + Math.abs(dy) > 2) drag.moved = true;
       drag.x = e.clientX; drag.y = e.clientY;
       const rs = 0.008 * opt('rotateSpeed') / 100;
-      if (drag.kind === 'rotate') this.rotateBy(dx * rs, dy * rs);
+      if (drag.kind === 'rotate') {
+        if (drag.pivot && drag.moved && opt('rotatePivotMark')) this._pivotMark = drag.pivot;
+        this.rotateBy(dx * rs, dy * rs, drag.pivot);
+      }
       else if (drag.kind === 'pan') this.panBy(dx, dy);
       else this.zoomAt(this.width / 2, this.height / 2, Math.exp(dy * 0.01 * opt('dragZoomSpeed') / 100));
     });
@@ -275,6 +309,7 @@ export class Viewport {
       const midDouble = midClick && opt('midDouble') && now - (this._lastMid || 0) < opt('midDoubleMs');
       this._lastMid = midClick && !midDouble ? now : 0;
       drag = null;
+      if (this._pivotMark) { this._pivotMark = null; this.requestRender(); }
       if (wasRightClick && this.onContextMenu) this.onContextMenu(e);
       if (midDouble && this.onMiddleClick) this.onMiddleClick(e);
     };
@@ -287,15 +322,43 @@ export class Viewport {
     }, { passive: false });
   }
 
-  rotateBy(ax, ay) {
+  // 0.1.136: the point the view turns about for a middle drag at screen point (sx, sy): the nearest model face under
+  // the mouse (meshes that are visible and not on the cut-away side of a Section View; helpers flagged
+  // userData.noPivot are skipped); empty space → the centre of what is visible when that is on screen, else the point
+  // under the mouse at the depth of that centre; nothing visible → null (= the view's own centre, as before)
+  pivotAt(sx, sy) {
+    const meshes = [], box = new THREE.Box3(), bb = new THREE.Box3();
+    const skip = (o) => { for (let k = o; k; k = k.parent) if (k.userData?.noPivot) return true; return false; };
+    this.scene.traverseVisible((o) => {
+      if (!(o.isMesh || o.isLine || o.isPoints) || o.userData.isCap || skip(o)) return;
+      if (o.material && (o.material.visible === false || (o.material.transparent && o.material.opacity < 0.05))) return;
+      const g = o.geometry; if (!g) return;
+      if (!g.boundingBox) g.computeBoundingBox();
+      if (g.boundingBox && !g.boundingBox.isEmpty()) { o.updateWorldMatrix(true, false); box.union(bb.copy(g.boundingBox).applyMatrix4(o.matrixWorld)); }
+      if (o.isMesh) meshes.push(o);
+    });
+    if (box.isEmpty()) return null;
+    const rc = this.ray(sx, sy), sec = this.section;
+    const keep = (p) => !sec || new THREE.Vector3(...sec.n).dot(p) + sec.c >= -1e-6;
+    const hit = rc.intersectObjects(meshes, false).find((h) => keep(h.point));
+    if (hit) return hit.point.clone();
+    const c = box.getCenter(new THREE.Vector3());
+    const [cx, cy] = this.toScreen(c);
+    if (cx >= 0 && cy >= 0 && cx <= this.width && cy <= this.height) return c;
+    const d = this.viewDir(); // under the mouse, at the depth of the centre
+    return rc.ray.origin.clone().addScaledVector(rc.ray.direction, c.clone().sub(rc.ray.origin).dot(d) / rc.ray.direction.dot(d));
+  }
+  // pivot (optional, 0.1.136): turn about this world point instead of the view's centre (it stays on the same pixel)
+  rotateBy(ax, ay, pivot = null) {
     if (this.mode === 'plan') return;
     this.anim = null;
     const cam = this.camera;
     const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
     const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
     const q = new THREE.Quaternion().setFromAxisAngle(up, -ax).multiply(new THREE.Quaternion().setFromAxisAngle(right, -ay));
-    const off = cam.position.clone().sub(this.target).applyQuaternion(q);
-    cam.position.copy(this.target).add(off);
+    if (pivot) this.target.sub(pivot).applyQuaternion(q).add(pivot);
+    const off = cam.position.clone().sub(pivot || this.target).applyQuaternion(q);
+    cam.position.copy(pivot || this.target).add(off);
     cam.up.applyQuaternion(q);
     cam.lookAt(this.target);
     cam.updateMatrixWorld();

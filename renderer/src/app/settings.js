@@ -1,5 +1,6 @@
 // Program settings: dark mode, UI scale, grid … (values in app/options.js, synced with the Interface / Viewport menus)
 // and the Options window (Tools > Options…).
+import { qs } from '../popout.js';
 import { cacheKey, packMesh } from '../meshcache.js';
 import { h, CommandManager, PropertyManager, toast, dialog } from '../ui.js';
 import { icon } from '../icons.js';
@@ -40,12 +41,29 @@ export class AppSettings {
   isoForFeatures() { return opt('isoFeatures'); }
   setIsoForFeatures(on) { setOpt('isoFeatures', !!on); try { localStorage.setItem('monolith.isoFeat', on ? 'on' : 'off'); } catch {} api.setIsoMenu?.(on); }
 
+  // 0.1.128: compact layout (Options > Interface): ribbon size / scale / group labels, quick access bar, tree rows
+  applyInterface() {
+    const b = document.body, rs = opt('ribbonSize');
+    for (const k of ['large', 'medium', 'small']) b.classList.toggle('rb-' + k, rs === k);
+    b.classList.toggle('rb-nolabels', !opt('ribbonGroupLabels'));
+    b.classList.toggle('qa-hidden', opt('qaBar') === 'hidden');
+    const st = document.documentElement.style;
+    st.setProperty('--rb', String(opt('ribbonScalePct') / 100));
+    st.setProperty('--tree-row', opt('treeRowPx') + 'px');
+  }
   setUiScale(f, save = true) {
     f = Math.min(2, Math.max(0.6, Math.round(f * 20) / 20));
     this.uiScale = f; api.setZoom(f);
     if (save) { setOpt('uiScale', Math.round(f * 100)); try { localStorage.setItem('monolith.uiScale', String(f)); } catch {} }
   }
   setActionLog(on) { api.logCfg?.({ enabled: !!on, asked: true }); }
+  // 0.1.111: single / multi-thread geometry kernel (main/kernel.cjs restarts its workers when this changes)
+  async setKernelMode(on) {
+    // no optional chaining here: `api.kernelMode?.(x).catch()` silently skipped the whole call when the bridge was missing (0.1.111/0.1.112)
+    const info = await Promise.resolve(api.kernelMode(!!on)).catch((e) => { window.__lithLog?.('KERNEL ERROR mode', e?.message || e); return null; });
+    if (info) try { window.__lithLog?.(`KERNEL ${info.mode} (${info.cores} cores${info.threads ? ', ' + info.threads + ' threads' : ''})${info.fallback ? ' — multi-thread build failed: ' + info.fallback : ''}`); } catch { /* log optional */ }
+    return info;
+  }
   openDraftStd() {
     if (this.doc?.cmdDraftStd) { closeOptions(); this.doc.cmdDraftStd(); } else toast('Open or select a drawing first: the Drafting Standard belongs to drawings (button on the Annotate tab)');
   }
@@ -179,4 +197,4 @@ export class AppSettings {
 }
 
 // close an open Options window without undoing (used when a button inside opens another dialog)
-function closeOptions() { const b = document.querySelector('.dlg-back .opt-body')?.closest('.dlg-back'); if (b) { closeOptions.forced = true; b.querySelector('.dlg-buttons button.primary')?.click(); } }
+function closeOptions() { const b = qs('.dlg .opt-body')?.closest('.dlg'); if (b) { closeOptions.forced = true; b.querySelector('.dlg-buttons button.primary')?.click(); } } // the dialog may be in its own window (0.1.129)

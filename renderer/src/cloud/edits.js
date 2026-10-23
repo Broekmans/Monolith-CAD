@@ -3,6 +3,7 @@
 // the source clouds are only hidden, so Undo/Redo just switch the document's cloud list.
 import { h, fmt, toast, dialog } from '../ui.js';
 import { api } from '../api.js';
+import { opt } from '../app/options.js';
 import { CloudLayer } from './layer.js';
 import { PolygonTool, BoxTool } from './tools.js';
 
@@ -51,7 +52,7 @@ export class CloudEdits {
 
   // ======================= undo =======================
   snapshot() { return { clouds: JSON.stringify(this.toJSON().clouds), measures: JSON.stringify(this.doc.measures || []), parts: JSON.stringify(this.doc.partAlign || {}), selIds: [...this.selIds] }; }
-  pushUndo(snap = this.snapshot()) { this.undoStack.push(snap); if (this.undoStack.length > 50) this.undoStack.shift(); this.redoStack = []; this.app.cm.refresh(); }
+  pushUndo(snap = this.snapshot()) { this.undoStack.push(snap); if (this.undoStack.length > opt('pcUndoLevels')) this.undoStack.shift(); this.redoStack = []; this.app.cm.refresh(); }
   async restore(s) {
     this.doc.clouds = JSON.parse(s.clouds);
     if (s.measures) this.doc.measures = JSON.parse(s.measures);
@@ -98,13 +99,13 @@ export class CloudEdits {
     const off = api.onCloudProgress((p) => { if (p.req === req) this.showProgress(title, p); });
     let r;
     try { r = await api.cloudEdit(spec, req); } catch (e) { r = { error: e.message }; } finally { off?.(); this.showProgress(null); this.app.setBusy(false); this.busy = false; }
-    if (!r || r.error) { toast(`${label} failed: ${r?.error || 'unknown error'}`, 'error', 8000); this.app.cm.refresh(); return null; }
+    if (!r || r.error) { toast(`${label} failed: ${r?.error || 'unknown error'}`, 'error', opt('pcToastEditErrMs')); this.app.cm.refresh(); return null; }
     if (undo) this.pushUndo();
     const src = srcs[0], made = [];
     r.outputs.forEach((o, i) => {
       if (!o) return;
       const rec = { id: 'pc' + Date.now().toString(36) + i + Math.floor(Math.random() * 1e4), name: names[i], cache: o.cache, derived: { from: srcs.map((s) => s.name), op: label },
-        visible: true, colorMode: src.colorMode, pointSize: src.pointSize || 2, categorical: src.categorical, count: o.meta.count };
+        visible: true, colorMode: src.colorMode, pointSize: src.pointSize || opt('pcPointSizeFallback'), categorical: src.categorical, count: o.meta.count };
       if (rec.colorMode?.startsWith('field:') && !o.meta.attrs.fields.some((f) => 'field:' + f.name === rec.colorMode)) rec.colorMode = null;
       if (!rec.colorMode) rec.colorMode = o.meta.attrs.rgb ? 'rgb' : 'height';
       if (o.analysis) this.applyAnalysis(rec, o.analysis);
@@ -119,8 +120,8 @@ export class CloudEdits {
     for (const s of srcs) { s.visible = false; this.layers.get(s.id)?.applyStyle(); }
     this.selIds = new Set(made.slice(0, 1).map((m) => m.id)); this.selId = made[0]?.id || null;
     const empty = r.outputs.map((o, i) => (o ? null : names[i])).filter(Boolean);
-    this.app.setStatus(`${label}: ${made.map((m) => `${m.name} ${mpts(m.count)}`).join(', ')} (${fmt(r.seconds, 1)} s)`);
-    if (empty.length) toast(`No points for: ${empty.join(', ')}`, 'info', 5000);
+    this.app.setStatus(`${label}: ${made.map((m) => `${m.name} ${mpts(m.count)}`).join(', ')} (${fmt(r.seconds, opt('pcSecDec'))} s)`);
+    if (empty.length) toast(`No points for: ${empty.join(', ')}`, 'info', opt('pcToastInfoMs'));
     this.app.setDirty(true);
     this.renderTree();
     this.scheduleLOD();
@@ -168,9 +169,10 @@ export class CloudEdits {
     if (!tg.length) return;
     const b = tg.map((r) => this.layers.get(r.id).docBox()).reduce((a, x) => a.union(x));
     const O = this.doc.origin;
-    const box = { min: [b.min.x, b.min.y, b.min.z].map((v) => Math.round(v * 1000) / 1000), max: [b.max.x, b.max.y, b.max.z].map((v) => Math.round(v * 1000) / 1000) };
+    const rk = opt('pcBoxRoundK');
+    const box = { min: [b.min.x, b.min.y, b.min.z].map((v) => Math.round(v * rk) / rk), max: [b.max.x, b.max.y, b.max.z].map((v) => Math.round(v * rk) / rk) };
     const keys = ['x0', 'y0', 'z0', 'x1', 'y1', 'z1'];
-    const vals = () => Object.fromEntries(keys.map((k, i) => [k, +(box[i < 3 ? 'min' : 'max'][i % 3] + O[i % 3]).toFixed(3)]));
+    const vals = () => Object.fromEntries(keys.map((k, i) => [k, +(box[i < 3 ? 'min' : 'max'][i % 3] + O[i % 3]).toFixed(opt('pcCoordDec'))]));
     const preview = (mode) => { for (const r of tg) this.layers.get(r.id)?.setCropPreview(box, mode === 'outside' ? 'outside' : 'inside'); this.vp.requestRender(); };
     let mode = 'inside';
     this.tool = new BoxTool(this, box, () => { const v = vals(); for (const k of keys) pm.setValue(k, v[k]); preview(mode); });
@@ -216,7 +218,7 @@ export class CloudEdits {
     if (A.classification) opts.push({ value: 'c', label: 'Classification' });
     for (const f of A.fields) opts.push({ value: 'f:' + f.name, label: 'Field: ' + f.name });
     const range = (a) => {
-      if (a === 'z') { const z0 = M.bbox[2] + L.offset[2] + this.doc.origin[2], z1 = M.bbox[5] + L.offset[2] + this.doc.origin[2]; return [+z0.toFixed(3), +z1.toFixed(3)]; }
+      if (a === 'z') { const z0 = M.bbox[2] + L.offset[2] + this.doc.origin[2], z1 = M.bbox[5] + L.offset[2] + this.doc.origin[2]; return [+z0.toFixed(opt('pcCoordDec')), +z1.toFixed(opt('pcCoordDec'))]; }
       if (a === 'i') return A.intensity;
       if (a === 'c') return [0, 31];
       const f = A.fields.find((x) => 'f:' + x.name === a); return f ? [f.min, f.max] : [0, 1];
@@ -232,17 +234,18 @@ export class CloudEdits {
         { key: 'attr', type: 'select', label: 'Value', options: opts },
         { key: 'min', type: 'number', label: 'From' }, { key: 'max', type: 'number', label: 'To' },
         { key: 'mode', type: 'select', label: 'Result', options: [{ value: 'inside', label: 'Keep points in this range' }, { value: 'outside', label: 'Remove points in this range' }, { value: 'split', label: 'Split into in range + rest' }] },
-        { type: 'info', key: 'rng', text: `Values in this cloud: ${r0.map((v) => fmt(v, 3)).join(' … ')}` }],
+        { type: 'info', key: 'rng', text: `Values in this cloud: ${r0.map((v) => fmt(v, opt('pcValueDec'))).join(' … ')}` }],
       onChange: (v, key) => {
         if (key !== 'attr') return;
         const r = range(v.attr);
         pm.setValue('min', r[0]); pm.setValue('max', r[1]);
-        pm.inputs.rng.textContent = `Values in this cloud: ${r.map((x) => fmt(x, 3)).join(' … ')}`;
+        pm.inputs.rng.textContent = `Values in this cloud: ${r.map((x) => fmt(x, opt('pcValueDec'))).join(' … ')}`;
       },
       onOk: (v) => {
         if (!(v.max >= v.min)) { pm.setMessage('"To" must be at least "From"', 'error'); return false; }
         const fld = v.attr.startsWith('f:') ? v.attr.slice(2) : null;
-        const what = fld ? `${fld} ${v.min === v.max ? '= ' + fmt(v.min, 3) : fmt(v.min, 3) + '–' + fmt(v.max, 3)}` : `${opts.find((o) => o.value === v.attr).label} ${fmt(v.min, 3)}–${fmt(v.max, 3)}`;
+        const vd = opt('pcValueDec');
+        const what = fld ? `${fld} ${v.min === v.max ? '= ' + fmt(v.min, vd) : fmt(v.min, vd) + '–' + fmt(v.max, vd)}` : `${opts.find((o) => o.value === v.attr).label} ${fmt(v.min, vd)}–${fmt(v.max, vd)}`;
         const names = v.mode === 'split' ? [`${nm(rec)} - ${what}`, `${nm(rec)} - rest`] : [`${nm(rec)} - ${v.mode === 'inside' ? what : 'without ' + what}`];
         setTimeout(() => this.runEdit('value', { attr: fld ? 'f' : v.attr, field: fld, min: v.min, max: v.max, mode: v.mode }, 'Filter', [rec], names));
         return true;
@@ -254,15 +257,15 @@ export class CloudEdits {
   cmdSubsample() {
     const rec = this.targets()[0];
     const pm = this.app.pm.show({
-      title: 'Subsample', iconName: 'grid', values: { method: 'spacing', spacing: 2, pct: 25 },
+      title: 'Subsample', iconName: 'grid', values: { method: 'spacing', spacing: opt('pcSubSpacing'), pct: opt('pcSubPct') },
       fields: [
         { key: 'method', type: 'select', label: 'Method', options: [{ value: 'spacing', label: 'Minimum spacing (even)' }, { value: 'random', label: 'Random percentage' }] },
         { key: 'spacing', type: 'number', label: 'Spacing', unit: 'cm', min: 0.1, step: 0.5 },
         { key: 'pct', type: 'number', label: 'Keep', unit: '%', min: 0.1, step: 5 },
         { type: 'info', text: 'Minimum spacing keeps one point per cube of that size: an even density, good for large scans.' }],
       onOk: (v) => {
-        if (v.method === 'spacing') setTimeout(() => this.runEdit('spacing', { spacing: v.spacing / 100 }, 'Subsample', [rec], [`${nm(rec)} - ${fmt(v.spacing, 1)} cm`]));
-        else { if (!(v.pct > 0 && v.pct <= 100)) { pm.setMessage('Percentage between 0 and 100', 'error'); return false; } setTimeout(() => this.runEdit('random', { frac: v.pct / 100 }, 'Subsample', [rec], [`${nm(rec)} - ${fmt(v.pct, 1)}%`])); }
+        if (v.method === 'spacing') setTimeout(() => this.runEdit('spacing', { spacing: v.spacing / 100 }, 'Subsample', [rec], [`${nm(rec)} - ${fmt(v.spacing, opt('pcNameDec'))} cm`]));
+        else { if (!(v.pct > 0 && v.pct <= 100)) { pm.setMessage('Percentage between 0 and 100', 'error'); return false; } setTimeout(() => this.runEdit('random', { frac: v.pct / 100 }, 'Subsample', [rec], [`${nm(rec)} - ${fmt(v.pct, opt('pcNameDec'))}%`])); }
         return true;
       },
     });
@@ -271,15 +274,15 @@ export class CloudEdits {
   // ======================= Noise filter =======================
   spacingEstimate(L) {
     const s = [];
-    for (const nd of L.nodes.values()) if (!nd.children.length && nd.n > 50) s.push(nd.size / Math.sqrt(nd.n));
+    for (const nd of L.nodes.values()) if (!nd.children.length && nd.n > opt('pcSpacingMinPts')) s.push(nd.size / Math.sqrt(nd.n));
     s.sort((a, b) => a - b);
-    return s.length ? s[s.length >> 1] : 0.02;
+    return s.length ? s[s.length >> 1] : opt('pcSpacingFallback');
   }
   cmdNoise() {
     const rec = this.targets()[0], L = this.layers.get(rec.id);
-    const sp = Math.max(0.002, this.spacingEstimate(L));
+    const sp = Math.max(opt('pcMinSpacing'), this.spacingEstimate(L));
     const pm = this.app.pm.show({
-      title: 'Noise Filter', iconName: 'erase', values: { method: 'sor', k: 8, sigma: 1, r: +(sp * 300).toFixed(1), minN: 4 },
+      title: 'Noise Filter', iconName: 'erase', values: { method: 'sor', k: opt('pcSorK'), sigma: opt('pcSorSigma'), r: +(sp * opt('pcRadiusRK')).toFixed(opt('pcDialogDec')), minN: opt('pcRadMinN') },
       fields: [
         { key: 'method', type: 'select', label: 'Method', options: [{ value: 'sor', label: 'Statistical outliers (SOR)' }, { value: 'radius', label: 'Radius filter' }] },
         { type: 'group', label: 'Statistical outliers', fields: [
@@ -290,11 +293,11 @@ export class CloudEdits {
           { key: 'r', type: 'number', label: 'Radius', unit: 'cm', min: 0.1, step: 1 },
           { key: 'minN', type: 'number', label: 'Min. neighbours', min: 1, step: 1 },
           { type: 'info', text: 'Removes points with fewer neighbours than this within the radius.' }] },
-        { type: 'info', text: `Typical point spacing in this cloud: about ${fmt(sp * 100, 1)} cm.` }],
+        { type: 'info', text: `Typical point spacing in this cloud: about ${fmt(sp * 100, opt('pcSpacingDec'))} cm.` }],
       onOk: (v) => {
         if (v.method === 'sor') {
           const k = Math.max(1, Math.round(v.k));
-          setTimeout(() => this.runEdit('sor', { k, nSigma: v.sigma, cell: Math.max(0.005, sp * Math.max(3, Math.sqrt(k) * 1.2)) }, 'Noise filter', [rec], [`${nm(rec)} - cleaned`]));
+          setTimeout(() => this.runEdit('sor', { k, nSigma: v.sigma, cell: Math.max(opt('pcKnnCellMin'), sp * Math.max(opt('pcKnnCellSpacings'), Math.sqrt(k) * opt('pcKnnCellK'))) }, 'Noise filter', [rec], [`${nm(rec)} - cleaned`]));
         } else setTimeout(() => this.runEdit('radius', { r: v.r / 100, minN: Math.max(1, Math.round(v.minN)) }, 'Noise filter', [rec], [`${nm(rec)} - cleaned`]));
         return true;
       },

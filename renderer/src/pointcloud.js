@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { api } from './api.js';
 import { h, dialog, toast, fmt, evalNumber } from './ui.js';
+import { opt } from './app/options.js';
 
 export const PC_EXTS = ['las', 'laz', 'ply', 'xyz', 'pts', 'txt', 'csv'];
 export const isPointCloud = (path) => PC_EXTS.includes(String(path).split('.').pop().toLowerCase());
@@ -15,20 +16,20 @@ export async function askImportOptions(path) {
   const name = path.split(/[\\/]/).pop();
   const span = [0, 1, 2].map((d) => info.max[d] - info.min[d]);
   // Scans are almost always in meters; small spans in mm-sized numbers suggest millimeters.
-  const guessUnits = Math.max(...span) > 2000 ? 'mm' : 'm';
-  const big = info.min.some((v) => Math.abs(v) > 5000);
+  const guessUnits = Math.max(...span) > opt('pcUnitGuessSpan') ? 'mm' : 'm';
+  const big = info.min.some((v) => Math.abs(v) > opt('pcBigCoord'));
   const unitsSel = h('select', {}, Object.entries(UNITS).map(([k, u]) => h('option', { value: k, selected: k === guessUnits }, u.label)));
   const shiftSel = h('select', {},
     h('option', { value: 'min', selected: true }, 'Move scan to origin (recommended)'),
     h('option', { value: 'none' }, 'Keep original coordinates'));
-  const maxIn = h('input', { type: 'text', value: String(Math.min(info.count, 5000000)), class: 'dlg-input' });
+  const maxIn = h('input', { type: 'text', value: String(Math.min(info.count, opt('pcImportMaxPts'))), class: 'dlg-input' });
   const row = (k, v) => h('tr', {}, h('td', {}, k), h('td', {}, v));
   const body = h('div', { class: 'pc-dlg' },
     h('table', { class: 'mass' },
       row('File', name), row('Format', info.format), row('Points', info.count.toLocaleString()),
       row('Colors', info.hasColor ? 'RGB' : 'none (colored by elevation)'),
-      row('Extent', `${span.map((v) => fmt(v, 2)).join(' × ')} (file units)`),
-      row('Lower corner', info.min.map((v) => fmt(v, 3)).join(', ')),
+      row('Extent', `${span.map((v) => fmt(v, opt('pcSizeDec'))).join(' × ')} (file units)`),
+      row('Lower corner', info.min.map((v) => fmt(v, opt('pcCoordDec'))).join(', ')),
       info.system ? row('Created by', info.system) : null),
     h('div', { class: 'pp-row' }, h('label', {}, 'File units'), unitsSel),
     h('div', { class: 'pp-row' }, h('label', {}, 'Position'), shiftSel),
@@ -40,8 +41,8 @@ export async function askImportOptions(path) {
   const shift = shiftSel.value === 'min' ? info.min.map((v) => Math.floor(v)) : [0, 0, 0];
   return {
     id: 'pc' + Date.now().toString(36), name, path, units, scale: UNITS[units].scale, shift,
-    maxPoints: Math.max(10000, Math.round(evalNumber(maxIn.value) || 5000000)), count: info.count,
-    visible: true, pointSize: 2, colorMode: info.hasColor ? 'rgb' : 'elevation', clip: { on: false, min: 0, max: 3000 },
+    maxPoints: Math.max(opt('pcImportMinPts'), Math.round(evalNumber(maxIn.value) || opt('pcImportMaxPts'))), count: info.count,
+    visible: true, pointSize: opt('cloudPointSize'), colorMode: info.hasColor ? 'rgb' : 'elevation', clip: { on: false, min: opt('pcPartClipFrom'), max: opt('pcPartClipTo') },
   };
 }
 
@@ -104,7 +105,7 @@ export class CloudView {
     g.computeBoundingBox();
     this.geometry = g;
     this.box = g.boundingBox.clone();
-    let iMax = 1; for (let i = 0; i < data.intensity.length; i += 7) if (data.intensity[i] > iMax) iMax = data.intensity[i];
+    let iMax = 1; for (let i = 0, st = opt('pcIntensityStep'); i < data.intensity.length; i += st) if (data.intensity[i] > iMax) iMax = data.intensity[i];
     this.iMax = iMax;
     this.objects = [];
     this.grid = null;
@@ -114,9 +115,9 @@ export class CloudView {
     return new THREE.ShaderMaterial({
       vertexShader: VERT, fragmentShader: FRAG,
       uniforms: {
-        size: { value: r.pointSize || 2 }, mode: { value: this.data.colors || r.colorMode !== 'rgb' ? MODES[r.colorMode] ?? 1 : 1 },
+        size: { value: r.pointSize || opt('pcPointSizeFallback') }, mode: { value: this.data.colors || r.colorMode !== 'rgb' ? MODES[r.colorMode] ?? 1 : 1 },
         hMin: { value: this.box.min.y }, hMax: { value: this.box.max.y }, iMax: { value: this.iMax },
-        single: { value: new THREE.Color(0x6b7a8f) },
+        single: { value: new THREE.Color(opt('pcPartSingleColor')) },
         clipOn: { value: r.clip?.on ? 1 : 0 }, clipMin: { value: r.clip?.min ?? 0 }, clipMax: { value: r.clip?.max ?? 0 },
       },
     });
@@ -136,7 +137,7 @@ export class CloudView {
     const r = this.rec;
     for (const o of this.objects) {
       const u = o.material.uniforms;
-      u.size.value = r.pointSize || 2;
+      u.size.value = r.pointSize || opt('pcPointSizeFallback');
       u.mode.value = !this.data.colors && r.colorMode === 'rgb' ? 1 : MODES[r.colorMode] ?? 1;
       u.clipOn.value = r.clip?.on ? 1 : 0; u.clipMin.value = r.clip?.min ?? 0; u.clipMax.value = r.clip?.max ?? 0;
       o.visible = r.visible !== false;
@@ -154,9 +155,9 @@ export class CloudView {
     const pos = this.data.positions, r = this.rec;
     const n = pos.length / 3;
     const b = this.box;
-    const cell = Math.max(10, Math.sqrt(((b.max.x - b.min.x) * (b.max.z - b.min.z)) / Math.max(1, n)) * 4);
-    const grid = new Map();
-    const step = n > 2e6 ? Math.ceil(n / 2e6) : 1;
+    const cell = Math.max(opt('pcSnapGridMin'), Math.sqrt(((b.max.x - b.min.x) * (b.max.z - b.min.z)) / Math.max(1, n)) * opt('pcSnapGridK'));
+    const grid = new Map(), maxPts = opt('pcSnapGridMaxPts');
+    const step = n > maxPts ? Math.ceil(n / maxPts) : 1;
     for (let i = 0; i < n; i += step) {
       const y = pos[i * 3 + 1];
       if (r.clip?.on && (y < r.clip.min || y > r.clip.max)) continue;
@@ -185,12 +186,13 @@ export function cloudPanel(rec, view, { onChange, onRemove, onZoom, onReload }) 
   const wrap = h('div', { class: 'pc-panel' });
   const set = (fn) => { fn(); view?.refresh(); onChange?.(); };
   const field = (label, input) => h('div', { class: 'pp-row' }, h('label', {}, label), input);
-  const num = (val, fn) => { const i = h('input', { type: 'text', value: fmt(val, 3) }); i.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') i.blur(); }); i.addEventListener('change', () => { const v = evalNumber(i.value); if (v !== null) set(() => fn(v)); }); return i; };
+  const num = (val, fn) => { const i = h('input', { type: 'text', value: fmt(val, opt('pcInputDec')) }); i.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') i.blur(); }); i.addEventListener('change', () => { const v = evalNumber(i.value); if (v !== null) set(() => fn(v)); }); return i; };
   const vis = h('input', { type: 'checkbox', checked: rec.visible !== false });
   vis.addEventListener('change', () => set(() => { rec.visible = vis.checked; }));
   const mode = h('select', {}, [['rgb', 'Scan colors (RGB)'], ['elevation', 'Elevation'], ['intensity', 'Intensity'], ['single', 'Single color']].map(([v, l]) => h('option', { value: v, selected: rec.colorMode === v }, l)));
   mode.addEventListener('change', () => set(() => { rec.colorMode = mode.value; }));
-  const size = h('input', { type: 'range', min: 1, max: 8, step: 0.5, value: rec.pointSize || 2 });
+  const [psMin, psMax, psStep] = opt('pcPointSizeSlider');
+  const size = h('input', { type: 'range', min: psMin, max: psMax, step: psStep, value: rec.pointSize || opt('pcPointSizeFallback') });
   size.addEventListener('input', () => set(() => { rec.pointSize = +size.value; }));
   const clipOn = h('input', { type: 'checkbox', checked: !!rec.clip?.on });
   clipOn.addEventListener('change', () => set(() => { rec.clip = { ...(rec.clip || {}), on: clipOn.checked }; }));
@@ -200,17 +202,17 @@ export function cloudPanel(rec, view, { onChange, onRemove, onZoom, onReload }) 
     field('Visible', vis), field('Color', mode), field('Point size', size),
     h('div', { class: 'sp-sec' }, 'Height section'),
     h('label', { class: 'pm-check' }, clipOn, 'Show only points between'),
-    field('From height', num(rec.clip?.min ?? 0, (v) => { rec.clip = { ...(rec.clip || {}), min: v }; })),
-    field('To height', num(rec.clip?.max ?? 3000, (v) => { rec.clip = { ...(rec.clip || {}), max: v }; })),
+    field('From height', num(rec.clip?.min ?? opt('pcPartClipFrom'), (v) => { rec.clip = { ...(rec.clip || {}), min: v }; })),
+    field('To height', num(rec.clip?.max ?? opt('pcPartClipTo'), (v) => { rec.clip = { ...(rec.clip || {}), max: v }; })),
     box ? h('div', { class: 'pp-inline', style: { margin: '4px 8px' } },
-      h('button', { class: 'mini txt', onclick: () => set(() => { rec.clip = { on: true, min: box.min.y + 1000, max: box.min.y + 1300 }; }), title: 'Horizontal slice 1.0–1.3 m above the lowest point, for tracing walls' }, 'Floor plan slice'),
+      h('button', { class: 'mini txt', onclick: () => set(() => { rec.clip = { on: true, min: box.min.y + opt('pcSliceFrom') * 1000, max: box.min.y + opt('pcSliceTo') * 1000 }; }), title: `Horizontal slice ${opt('pcSliceFrom').toFixed(1)}–${opt('pcSliceTo').toFixed(1)} m above the lowest point, for tracing walls` }, 'Floor plan slice'),
       h('button', { class: 'mini txt', onclick: () => set(() => { rec.clip = { on: false, min: box.min.y, max: box.max.y }; }) }, 'Show all')) : null,
     h('div', { class: 'sp-sec' }, 'Source'),
     h('div', { class: 'pp-row ro' }, h('label', {}, 'File'), h('span', { title: rec.path }, rec.path.split(/[\\/]/).pop())),
     h('div', { class: 'pp-row ro' }, h('label', {}, 'Points'), h('span', {}, `${(view?.data.kept ?? 0).toLocaleString()} shown of ${(rec.count || 0).toLocaleString()}`)),
     h('div', { class: 'pp-row ro' }, h('label', {}, 'Units'), h('span', {}, UNITS[rec.units]?.label || rec.units)),
-    h('div', { class: 'pp-row ro' }, h('label', {}, 'Offset'), h('span', {}, rec.shift.map((v) => fmt(v, 3)).join(', '))),
-    box ? h('div', { class: 'pp-row ro' }, h('label', {}, 'Size (mm)'), h('span', {}, `${fmt(box.max.x - box.min.x, 0)} × ${fmt(box.max.z - box.min.z, 0)} × ${fmt(box.max.y - box.min.y, 0)}`)) : null,
+    h('div', { class: 'pp-row ro' }, h('label', {}, 'Offset'), h('span', {}, rec.shift.map((v) => fmt(v, opt('pcCoordDec'))).join(', '))),
+    box ? h('div', { class: 'pp-row ro' }, h('label', {}, 'Size (mm)'), h('span', {}, `${fmt(box.max.x - box.min.x, opt('pcSizeMmDec'))} × ${fmt(box.max.z - box.min.z, opt('pcSizeMmDec'))} × ${fmt(box.max.y - box.min.y, opt('pcSizeMmDec'))}`)) : null,
     !view ? h('div', { class: 'pm-msg error' }, 'File not loaded — it may have been moved. Use Reload after restoring it.') : null,
     h('div', { class: 'pp-inline', style: { margin: '10px 8px' } },
       h('button', { class: 'mini txt', onclick: onZoom }, 'Zoom to'),
@@ -243,7 +245,7 @@ export class CloudManager {
       this.onChanged?.();
       return view;
     } catch (e) {
-      toast(`Could not load point cloud ${rec.name}: ${e.message}`, 'error', 6000);
+      toast(`Could not load point cloud ${rec.name}: ${e.message}`, 'error', opt('toastWarnMs'));
       this.app.setStatus('Ready');
       return null;
     } finally { this.app.setBusy(false); void label; }

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { h, fmt, toast, contextMenu, promptText } from '../ui.js';
 import { api } from '../api.js';
 import { SCAN_TO_WORLD } from './layer.js';
+import { opt } from '../app/options.js';
 
 const TYPES = {
   distance: { label: 'Distance', n: 2, icon: 'dimension' },
@@ -12,7 +13,7 @@ const TYPES = {
   angle: { label: 'Angle', n: 3, icon: 'dimAligned' },
   poly: { label: 'Polyline', n: Infinity, icon: 'polyline' },
 };
-const m3 = (v) => fmt(v, 3);
+const m3 = (v) => fmt(v, opt('pcMeasDec'));
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const len = (v) => Math.hypot(v[0], v[1], v[2]);
 
@@ -30,7 +31,8 @@ export function measureValues(m) {
   if (m.type === 'angle' && p.length >= 3) {
     const a = sub(p[0], p[1]), b = sub(p[2], p[1]);
     const ang = (Math.acos(Math.max(-1, Math.min(1, (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (len(a) * len(b) || 1)))) * 180) / Math.PI;
-    return { main: `${fmt(ang, 2)}°`, rows: [['Angle', `${fmt(ang, 2)}°`], ['Leg 1', `${m3(len(a))} m`], ['Leg 2', `${m3(len(b))} m`]], value: ang, unit: '°' };
+    const ad = opt('pcAngleDec');
+    return { main: `${fmt(ang, ad)}°`, rows: [['Angle', `${fmt(ang, ad)}°`], ['Leg 1', `${m3(len(a))} m`], ['Leg 2', `${m3(len(b))} m`]], value: ang, unit: '°' };
   }
   if (m.type === 'poly' && p.length >= 2) {
     let L = 0, A = 0;
@@ -38,8 +40,8 @@ export function measureValues(m) {
     for (let i = 0; i < p.length; i++) { const q = p[i], r = p[(i + 1) % p.length]; A += q[0] * r[1] - r[0] * q[1]; }
     A = Math.abs(A) / 2;
     const rows = [['Length', `${m3(L)} m`], ['Points', String(p.length)]];
-    if (p.length >= 3) rows.push(['Area (plan, closed)', `${fmt(A, 3)} m²`], ['Perimeter (closed)', `${m3(L + len(sub(p[0], p[p.length - 1])))} m`]);
-    return { main: p.length >= 3 ? `${m3(L)} m · ${fmt(A, 2)} m²` : `${m3(L)} m`, rows, value: L, unit: 'm', area: A };
+    if (p.length >= 3) rows.push(['Area (plan, closed)', `${fmt(A, opt('pcAreaDec'))} m²`], ['Perimeter (closed)', `${m3(L + len(sub(p[0], p[p.length - 1])))} m`]);
+    return { main: p.length >= 3 ? `${m3(L)} m · ${fmt(A, opt('pcAreaLabelDec'))} m²` : `${m3(L)} m`, rows, value: L, unit: 'm', area: A };
   }
   return { main: '', rows: [], value: 0, unit: '' };
 }
@@ -89,7 +91,7 @@ class MeasureTool {
   paint(ctx) {
     const S = (a) => this.doc.absToScreen(a);
     const pts = this.pts.map(S);
-    ctx.strokeStyle = '#ff8a00'; ctx.lineWidth = 1.6; ctx.setLineDash([5, 3]);
+    ctx.strokeStyle = opt('pcPreviewColor'); ctx.lineWidth = opt('pcToolLineW'); ctx.setLineDash(opt('pcMeasDash'));
     if (pts.length) {
       ctx.beginPath(); ctx.moveTo(...pts[0]);
       for (const q of pts.slice(1)) ctx.lineTo(...q);
@@ -97,15 +99,16 @@ class MeasureTool {
       ctx.stroke();
     }
     ctx.setLineDash([]);
-    ctx.fillStyle = '#ff8a00';
-    for (const q of pts) { ctx.beginPath(); ctx.arc(q[0], q[1], 3.5, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = opt('pcPreviewColor');
+    for (const q of pts) { ctx.beginPath(); ctx.arc(q[0], q[1], opt('pcMeasPickedR'), 0, Math.PI * 2); ctx.fill(); }
     if (this.hover) {
       const q = S(this.hover.abs);
-      ctx.beginPath(); ctx.arc(q[0], q[1], 7, 0, Math.PI * 2); ctx.stroke();
-      ctx.beginPath(); ctx.arc(q[0], q[1], 2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(q[0], q[1], opt('pcHoverRingR'), 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(q[0], q[1], opt('pcHoverDotR'), 0, Math.PI * 2); ctx.fill();
       if (pts.length && this.type !== 'info') {
         const v = measureValues({ type: this.type, pts: [...this.pts, this.hover.abs] });
-        if (v.main) this.doc.drawLabel(ctx, q[0] + 12, q[1] - 12, v.main, true);
+        const lo = opt('pcLiveLabelOff');
+        if (v.main) this.doc.drawLabel(ctx, q[0] + lo, q[1] - lo, v.main, true);
       }
     }
   }
@@ -147,7 +150,7 @@ export class CloudMeasure {
     for (const l of this.layers.values()) {
       const r = l.pickNear(this.vp, sx, sy);
       if (!r) continue;
-      const front = r.px <= 3;
+      const front = r.px <= opt('pcPickFrontPx');
       if (!best || (front && (!best.front || r.depth < best.r.depth)) || (!front && !best.front && r.px < best.r.px)) best = { r, front };
     }
     if (!best) return null;
@@ -199,7 +202,7 @@ export class CloudMeasure {
       if (info.rgb) rows.push(['RGB', info.rgb.join(', ')]);
       if (L.meta.attrs.intensity) rows.push(['Intensity', String(info.intensity)]);
       if (L.meta.attrs.classification) rows.push(['Classification', String(info.classification)]);
-      for (const [k, v] of Object.entries(info.fields)) rows.push([k, fmt(v, 4)]);
+      for (const [k, v] of Object.entries(info.fields)) rows.push([k, fmt(v, opt('pcFieldDec'))]);
     }
     res.appendChild(h('table', { class: 'mass' }, rows.map(([k, v]) => h('tr', {}, h('td', {}, k), h('td', {}, v)))));
     if (info?.rgb) res.appendChild(h('div', { style: { height: '14px', margin: '4px 0', borderRadius: '3px', background: `rgb(${info.rgb.join(',')})` } }));
@@ -208,19 +211,20 @@ export class CloudMeasure {
 
   // ---------- drawing (overlay) ----------
   drawLabel(ctx, x, y, text, live = false) {
-    ctx.font = '600 12px Segoe UI, sans-serif';
-    const w = ctx.measureText(text).width + 10;
+    ctx.font = opt('pcLabelFont');
+    const pad = opt('pcLabelPad'), H = opt('pcLabelH'), hh = H / 2;
+    const w = ctx.measureText(text).width + pad;
     // step aside from labels already drawn in this frame
     if (this._labels && !live) {
-      for (let k = 0; k < 12 && this._labels.some((r) => x < r[0] + r[2] && x + w > r[0] && y - 10 < r[1] + 10 && y + 10 > r[1] - 10); k++) y += 22;
+      for (let k = 0; k < opt('pcLabelTries') && this._labels.some((r) => x < r[0] + r[2] && x + w > r[0] && y - hh < r[1] + hh && y + hh > r[1] - hh); k++) y += opt('pcLabelStep');
       this._labels.push([x, y, w]);
     }
-    ctx.fillStyle = live ? 'rgba(216,27,216,0.92)' : 'rgba(255,255,255,0.92)';
-    ctx.strokeStyle = live ? '#a0129f' : '#e8590c';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y - 10, w, 20, 4) : ctx.rect(x, y - 10, w, 20); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = live ? '#fff' : '#222'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText(text, x + 5, y + 0.5);
+    ctx.fillStyle = live ? opt('pcLiveLabelFill') : opt('pcLabelFill');
+    ctx.strokeStyle = live ? opt('pcLiveLabelEdge') : opt('pcMeasColor');
+    ctx.lineWidth = opt('pcLabelLineW');
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y - hh, w, H, opt('pcLabelR')) : ctx.rect(x, y - hh, w, H); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = live ? opt('pcLiveLabelText') : opt('pcLabelText'); ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText(text, x + pad / 2, y + 0.5);
   }
   drawMeasures(ctx) {
     this._labels = [];
@@ -228,21 +232,22 @@ export class CloudMeasure {
       if (m.visible === false) continue;
       const S = (a) => this.absToScreen(a);
       const sel = this.selMeasure === m.id;
-      ctx.strokeStyle = sel ? '#1e90ff' : '#e8590c'; ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = sel ? 2.4 : 1.8;
+      ctx.strokeStyle = sel ? opt('pcSelColor') : opt('pcMeasColor'); ctx.fillStyle = ctx.strokeStyle; ctx.lineWidth = sel ? opt('pcMeasSelLineW') : opt('pcMeasLineW');
       const p = m.pts.map(S);
       let lab;
       if (m.type === 'height') {
         const q = S([m.pts[0][0], m.pts[0][1], m.pts[1][2]]);
         ctx.beginPath(); ctx.moveTo(...p[0]); ctx.lineTo(...q); ctx.stroke();
-        ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(...q); ctx.lineTo(...p[1]); ctx.stroke(); ctx.setLineDash([]);
+        ctx.setLineDash(opt('pcMeasHeightDash')); ctx.beginPath(); ctx.moveTo(...q); ctx.lineTo(...p[1]); ctx.stroke(); ctx.setLineDash([]);
         lab = [(p[0][0] + q[0]) / 2, (p[0][1] + q[1]) / 2];
       } else {
         ctx.beginPath(); ctx.moveTo(...p[0]); for (const q of p.slice(1)) ctx.lineTo(...q); ctx.stroke();
-        if (m.type === 'poly' && p.length >= 3) { ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(...p[p.length - 1]); ctx.lineTo(...p[0]); ctx.stroke(); ctx.setLineDash([]); }
+        if (m.type === 'poly' && p.length >= 3) { ctx.setLineDash(opt('pcMeasCloseDash')); ctx.beginPath(); ctx.moveTo(...p[p.length - 1]); ctx.lineTo(...p[0]); ctx.stroke(); ctx.setLineDash([]); }
         lab = m.type === 'angle' ? p[1] : m.type === 'poly' ? p[p.length - 1] : [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2];
       }
-      for (const q of p) { ctx.beginPath(); ctx.arc(q[0], q[1], 3, 0, Math.PI * 2); ctx.fill(); }
-      this.drawLabel(ctx, lab[0] + 6, lab[1] - 8, `${m.name}: ${measureValues(m).main}`);
+      for (const q of p) { ctx.beginPath(); ctx.arc(q[0], q[1], opt('pcMeasDotR'), 0, Math.PI * 2); ctx.fill(); }
+      const lo = opt('pcMeasLabelOff');
+      this.drawLabel(ctx, lab[0] + lo[0], lab[1] + lo[1], `${m.name}: ${measureValues(m).main}`);
     }
   }
 
@@ -278,22 +283,22 @@ export class CloudMeasure {
   zoomToMeasure(m) {
     const o = this.doc.origin, b = new THREE.Box3();
     for (const p of m.pts) b.expandByPoint(new THREE.Vector3(p[0] - o[0], p[1] - o[1], p[2] - o[2]).applyMatrix4(SCAN_TO_WORLD));
-    b.expandByScalar(Math.max(500, b.getSize(new THREE.Vector3()).length() * 0.3));
+    b.expandByScalar(Math.max(opt('pcZoomMinMargin'), b.getSize(new THREE.Vector3()).length() * opt('pcZoomMarginK')));
     this.vp.fit(b); this.scheduleLOD();
   }
   async exportMeasures() {
     const list = this.doc.measures || [];
     if (!list.length) return;
     const q = (s) => `"${String(s).replace(/"/g, '""')}"`;
-    const c = (v) => fmt(v, 4).replace('.', ','); // Dutch Excel: ';' separates, ',' is the decimal sign
+    const c = (v) => fmt(v, opt('pcCsvDec')).replace('.', ','); // Dutch Excel: ';' separates, ',' is the decimal sign
     const lines = ['Name;Type;Value;Unit;dX;dY;dZ;Horizontal;Area m2;Points (X Y Z)'];
     for (const m of list) {
       const v = measureValues(m), d = v.d;
       lines.push([q(m.name), TYPES[m.type].label, c(v.value), v.unit, d ? c(d[0]) : '', d ? c(d[1]) : '', d ? c(d[2]) : '', d ? c(Math.hypot(d[0], d[1])) : '', v.area != null ? c(v.area) : '',
-        q(m.pts.map((p) => p.map((x) => x.toFixed(4).replace('.', ',')).join(' ')).join(' | '))].join(';'));
+        q(m.pts.map((p) => p.map((x) => x.toFixed(opt('pcCsvDec')).replace('.', ',')).join(' ')).join(' | '))].join(';'));
     }
     const def = (this.app.path ? this.app.path.replace(/\.[^.\\/]+$/, '') : this.doc.name) + ' measurements.csv';
     const p = await api.saveFile({ defaultPath: def, filters: [{ name: 'CSV (Excel)', extensions: ['csv'] }], text: '﻿' + lines.join('\r\n') + '\r\n' });
-    if (p) toast(`Saved ${list.length} measurements to ${p.split(/[\\/]/).pop()}`, 'ok', 3000);
+    if (p) toast(`Saved ${list.length} measurements to ${p.split(/[\\/]/).pop()}`, 'ok', opt('pcToastOkMs'));
   }
 }

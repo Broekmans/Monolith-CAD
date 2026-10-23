@@ -10,24 +10,31 @@ import { h, fmt, contextMenu, toast, dialog, promptText } from '../ui.js';
 import { icon } from '../icons.js';
 import { toggleSection, sectionTreeRows } from '../sectionview.js';
 import { api } from '../api.js';
-import { optHex } from '../app/options.js';
+import { opt, optHex } from '../app/options.js';
 import { applyDisplay, paneDisplay, displayItems, setDisplayStyle } from '../displaystyle.js';
+import { resolveAppearance, ensureLook, paneLook, envFor } from '../appearance/look.js';
+import { Stage } from '../appearance/stage.js';
+import { MATERIALS } from '../part/part.js';
 import { circleFrom3 } from '../sketch/geom2d.js';
 import * as M from '../../../shared/mates.mjs';
-import { upgradeDoc } from '../../../shared/format.mjs';
+import { upgradeDoc, FORMAT } from '../../../shared/format.mjs';
 import { FASTENERS, fastenerDef, fastenerPart, fastenerName, hasLength, sizeDia } from '../../../shared/fasteners.mjs';
 import { AsmCommands } from './commands.js';
 import { AsmPicking } from './picking.js';
 import { AsmTree } from './tree.js';
+import { AsmMotion } from './motion.js';
+import { AsmAnimation } from './animation.js';
+import { AsmPlanes } from './planes.js';
+import { AsmInContext } from './incontext.js';
 // cache key of a component: file path, or 'lib:DIN933:M8:25' for library fasteners
 export const compKey = (c) => (c.lib ? `lib:${c.lib.std}:${c.lib.size}:${c.lib.L || 0}` : c.path);
 export const libText = (lib) => JSON.stringify(fastenerPart(lib.std, lib.size, lib.L));
 
 export function newAssemblyDoc(name = 'Assembly1') {
-  return { kind: 'assembly', version: 1, name, units: 'mm', components: [], mates: [], next: 1 };
+  return { kind: 'assembly', version: FORMAT.assembly, name, units: 'mm', components: [], mates: [], next: 1 };
 }
 
-export const COLORS = { get edge() { return optHex('edgeColor'); }, get hover() { return optHex('hoverColor'); }, get sel() { return optHex('selColor'); } }; // Options > Colours
+export const COLORS = { get edge() { return optHex('edgeColor'); }, get hover() { return optHex('hoverColor'); }, get sel() { return optHex('selColor'); }, get plane() { return optHex('planeColor'); } }; // Options > Colours
 export const PALETTE = [0xcfd6df, 0xd8cfbf, 0xc4d6c8, 0xd6c6d2, 0xc6d0e0, 0xe0d6c0, 0xc8dcdc];
 export const IDENT = [0, 0, 0, 1];
 
@@ -184,7 +191,14 @@ export class AssemblyDoc {
     this.viewSet = new ViewSet(app.el.views, { mode: '3d' }); // Viewport menu: 1, 2 or 4 panes
     this.viewport = this.vp = this.viewSet.proxy;
     this.viewSet.onLayout = () => app.syncViewportMenu?.(); // close / maximize from the pane buttons
-    this.viewSet.beforePane = (p) => { const m = paneDisplay(this, p); for (const v of this.views.values()) applyDisplay([v.mesh, v.lines], m); };
+    this.viewSet.beforePane = (p) => { // style per view; appearance materials follow overrides / parts here
+      const m = paneDisplay(this, p), meshes = [];
+      this.doc.components.forEach((c, i) => { const v = this.views.get(c.id); if (!v) return; ensureLook(v.mesh, this.compAppearance(c, i)); applyDisplay([v.mesh, v.lines], m); meshes.push(v.mesh); });
+      paneLook(p, m, meshes);
+      const real = m === 'realistic'; // ground shadow / floor reflection (appearance/stage.js), worked out only when shown
+      if (real) { this.stage ||= new Stage(this.scene); this.stage.sync(meshes); this.stage.setEnv(envFor(p.renderer)); }
+      this.stage?.show(real);
+    };
     this.viewSet.displayItems = (p) => displayItems(this, p);
     this.vp.onContextMenu = (e) => this.viewContextMenu(e);
     this.vp.onMiddleClick = () => this.zoomFit(); // double middle click = Zoom to Fit
@@ -212,13 +226,15 @@ export class AssemblyDoc {
         C('hidec', 'Hide / Show', 'eye', () => this.toggleHideSelected(), { enabled: idle })],
       [C('section', 'Section View', 'section', () => toggleSection(this), { active: () => !!this.vp?.section, tip: 'Cut the view with a plane to see inside parts' })],
       [C('rebuild', 'Rebuild', 'history', () => this.reloadAll(true), { enabled: idle, tip: 'Reload all parts from disk and re-solve mates (Ctrl+B)' })],
+      [C('motion', 'Motion Study', 'motion', () => this.toggleMotion(), { active: () => !!this._motionOpen, tip: 'Timeline under the view: move Distance / Angle mates step by step and play the motion' }),
+        C('drive', 'Drive', 'drive', () => { const m = this.sel.map((s) => s.kind === 'mate' && this.doc.mates.find((k) => k.id === s.id)).find(Boolean); if (m && (m.type === 'distance' || m.type === 'angle')) this.openDrive(m); else toast('Select a Distance or Angle mate in the tree first (right-click a mate › Drive…)'); }, { enabled: idle, tip: 'Move a Distance or Angle mate with a slider between its limits' })],
     ];
     const evaluate = [
       [C('measure', 'Measure', 'measure', () => this.cmdMeasure(), { enabled: idle, active: () => this.pmKind === 'measure', tip: 'Measure edges, faces and distances between them (also across components)' })],
       [C('expStep', 'Export STEP', 'step', () => this.exportCAD('step'), { enabled: idle }),
         C('expIges', 'Export IGES', 'export', () => this.exportCAD('iges'), { enabled: idle })],
     ];
-    ['Component', 'Position', 'View', 'Update'].forEach((l, i) => { groups[i].label = l; });
+    ['Component', 'Position', 'View', 'Update', 'Motion'].forEach((l, i) => { groups[i].label = l; });
     ['Measure', 'Import/Export'].forEach((l, i) => { evaluate[i].label = l; });
     this.app.cm.setTabs([{ name: 'Assembly', groups }, { name: 'Evaluate', groups: evaluate }], 'Assembly');
   }
@@ -281,31 +297,59 @@ export class AssemblyDoc {
     }
     this.views.get(c.id)?.group.parent?.remove(this.views.get(c.id).group);
     this.views.delete(c.id);
+    if (c._part?.mesh?.bbox) c._boxBefore = c._part.mesh.bbox; // 0.1.131: rematchAll follows a change of size
     c._part = part;
     this.syncScene();
     return part;
   }
   partOf(c) { return c._part && !c._part.err ? c._part : null; }
-  // after a part changed: re-find mate faces/edges by type and position
+  // after a part changed: re-find mate faces/edges by type and position. 0.1.131: when the part's size changed (box at the
+  // last match = c.partBox, saved; or the box before a reload), the old position is also tried scaled to the new box and
+  // anchored to the nearest side of the box (a hole near one end stays near that end when the part gets longer), and
+  // cylinders / circles of another radius count as further away. Like the kernel's edge matching (matchEdges).
   rematchAll() {
+    const boxOf = (part) => part?.mesh?.bbox;
+    const guesses = (c, ob, nb) => {
+      const out = [c];
+      if (!ob || !nb) return out;
+      const prop = [0, 1, 2].map((k) => { const s0 = ob.max[k] - ob.min[k], s1 = nb.max[k] - nb.min[k]; return s0 > 1e-9 ? nb.min[k] + ((c[k] - ob.min[k]) * s1) / s0 : c[k] + nb.min[k] - ob.min[k]; });
+      const anch = [0, 1, 2].map((k) => (c[k] - ob.min[k] <= ob.max[k] - c[k] ? nb.min[k] + (c[k] - ob.min[k]) : nb.max[k] - (ob.max[k] - c[k])));
+      out.push(prop, anch);
+      return out;
+    };
+    const changed = (a, b) => !!a && !!b && [0, 1, 2].some((k) => Math.abs(a.min[k] - b.min[k]) > 1e-3 || Math.abs(a.max[k] - b.max[k]) > 1e-3);
     for (const m of this.doc.mates) for (const r of [m.a, m.b, m.a2, m.b2].filter(Boolean)) {
-      const part = this.partOf(this.C(r.comp) || {});
+      if (r.kind === 'plane') continue; // origin planes (0.1.127) do not move inside the part
+      const c = this.C(r.comp) || {}, part = this.partOf(c);
       if (!part) continue;
+      const nb = boxOf(part), ob = c._boxBefore || c.partBox;
       const cur = entityGeo(part.mesh, r.kind, r.id);
       const ent = r.kind === 'face' ? part.mesh.faces.find((f) => f.id === r.id) : part.mesh.edges.find((e) => e.id === r.id);
-      const ok = cur && ent && cur.t === r.geo.t && M.len(M.sub(ent.c || ent.mid, r.c)) < 1e-6;
+      const ok = cur && ent && cur.t === r.geo.t && M.len(M.sub(ent.c || ent.mid, r.c)) < 1e-6 && !changed(ob, nb);
       if (ok) { r.geo = cur; continue; }
+      const want = guesses(r.c, changed(ob, nb) ? ob : null, nb);
       let best = null, bd = Infinity;
       const list = r.kind === 'face' ? part.mesh.faces : part.mesh.edges;
       for (const it of list) {
         const g = entityGeo(part.mesh, r.kind, it.id);
         if (!g || g.t !== r.geo.t) continue;
-        const dirA = g.n || g.d, dirB = r.geo.n || r.geo.d;
-        const d = M.len(M.sub(it.c || it.mid, r.c)) + 50 * (1 - Math.abs(M.dot(dirA, dirB)));
+        const dirA = g.n || g.d, dirB = r.geo.n || r.geo.d, at = it.c || it.mid;
+        // 0.1.134: a planar face must face the same way (the face on the other side of a plate is not the same face —
+        // matched sign-free, an Angle mate came back 180° off after the arm was edited); axes / edges stay sign-free
+        const dd = M.dot(dirA, dirB), plane = g.t === 'plane' && r.geo.t === 'plane', turn = plane ? 1 - dd + (dd < 0 ? 1e6 : 0) : 1 - Math.abs(dd); // opposite face only when nothing else fits
+        const d = Math.min(...want.map((w) => M.len(M.sub(at, w)))) + 50 * turn + (g.r && r.geo.r ? 10 * Math.abs(g.r - r.geo.r) : 0);
         if (d < bd) { bd = d; best = { it, g }; }
       }
       if (best) { r.id = best.it.id; r.c = best.it.c || best.it.mid; r.geo = best.g; }
     }
+    // remember each part's box for the next match (saved with the assembly)
+    const rb = (a) => a.map((v) => Math.round(v * 1000) / 1000);
+    for (const c of this.doc.components) { const b = boxOf(this.partOf(c)); if (b) c.partBox = { min: rb(b.min), max: rb(b.max) }; delete c._boxBefore; }
+  }
+  // appearance of component c (index i): override on the component → the part's own → its material → list colour
+  compAppearance(c, i) {
+    const data = this.partOf(c)?.data, mat = MATERIALS.find((m) => m.name === data?.material);
+    return resolveAppearance(c.appearance || data?.appearance, mat?.appearance, { color: PALETTE[i % PALETTE.length], metalness: opt('modelMetalness'), roughness: opt('modelRoughness') });
   }
   syncScene() {
     const ids = new Set(this.doc.components.map((c) => c.id));
@@ -316,9 +360,9 @@ export class AssemblyDoc {
       if (!v && part) {
         const group = new THREE.Group();
         group.matrixAutoUpdate = false;
-        const mat = new THREE.MeshStandardMaterial({ color: PALETTE[i % PALETTE.length], metalness: 0.18, roughness: 0.42, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
-        const mesh = new THREE.Mesh(part.geom, mat);
+        const mesh = new THREE.Mesh(part.geom);
         mesh.userData.comp = c.id; mesh.userData.disp = 'body'; // display style per view (displaystyle.js)
+        ensureLook(mesh, this.compAppearance(c, i)); // appearance/look.js
         group.add(mesh);
         const lines = new THREE.LineSegments(part.egeom, new THREE.LineBasicMaterial({ color: COLORS.edge }));
         lines.userData.disp = 'edges'; group.add(lines);
@@ -337,6 +381,7 @@ export class AssemblyDoc {
   updatePoses() {
     for (const c of this.doc.components) { const v = this.views.get(c.id); if (v) { v.group.matrix.fromArray(M.poseMatrix(c)); v.group.matrixWorldNeedsUpdate = true; } }
     this.vp.requestRender();
+    this.liveUpdate?.(); // 0.1.123: popups showing live mate values
   }
   assemblyBox() {
     const box = new THREE.Box3();
@@ -358,10 +403,10 @@ export class AssemblyDoc {
   solve(extra = null, opts = {}) {
     const mates = extra ? [...this.doc.mates.filter((m) => m.id !== extra.id), extra] : this.doc.mates;
     const res = M.solveMates(this.doc.components, mates, opts);
-    const byId = new Map(this.doc.components.map((c) => [c.id, c]));
+    const byId = M.compMap(this.doc.components);
     this.mateErr = new Map();
     for (const m of mates) {
-      if (m.suppressed) continue;
+      if (M.mateOff(m)) continue;
       const e = M.mateError(m, byId);
       if (!(e < 1e-3)) this.mateErr.set(m.id, e === Infinity ? 'These entities cannot be used for this mate type' : 'This mate cannot be satisfied (conflicts with other mates)');
     }
@@ -391,13 +436,15 @@ export class AssemblyDoc {
   undo() { if (this.app.pm.open || !this.undoStack.length) return; this.redoStack.push(this.snapshot()); this.restore(this.undoStack.pop()); }
   redo() { if (!this.redoStack.length) return; this.undoStack.push(this.snapshot()); this.restore(this.redoStack.pop()); }
   restore(json) {
-    const parts = new Map(this.doc.components.map((c) => [c.id, c._part]));
+    const parts = new Map(this.doc.components.map((c) => [c.id, { key: compKey(c), part: c._part }]));
     this.doc = JSON.parse(json);
-    for (const c of this.doc.components) c._part = parts.get(c.id);
+    for (const c of this.doc.components) { const o = parts.get(c.id); c._part = o && o.key === compKey(c) ? o.part : undefined; } // other Toolbox size → reload
     this.app.setDirty(true);
     this.sel = [];
+    this.studyHold?.(); // 0.1.134: an open Motion Study keeps driving its mates after undo / redo
     Promise.all(this.doc.components.filter((c) => !c._part).map((c) => this.loadComp(c))).then(() => { this.syncScene(); this.solve(); });
     this.syncScene(); this.solve();
+    if (this._motionOpen) this.renderMotion();
   }
   // JSON written to disk (no cached runtime data)
   toJSON() { return JSON.parse(this.snapshot()); }
@@ -464,4 +511,4 @@ export function segDist(p, a, b) {
 }
 
 // mix in methods split off into separate files
-for (const M of [AsmCommands, AsmPicking, AsmTree]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(AssemblyDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));
+for (const M of [AsmCommands, AsmPicking, AsmTree, AsmMotion, AsmAnimation, AsmPlanes, AsmInContext]) for (const k of Object.getOwnPropertyNames(M.prototype)) if (k !== 'constructor') Object.defineProperty(AssemblyDoc.prototype, k, Object.getOwnPropertyDescriptor(M.prototype, k));

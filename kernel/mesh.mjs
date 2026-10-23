@@ -1,5 +1,6 @@
 // Kernel meshing & measuring: tessellation for display, face ownership per feature, mass properties.
-import { oc, mul, ptArr, bbox, diag, listEdges, listFaces } from './core.mjs';
+// 0.1.109: GCPnts_TangentialDeflection always with first / last parameter (the 6-argument call picks the wrong overload in this build)
+import { oc, mul, ptArr, bbox, diag, listEdges, listFaces, edgeFaces, ShapeMap, kernelOpts } from './core.mjs';
 
 // ---------- face -> feature ownership (SolidWorks-style double-click / tree hover) ----------
 // A face belongs to the earliest feature whose result already had a face on the same surface.
@@ -31,15 +32,14 @@ export function tessellate(shape, quality = 1) {
   if (!shape) return { positions: new Float32Array(0), indices: new Uint32Array(0), faces: [], edges: [] };
   const bb = bbox(shape);
   const lin = Math.max(0.005, (diag(bb) * 0.0008) / quality);
-  new oc.BRepMesh_IncrementalMesh_2(shape, lin, false, 0.35, false);
+  new oc.BRepMesh_IncrementalMesh(shape, lin, false, 0.35, kernelOpts.parallel);
   const positions = [], normals = [], indices = [];
   const faces = [];
   const faceList = listFaces(shape);
   faceList.forEach((fi, fid) => {
-    const loc = new oc.TopLoc_Location_1();
-    const hTri = oc.BRep_Tool.Triangulation(fi.face, loc, 0);
-    if (hTri.IsNull()) return;
-    const tri = hTri.get();
+    const loc = new oc.TopLoc_Location();
+    const tri = oc.BRep_Tool.Triangulation(fi.face, loc, 0);
+    if (!tri || (tri.IsNull && tri.IsNull())) return;
     const trsf = loc.Transformation();
     const base = positions.length / 3;
     const nn = tri.NbNodes();
@@ -47,7 +47,7 @@ export function tessellate(shape, quality = 1) {
       const p = tri.Node(i).Transformed(trsf);
       positions.push(p.X(), p.Y(), p.Z());
     }
-    const reversed = fi.face.Orientation_1() === oc.TopAbs_Orientation.TopAbs_REVERSED;
+    const reversed = fi.face.Orientation() === oc.TopAbs_Orientation.TopAbs_REVERSED;
     const start = indices.length;
     const nt = tri.NbTriangles();
     for (let i = 1; i <= nt; i++) {
@@ -59,31 +59,24 @@ export function tessellate(shape, quality = 1) {
     faces.push({ id: fid, start, count: indices.length - start, c: fi.c, area: fi.area, type: fi.type, plane: fi.plane, ...(fi.axis ? { axis: fi.axis, r: fi.r } : {}) });
   });
   // seam edges (closed surfaces) are hidden like in SolidWorks
-  let seamOf = () => false;
+  // faces of each edge: seam edges (closed surfaces, one face) are hidden like in SolidWorks; Fillet / Chamfer: a clicked
+  // face adds its edges (0.1.95)
+  let seamOf = () => false, facesOf = () => [];
   try {
-    const anc = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
-    oc.TopExp.MapShapesAndUniqueAncestors(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_FACE, anc, false);
-    seamOf = (edge) => { try { const i = anc.FindIndex(edge); return i > 0 && anc.FindFromIndex(i).Size() === 1; } catch { return false; } };
-  } catch { /* keep all edges */ }
-  // faces of each edge (index into `faces`) — Fillet / Chamfer: a clicked face adds its edges (0.1.95)
-  let facesOf = () => [];
-  try {
-    const anc2 = new oc.TopTools_IndexedDataMapOfShapeListOfShape_1();
-    oc.TopExp.MapShapesAndAncestors(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_FACE, anc2);
+    const ef = edgeFaces(shape);
+    const fmap = new ShapeMap(); for (const fi of faceList) fmap.Add(fi.face); // same order as faceList (index + 1)
+    const idx = (edge) => { try { return ef.edges.FindIndex(edge); } catch { return 0; } };
+    seamOf = (edge) => { const i = idx(edge); return i > 0 && ef.faces(i).length === 1; };
     facesOf = (edge) => {
-      const out = [];
-      try {
-        const i = anc2.FindIndex(edge); if (i <= 0) return out;
-        const l = anc2.FindFromIndex(i);
-        for (const f of [l.First_1(), l.Last_1()]) { const k = faceList.findIndex((fi) => fi.face.IsSame(f)); if (k >= 0 && !out.includes(k)) out.push(k); }
-      } catch { /* none */ }
+      const out = [], i = idx(edge); if (i <= 0) return out;
+      for (const f of ef.faces(i).slice(0, 2)) { const k = fmap.FindIndex(f) - 1; if (k >= 0 && !out.includes(k)) out.push(k); }
       return out;
     };
-  } catch { /* no face info */ }
+  } catch { /* keep all edges, no face info */ }
   const edges = listEdges(shape).filter((e) => !seamOf(e.edge)).map((e, id) => {
     const pts = [];
     try {
-      const td = new oc.GCPnts_TangentialDeflection_2(e.adaptor, 0.1, lin, 2, 1e-9, 1e-7);
+      const td = new oc.GCPnts_TangentialDeflection(e.adaptor, e.adaptor.FirstParameter(), e.adaptor.LastParameter(), 0.1, lin, 2, 1e-9, 1e-7);
       for (let i = 1; i <= td.NbPoints(); i++) pts.push(...ptArr(td.Value(i)));
     } catch {
       pts.push(...ptArr(e.adaptor.Value(e.f)), ...ptArr(e.adaptor.Value(e.l)));
@@ -97,9 +90,9 @@ export function tessellate(shape, quality = 1) {
 
 export function massProps(shape) {
   if (!shape) return null;
-  const vp = new oc.GProp_GProps_1();
-  oc.BRepGProp.VolumeProperties_1(shape, vp, true, false, false);
-  const sp = new oc.GProp_GProps_1();
-  oc.BRepGProp.SurfaceProperties_1(shape, sp, false, false);
+  const vp = new oc.GProp_GProps();
+  oc.BRepGProp.VolumeProperties(shape, vp, true, false, false);
+  const sp = new oc.GProp_GProps();
+  oc.BRepGProp.SurfaceProperties(shape, sp, false, false);
   return { volume: vp.Mass(), area: sp.Mass(), com: ptArr(vp.CentreOfMass()), bbox: bbox(shape) };
 }

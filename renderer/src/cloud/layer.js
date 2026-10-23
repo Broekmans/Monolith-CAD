@@ -3,10 +3,10 @@
 // used up; each node holds an even sample, so parent + children together give the full density.
 import * as THREE from 'three';
 import { api } from '../api.js';
+import { opt, optHex } from '../app/options.js';
 
-// LAS standard classes (ASPRS) - colours for "Classification"
+// LAS standard classes (ASPRS) - colours for "Classification": Options pcClassColors
 export const CLASS_NAMES = { 0: 'Never classified', 1: 'Unclassified', 2: 'Ground', 3: 'Low vegetation', 4: 'Medium vegetation', 5: 'High vegetation', 6: 'Building', 7: 'Low noise', 8: 'Key point', 9: 'Water', 10: 'Rail', 11: 'Road surface', 12: 'Overlap', 13: 'Wire guard', 14: 'Wire conductor', 15: 'Transmission tower', 16: 'Wire connector', 17: 'Bridge deck', 18: 'High noise' };
-const CLASS_COL = [0x9aa3ad, 0xb8bec6, 0xa0703c, 0x7fc97f, 0x3fa34d, 0x1b7a2f, 0xd9534f, 0xff00ff, 0xffd400, 0x3a7bd5, 0x8c564b, 0x555555, 0xe377c2, 0x17becf, 0xbcbd22, 0x7f7f7f, 0xff7f0e, 0x9467bd, 0xff00aa];
 
 const VERT = /* glsl */`
 attribute vec3 color;
@@ -103,11 +103,12 @@ export class CloudLayer {
     this.root = this.nodes.get('r');
     const bb = m.bbox;
     this.box = new THREE.Box3(new THREE.Vector3(bb[0], bb[1], bb[2]), new THREE.Vector3(bb[3], bb[4], bb[5])); // scan units, relative to origin
+    const CLASS_COL = opt('pcClassColors');
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERT, fragmentShader: FRAG,
       uniforms: {
         size: { value: 2 }, mode: { value: 0 }, sMin: { value: 0 }, sMax: { value: 1 }, zMin: { value: bb[2] }, zMax: { value: bb[5] },
-        single: { value: new THREE.Color(0x8a96a8) }, classCol: { value: Array.from({ length: 32 }, (_, i) => new THREE.Color(CLASS_COL[i] ?? 0x888888)) },
+        single: { value: new THREE.Color(optHex('pcSingleColor')) }, classCol: { value: Array.from({ length: 32 }, (_, i) => new THREE.Color(CLASS_COL[i] ?? opt('pcClassColorOther'))) },
         categorical: { value: 0 }, outMode: { value: 0 }, tol: { value: 0 }, uRound: { value: 0 }, clipZ: { value: new THREE.Vector4(0, 0, 0, 0) },
         toDoc: { value: new THREE.Matrix4() }, boxOn: { value: 0 }, boxMin: { value: new THREE.Vector3() }, boxMax: { value: new THREE.Vector3() },
       },
@@ -158,7 +159,7 @@ export class CloudLayer {
     u.mode.value = mode === 'normal' ? MODE.rgb : mode.startsWith('field:') ? MODE.field : MODE[mode] ?? MODE.height;
     u.outMode.value = { grey: 1, hide: 2 }[r.outside] || 0;
     u.tol.value = mode.startsWith('field:') && r.tol > 0 && r.tolFor === mode ? r.tol : 0;
-    u.size.value = (r.pointSize || 2) * (window.devicePixelRatio || 1);
+    u.size.value = (r.pointSize || opt('pcPointSizeFallback')) * (window.devicePixelRatio || 1);
     u.uRound.value = this.doc.doc.view?.round ? 1 : 0;
     u.categorical.value = r.categorical ? 1 : 0;
     const rng = this.rangeFor(mode);
@@ -168,7 +169,7 @@ export class CloudLayer {
     u.zMin.value = zr[0]; u.zMax.value = zr[1];
     const c = r.clip;
     u.clipZ.value.set(c?.on ? 1 : 0, c?.min ?? 0, c?.max ?? 0, 0);
-    if (r.single) u.single.value.set(r.single);
+    u.single.value.set(r.single || optHex('pcSingleColor'));
     this.group.visible = r.visible !== false;
     const w = this.wantFor();
     if (this.want && this.want.key !== w.key) this.dropAll();
@@ -206,7 +207,7 @@ export class CloudLayer {
     this.showFor(panes.length === 1 ? panes[0] : this.lastPane || panes[0]);
     this.queue = queue;
     this.pump();
-    this.evict(budget * 1.6 * Math.max(1, panes.length * 0.75), union);
+    this.evict(budget * opt('pcEvictK') * Math.max(1, panes.length * opt('pcEvictPaneK')), union);
     let shown = 0;
     for (const nd of this.visBy.get(panes[0]) || []) if (nd.obj) shown += nd.n;
     return shown || shownMax;
@@ -256,7 +257,7 @@ export class CloudLayer {
       if (!nd.obj) want.push(nd);
       // go deeper while the sample spacing of this node is more than ~1 px on screen
       const spacingPx = (nd.size / this.meta.grid) * 1000 * pxPerMm;
-      if (spacingPx > 0.8) for (const ch of nd.children) push(ch);
+      if (spacingPx > opt('pcLodSpacingPx')) for (const ch of nd.children) push(ch);
     }
     return { vis, want, pts };
   }
@@ -264,11 +265,11 @@ export class CloudLayer {
   resetBoxes() { for (const nd of this.nodes.values()) nd.wbox = null; }
 
   async pump() {
-    while (this.inflight < 2 && this.queue.length) {
+    while (this.inflight < opt('pcMaxRequests') && this.queue.length) {
       // a batch of nodes per request (up to ~1.5 M points)
       const batch = [];
       let pts = 0;
-      while (this.queue.length && (batch.length === 0 || pts + this.queue[0].n < 1.5e6) && batch.length < 24) {
+      while (this.queue.length && (batch.length === 0 || pts + this.queue[0].n < opt('pcBatchPts')) && batch.length < opt('pcBatchNodes')) {
         const nd = this.queue.shift();
         if (nd.obj || nd.loading) continue;
         nd.loading = true; batch.push(nd); pts += nd.n;
@@ -292,8 +293,9 @@ export class CloudLayer {
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(r.pos), 3));
     if (r.c) g.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(r.c), 3, true));
     if (r.nrm) { // normals as colours: |nx|, |ny|, |nz|
+      const grey = opt('pcNoNormalGrey');
       const [a, b, c] = r.nrm.map((x) => new Float32Array(x)), col = new Uint8Array(r.n * 3);
-      for (let i = 0; i < r.n; i++) { const x = a[i], y = b[i], z = c[i]; if (x === x) { col[i * 3] = Math.abs(x) * 255; col[i * 3 + 1] = Math.abs(y) * 255; col[i * 3 + 2] = Math.abs(z) * 255; } else col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = 140; }
+      for (let i = 0; i < r.n; i++) { const x = a[i], y = b[i], z = c[i]; if (x === x) { col[i * 3] = Math.abs(x) * 255; col[i * 3 + 1] = Math.abs(y) * 255; col[i * 3 + 2] = Math.abs(z) * 255; } else col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = grey; }
       g.setAttribute('color', new THREE.BufferAttribute(col, 3, true));
     }
     let sc = null;
@@ -323,7 +325,7 @@ export class CloudLayer {
   // ---------- picking ----------
   // Nearest visible point around screen position (sx, sy) in px. Prefers the front-most point within
   // `front` px, else the nearest within `r` px. Returns {node, i, doc: [x, y, z] (doc frame), px, depth} or null.
-  pickNear(vp, sx, sy, r = 8, front = 3) {
+  pickNear(vp, sx, sy, r = opt('pcPickPx'), front = opt('pcPickFrontPx')) {
     const pane = vp.pane || vp; if (this.visBy?.has(pane) && this.lastPane !== pane) this.showFor(pane); // picking in another pane
     if (this.rec.visible === false) return null;
     this.group.updateMatrixWorld(true);
@@ -366,7 +368,7 @@ export class CloudLayer {
       let dmin = Infinity;
       for (const c of cands) if (c.px <= front && c.depth < dmin) dmin = c.depth;
       if (dmin === Infinity) for (const c of cands) if (c.depth < dmin) dmin = c.depth;
-      const tol = 12 * (vp.scale / 1000) * Math.hypot(m[2], m[6], m[10]); // ~12 px of depth (scan m) in clip units
+      const tol = opt('pcPickDepthPx') * (vp.scale / 1000) * Math.hypot(m[2], m[6], m[10]); // ~12 px of depth (scan m) in clip units
       for (const c of cands) if (c.depth <= dmin + tol && (!h || c.px < h.px)) h = c;
     }
     if (!h) return null;

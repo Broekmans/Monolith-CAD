@@ -2,6 +2,7 @@
 // panel, context menus, toasts and dialogs.
 import { icon } from './icons.js';
 import { opt } from './app/options.js';
+import { isPopped, enablePopOut, dragOut } from './popout.js';
 
 export function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -70,6 +71,8 @@ export class CommandManager {
     const tabsEl = h('div', { class: 'cm-tabs' }, this.tabs.map((t, i) => h('button', {
       class: 'cm-tab' + (i === this.active ? ' active' : ''), onclick: () => { this.active = i; this.render(); },
     }, t.name)));
+    // 0.1.128: the program's logo as a dim silhouette at the right end of the ribbon
+    bar.appendChild(h('div', { class: 'cm-brand', title: 'MonoLith' }, h('span', { class: 'ico', html: icon('part') }), h('span', { class: 'cm-brand-name' }, 'MonoLith')));
     this.root.append(bar, tabsEl);
     this.refresh();
   }
@@ -334,6 +337,7 @@ export function makeDraggable(win, handleSel, key) {
   let off = [0, 0];
   if (key) try { const v = JSON.parse(localStorage.getItem(key) || 'null'); if (Array.isArray(v)) off = v; } catch { /* none */ }
   const apply = () => {
+    if (isPopped(win)) return; // 0.1.129: in its own window
     win.style.translate = `${off[0]}px ${off[1]}px`;
     const head = win.querySelector(handleSel) || win, r = head.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight;
     let dx = 0, dy = 0;
@@ -343,14 +347,18 @@ export function makeDraggable(win, handleSel, key) {
   };
   win.addEventListener('pointerdown', (e) => {
     const head = e.target.closest?.(handleSel);
-    if (!head || !win.contains(head) || e.button !== 0 || e.target.closest('button, input, select') || win._drag?.off) return;
+    if (!head || !win.contains(head) || e.button !== 0 || e.target.closest('button, input, select') || win._drag?.off || isPopped(win)) return;
     e.preventDefault(); e.stopPropagation();
-    const x0 = e.clientX, y0 = e.clientY, o0 = off.slice();
-    const mv = (ev) => { off = [o0[0] + ev.clientX - x0, o0[1] + ev.clientY - y0]; apply(); };
+    const x0 = e.clientX, y0 = e.clientY, o0 = off.slice(), wr = win.getBoundingClientRect(), grab = [x0 - wr.left, y0 - wr.top];
+    const mv = (ev) => {
+      if (dragOut(win, ev, grab)) { off = o0; up(); return; } // 0.1.129: dragged past the edge of the program → own window there
+      off = [o0[0] + ev.clientX - x0, o0[1] + ev.clientY - y0]; apply();
+    };
     const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); if (key) try { localStorage.setItem(key, JSON.stringify(off)); } catch { /* no storage */ } };
     window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
   });
   win._drag = { apply, reset: () => { win.style.translate = ''; }, off: false };
+  if (key) enablePopOut(win, handleSel, key); // 0.1.129: ⧉ = own window
   return win._drag;
 }
 
@@ -361,6 +369,7 @@ export function dragByTitle(dlg, key) {
   let off = [0, 0];
   try { const v = JSON.parse(localStorage.getItem(key) || 'null'); if (Array.isArray(v)) off = v; } catch { /* none */ }
   const apply = () => {
+    if (isPopped(dlg)) return; // 0.1.129: in its own window
     dlg.style.translate = `${off[0]}px ${off[1]}px`;
     const r = head.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight; // title stays reachable
     let dx = 0, dy = 0;
@@ -369,24 +378,30 @@ export function dragByTitle(dlg, key) {
     if (dx || dy) { off = [off[0] + dx, off[1] + dy]; dlg.style.translate = `${off[0]}px ${off[1]}px`; }
   };
   apply();
+  dlg._drag = { apply, off: false };
   head.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || e.target.closest('button')) return;
+    if (e.button !== 0 || e.target.closest('button') || isPopped(dlg)) return;
     e.preventDefault();
-    const x0 = e.clientX, y0 = e.clientY, o0 = off.slice();
-    const mv = (ev) => { off = [o0[0] + ev.clientX - x0, o0[1] + ev.clientY - y0]; apply(); };
+    const x0 = e.clientX, y0 = e.clientY, o0 = off.slice(), wr = dlg.getBoundingClientRect(), grab = [x0 - wr.left, y0 - wr.top];
+    const mv = (ev) => {
+      if (dragOut(dlg, ev, grab)) { off = o0; up(); return; } // 0.1.129: past the edge → own window
+      off = [o0[0] + ev.clientX - x0, o0[1] + ev.clientY - y0]; apply();
+    };
     const up = () => { window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); try { localStorage.setItem(key, JSON.stringify(off)); } catch { /* no storage */ } };
     window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
   });
+  enablePopOut(dlg, '.dlg-title', key);
 }
 
 export function dialog({ title, body, buttons = [{ label: 'OK', primary: true }] }) {
   return new Promise((resolve) => {
     const back = h('div', { class: 'dlg-back' });
-    const close = (v) => { back.remove(); resolve(v); };
+    const close = (v) => { back.remove(); dlg.remove(); resolve(v); }; // dlg may be in its own window (0.1.129)
     const dlg = h('div', { class: 'dlg' }, h('div', { class: 'dlg-title' }, h('span', {}, title), h('button', { class: 'dlg-x', title: 'Close (Esc)', onclick: () => close(null) }, '×')), h('div', { class: 'dlg-body' }, body),
       h('div', { class: 'dlg-buttons' }, buttons.map((b) => h('button', { class: b.primary ? 'primary' : '', onclick: () => close(b.value ?? b.label) }, b.label))));
     back.appendChild(dlg);
     back.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(null); e.stopPropagation(); });
+    dlg.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isPopped(dlg)) close(null); }); // in its own window (0.1.129)
     document.body.appendChild(back);
     dragByTitle(dlg, 'monolith.dlgPos.' + title);
     dlg.querySelector('button.primary')?.focus();

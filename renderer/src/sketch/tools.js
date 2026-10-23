@@ -364,7 +364,7 @@ export class SketchTools {
         this.pushUndo();
         const pid = this.addPoint(q[0], q[1]);
         this.applySnap(pid, snap);
-        const g = { id: this.gid(), type: 'text', p: pid, text: 'Text', h: niceHeight(this.px * opt('skTextHeightPx')), font: this.lastFont || opt('skTextFont'), rot: 0, align: 'left', outline: [] };
+        const g = { id: this.gid(), type: 'text', p: pid, text: 'Text', h: niceHeight(this.px * opt('skTextHeightPx')), font: this.lastFont || opt('skTextFont'), rot: 0, align: 'left', tol: opt('skTextArcTol'), outline: [] };
         this.sk.geo.push(g);
         this.setTool(null);
         this.sel.clear(); this.sel.add('geo:' + g.id);

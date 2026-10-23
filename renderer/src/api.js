@@ -2,10 +2,12 @@
 const bridge = globalThis.window?.monolith || {};
 
 export const api = {
+  kernelMode: (multi) => bridge.kernelMode?.(multi), // 0.1.113: was missing, so Options > General > Geometry kernel never reached the kernel
   kernel: (op, args) => bridge.kernel(op, args).then((r) => { if (r && r.__error) { globalThis.lithLog?.('KERNEL ERROR', op, r.__error); throw new Error(r.__error); } return r; }),
   openFile: (opts) => bridge.openFile(opts), // -> {path, text|base64} | null
   saveFile: (opts) => bridge.saveFile(opts), // {defaultPath, filters, text} -> path | null
   writeFile: (path, text) => bridge.writeFile(path, text),
+  writeBytes: (path, bytes) => bridge.writeBytes(path, bytes), // 0.1.122: binary file (Save Animation); bytes = Uint8Array
   readFile: (path) => bridge.readFile(path),
   dwgToDxf: (path) => bridge.dwgToDxf(path),
   dwgStatus: () => bridge.dwgStatus?.(),

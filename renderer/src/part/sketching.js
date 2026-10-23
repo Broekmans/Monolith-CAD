@@ -72,6 +72,7 @@ export class PartSketching {
     if (sk.offsetMode) this.app.pm.cancel();
     sk.dispose();
     this.sketcher = null;
+    this.app.setCoords(''); // 0.1.134: the cursor position is only shown while sketching
     this.syncGrid();
     document.querySelector('.modify-box')?.remove();
     this.app.setConfirmCorner(null);
@@ -104,7 +105,7 @@ export class PartSketching {
   onToolChanged() { this.app.cm.refresh(); }
   onSketchChanged() { this.vp.requestRender(); }
   setSketchStatus(st) { this.app.setSketchStatus(st); }
-  setCoords(p) { const d = opt('partCoordDecimals'); this.app.setCoords(`${fmt(p[0], d)} mm, ${fmt(p[1], d)} mm`); }
+  setCoords(p) { const d = opt('partCoordDecimals'); this.app.setCoords(`Sketch X ${fmt(p[0], d)}  Y ${fmt(p[1], d)} mm`); } // 0.1.134: labelled (cursor in the sketch plane)
   // Offset Entities (0.1.94): popup + sketcher offset mode (sketch/offsettool.js)
   cmdOffset() {
     const sk = this.sketcher;

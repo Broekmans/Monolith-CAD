@@ -99,6 +99,7 @@ export class PartCommands {
   // ======================= keyboard =======================
   onKey(e) {
     const k = e.key;
+    if (k === 'C' && e.shiftKey && !e.ctrlKey && !e.altKey) { this.collapseTree(); return true; } // 0.1.133 (before the sketch tool keys: c = Circle)
     if (e.ctrlKey && !e.shiftKey && /^[1-8]$/.test(k)) {
       const v = ['front', 'back', 'left', 'right', 'top', 'bottom', 'iso'][+k - 1];
       if (v) this.vp.setView(v); else this.normalTo();
@@ -129,8 +130,8 @@ export class PartCommands {
     if (k === 'Escape') { if (this.dimFeat) this.showFeatureDims(null); if (this.app.pm.open) this.app.pm.cancel(); else { this.sel = []; this.afterSelection(); } return true; }
     if (k === 'Enter' && this.app.pm.open) { this.app.pm.ok(); return true; }
     if (k === 'Delete') {
-      const f = this.sel.find((s) => s.kind === 'feature' || s.kind === 'sketch');
-      if (f && !this.app.pm.open) { this.deleteFeature(f.id); return true; }
+      const fs = this.selectedFeatures(); // 0.1.134: all selected
+      if (fs.length && !this.app.pm.open) { this.deleteFeatures(fs.map((f) => f.id)); return true; }
     }
     return false;
   }
@@ -153,6 +154,7 @@ export class PartCommands {
     const items = [];
     if (p?.kind === 'face' && p.plane) items.push({ label: 'Sketch', icon: 'sketch', run: () => this.startSketch(p.plane, 'Face', null, this.faceRefOf(p)) }, { label: 'Normal To', icon: 'normalTo', run: () => this.vp.normalTo(frameOf(p.plane)) });
     if (p?.kind === 'face') items.push({ label: 'Shell (remove face)', icon: 'shell', run: () => { this.sel = [p]; this.cmdShell(); } });
+    if (p?.kind === 'face') items.push({ label: 'Appearance…', icon: 'realistic', run: () => this.editAppearance() });
     if (p?.kind === 'edge') items.push({ label: 'Fillet', icon: 'fillet', run: () => { if (!this.sel.some((s) => s.key === p.key)) this.sel.push(p); this.cmdFillet('fillet'); } }, { label: 'Chamfer', icon: 'chamfer', run: () => { if (!this.sel.some((s) => s.key === p.key)) this.sel.push(p); this.cmdFillet('chamfer'); } });
     if (p?.kind === 'sketch') items.push({ label: 'Edit Sketch', icon: 'sketch', run: () => this.editSketch(p.id) }, { label: 'Extruded Boss/Base', icon: 'extrude', run: () => { this.sel = [p]; this.cmdExtrude('boss'); } }, { label: 'Extruded Cut', icon: 'cutExtrude', run: () => { this.sel = [p]; this.cmdExtrude('cut'); } });
     if (p?.kind === 'plane') items.push({ label: 'Sketch', icon: 'sketch', run: () => this.startSketch(p.plane, p.name) });

@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { h, fmt, toast } from '../ui.js';
 import { api } from '../api.js';
+import { opt, optHex } from '../app/options.js';
 import { SCAN_TO_WORLD } from './layer.js';
 import { loadPart } from '../assembly/assembly.js';
 
@@ -54,17 +55,17 @@ export class CloudAnalysis {
   // ======================= Normals =======================
   cmdNormals() {
     const rec = this.targets()[0], L = this.layers.get(rec.id);
-    const sp = Math.max(0.002, this.spacingEstimate(L));
+    const sp = Math.max(opt('pcMinSpacing'), this.spacingEstimate(L));
     this.app.pm.show({
-      title: 'Normals', iconName: 'perpendicular', values: { k: 12, orient: 'inside' },
+      title: 'Normals', iconName: 'perpendicular', values: { k: opt('pcNormalsK'), orient: 'inside' },
       fields: [
-        { key: 'k', type: 'number', label: 'Neighbours (k)', min: 3, step: 1 },
+        { key: 'k', type: 'number', label: 'Neighbours (k)', min: opt('pcNormalsKMin'), step: 1 },
         { key: 'orient', type: 'select', label: 'Point normals', options: [{ value: 'inside', label: 'Towards the middle (indoor scan)' }, { value: 'outside', label: 'Away from the middle (outdoor scan)' }, { value: 'up', label: 'Upwards (terrain)' }] },
         { type: 'info', text: 'A plane is fitted through every point and its k nearest neighbours. New fields: nx, ny, nz, curvature (0 = flat) and verticality (0 = horizontal, 1 = vertical). Colour "Normals" shows the direction.' },
-        { type: 'info', text: `Typical point spacing: about ${fmt(sp * 100, 1)} cm.` }],
+        { type: 'info', text: `Typical point spacing: about ${fmt(sp * 100, opt('pcSpacingDec'))} cm.` }],
       onOk: (v) => {
-        const k = Math.max(3, Math.min(64, Math.round(v.k)));
-        setTimeout(() => this.runAnalysis('normals', { k, orient: v.orient, cell: Math.max(0.005, sp * Math.max(3, Math.sqrt(k) * 1.2)) }, rec, 'normals'));
+        const k = Math.max(opt('pcNormalsKMin'), Math.min(opt('pcNormalsKMax'), Math.round(v.k)));
+        setTimeout(() => this.runAnalysis('normals', { k, orient: v.orient, cell: Math.max(opt('pcKnnCellMin'), sp * Math.max(opt('pcKnnCellSpacings'), Math.sqrt(k) * opt('pcKnnCellK'))) }, rec, 'normals'));
         return true;
       },
     });
@@ -73,9 +74,9 @@ export class CloudAnalysis {
   // ======================= Density =======================
   cmdDensity() {
     const rec = this.targets()[0], L = this.layers.get(rec.id);
-    const sp = Math.max(0.002, this.spacingEstimate(L));
+    const sp = Math.max(opt('pcMinSpacing'), this.spacingEstimate(L));
     this.app.pm.show({
-      title: 'Density', iconName: 'grid', values: { r: +Math.max(1, sp * 500).toFixed(1), kind: 'surface' },
+      title: 'Density', iconName: 'grid', values: { r: +Math.max(opt('pcDensityRMin'), sp * opt('pcDensityRK')).toFixed(opt('pcDialogDec')), kind: 'surface' },
       fields: [
         { key: 'r', type: 'number', label: 'Radius', unit: 'cm', min: 0.1, step: 1 },
         { key: 'kind', type: 'select', label: 'Result', options: [{ value: 'surface', label: 'Points per m² (surface)' }, { value: 'volume', label: 'Points per m³ (volume)' }, { value: 'count', label: 'Number of neighbours within the radius' }] },
@@ -91,7 +92,7 @@ export class CloudAnalysis {
     const hasN = (r) => ['nx', 'ny', 'nz'].every((k) => this.layers.get(r.id).meta.attrs.fields.some((f) => f.name === k));
     const first = others.find((r) => r.visible !== false) || others[0];
     const pm = this.app.pm.show({
-      title: 'Cloud to Cloud', iconName: 'cloud', values: { ref: first.id, maxDist: 20, model: 'plane', split: false },
+      title: 'Cloud to Cloud', iconName: 'cloud', values: { ref: first.id, maxDist: opt('pcC2CMaxDist'), model: 'plane', split: false },
       fields: [
         { type: 'info', text: `Compared: ${rec.name}` },
         { key: 'ref', type: 'select', label: 'Reference', options: others.map((r) => ({ value: r.id, label: r.name })) },
@@ -104,8 +105,8 @@ export class CloudAnalysis {
       onOk: (v) => {
         const ref = others.find((r) => r.id === v.ref), L = this.layers.get(ref.id);
         if (!(v.maxDist > 0)) return false;
-        const sp = Math.max(0.002, this.spacingEstimate(L));
-        setTimeout(() => this.runAnalysis('c2c', { ref: { id: L.id, transform: ref.transform || null }, refName: ref.name, maxDist: v.maxDist / 100, model: v.model, k: 8, split: !!v.split, cell: Math.max(0.01, sp * 4) }, rec, `to ${nm(ref)}`));
+        const sp = Math.max(opt('pcMinSpacing'), this.spacingEstimate(L));
+        setTimeout(() => this.runAnalysis('c2c', { ref: { id: L.id, transform: ref.transform || null }, refName: ref.name, maxDist: v.maxDist / 100, model: v.model, k: opt('pcC2CK'), split: !!v.split, cell: Math.max(opt('pcC2CCellMin'), sp * opt('pcC2CCellK')) }, rec, `to ${nm(ref)}`));
         return true;
       },
     });
@@ -121,7 +122,7 @@ export class CloudAnalysis {
     const preview = new THREE.Group(); preview.matrixAutoUpdate = false; this.c2mPreview = preview;
     this.overlay.add(preview);
     const pm = this.app.pm.show({
-      title: 'Cloud to Part', iconName: 'part', values: { file: file || '', dx: 0, dy: 0, dz: 0, rz: 0, maxDist: 10, signed: true },
+      title: 'Cloud to Part', iconName: 'part', values: { file: file || '', dx: 0, dy: 0, dz: 0, rz: 0, maxDist: opt('pcC2MMaxDist'), signed: true },
       message: 'Tip: place the part exactly with Register → Align Part (point pairs + ICP). Move part below nudges it on top of that.',
       fields: [
         { type: 'info', text: `Scan: ${rec.name}` },
@@ -151,7 +152,7 @@ export class CloudAnalysis {
       for (let i = 0; i < P.length; i += 3) { const q = w.set(...toDocFrame(P[i], P[i + 1], P[i + 2])).applyMatrix4(B).toArray(); for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], q[k]); mx[k] = Math.max(mx[k], q[k]); } }
       const b = this.layers.get(rec.id).docBox();
       const d = { dx: (b.min.x + b.max.x) / 2 - (mn[0] + mx[0]) / 2, dy: (b.min.y + b.max.y) / 2 - (mn[1] + mx[1]) / 2, dz: b.min.z - mn[2] };
-      for (const k of ['dx', 'dy', 'dz']) pm.setValue(k, +d[k].toFixed(4));
+      for (const k of ['dx', 'dy', 'dz']) pm.setValue(k, +d[k].toFixed(opt('pcPlaceDec')));
       place(pm.values);
     };
     const place = (v) => {
@@ -172,11 +173,11 @@ export class CloudAnalysis {
       g.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
       g.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
       g.computeVertexNormals();
-      preview.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0xe0a030, transparent: true, opacity: 0.25, depthWrite: false, side: THREE.DoubleSide })));
-      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 25), new THREE.LineBasicMaterial({ color: 0xff8c00, depthTest: false, transparent: true }));
+      preview.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: opt('pcPartFillColor'), transparent: true, opacity: opt('pcPartOpacityC2M'), depthWrite: false, side: THREE.DoubleSide })));
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, opt('pcPartEdgeAngle')), new THREE.LineBasicMaterial({ color: optHex('pcPartEdgeColor'), depthTest: false, transparent: true }));
       edges.renderOrder = 10; preview.add(edges);
       const b = new THREE.Box3().setFromBufferAttribute(g.getAttribute('position'));
-      pm.inputs.pinfo.textContent = `${this.doc.partAlign?.[file] ? 'Aligned with Align Part. ' : ''}${file.split(/[\\/]/).pop()}: ${(mesh.indices.length / 3).toLocaleString()} triangles, ${fmt((b.max.x - b.min.x) / 1000, 2)} × ${fmt((b.max.z - b.min.z) / 1000, 2)} × ${fmt((b.max.y - b.min.y) / 1000, 2)} m`;
+      pm.inputs.pinfo.textContent = `${this.doc.partAlign?.[file] ? 'Aligned with Align Part. ' : ''}${file.split(/[\\/]/).pop()}: ${(mesh.indices.length / 3).toLocaleString()} triangles, ${fmt((b.max.x - b.min.x) / 1000, opt('pcSizeDec'))} × ${fmt((b.max.z - b.min.z) / 1000, opt('pcSizeDec'))} × ${fmt((b.max.y - b.min.y) / 1000, opt('pcSizeDec'))} m`;
       place(pm.values);
     };
     if (file) load();
@@ -206,7 +207,7 @@ export class CloudAnalysis {
     if (!s) return null;
     if (!s.n) return h('div', { class: 'pc-panel' }, h('div', { class: 'sp-sec' }, `${OPS[a.op]}: ${a.field}`), h('div', { class: 'pm-msg error' }, 'No point is within the max. distance. Check the position of the part / reference or use a larger max. distance.'));
     const dist = DIST.has(a.op), U = dist ? 1000 : 1, unit = dist ? 'mm' : a.field === 'density' ? (a.params.kind === 'surface' ? '/m²' : a.params.kind === 'volume' ? '/m³' : '') : '';
-    const v = (x, d = dist ? 1 : 3) => (x === x ? fmt(x * U, d) + (unit ? ' ' + unit : '') : '—');
+    const v = (x, d = dist ? opt('pcMmDec') : opt('pcValueDec')) => (x === x ? fmt(x * U, d) + (unit ? ' ' + unit : '') : '—');
     const wrap = h('div', { class: 'pc-panel' }, h('div', { class: 'sp-sec' }, `${OPS[a.op]}: ${a.field}`));
     const ro = (k, val, tip) => h('div', { class: 'pp-row ro', title: tip || '' }, h('label', {}, k), h('span', {}, val));
     if (a.op === 'c2c') wrap.append(ro('Reference', a.params.refName || ''), ro('Distance to', a.params.model === 'plane' ? 'local surface' : 'nearest point'));
@@ -216,20 +217,20 @@ export class CloudAnalysis {
     if (dist) wrap.append(ro('Mean |distance|', v(s.meanAbs)), ro('RMS', v(s.rms)));
     wrap.append(ro('Std. deviation (σ)', v(s.sd)));
     // histogram in the current colours
-    const cv = h('canvas', { class: 'an-hist', width: 260, height: 70, style: { width: '100%', height: '70px', display: 'block', margin: '4px 0' } });
+    const cv = h('canvas', { class: 'an-hist', width: opt('pcHistW'), height: opt('pcHistH'), style: { width: '100%', height: opt('pcHistH') + 'px', display: 'block', margin: '4px 0' } });
     wrap.append(h('div', { style: { margin: '2px 8px' } }, cv, h('div', { class: 'an-axis', style: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', opacity: 0.75 } }, h('span', {}, v(s.hist.lo)), h('span', {}, v(s.hist.hi)))));
     requestAnimationFrame(() => this.drawHist(cv, rec));
     // deviation view
     const field = (label, input) => h('div', { class: 'pp-row' }, h('label', {}, label), input);
     const set = (fn) => { fn(); this.layers.get(rec.id)?.applyStyle(); this.vp.requestRender(); this.app.setDirty(true); this.renderTree(); };
     if (dist) {
-      const tol = h('input', { type: 'text', value: rec.tol > 0 && rec.tolFor === rec.colorMode ? fmt(rec.tol * 1000, 1) : '', placeholder: 'off' });
+      const tol = h('input', { type: 'text', value: rec.tol > 0 && rec.tolFor === rec.colorMode ? fmt(rec.tol * 1000, opt('pcMmDec')) : '', placeholder: 'off' });
       tol.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') tol.blur(); });
       tol.addEventListener('change', () => set(() => { const t = parseFloat(tol.value.replace(',', '.')); if (t > 0) { rec.tol = t / 1000; rec.tolFor = 'field:' + a.field; rec.colorMode = 'field:' + a.field; } else delete rec.tol; }));
       wrap.append(field('Tolerance ± (mm)', tol));
       if (rec.tol > 0 && rec.tolFor === rec.colorMode) {
         const w = this.withinTol(s, rec.tol);
-        wrap.append(h('div', { class: 'pm-info', style: { margin: '2px 8px' } }, `≈ ${fmt(w.in * 100, 1)}% within ±${fmt(rec.tol * 1000, 1)} mm (green) · ${fmt(w.above * 100, 1)}% above (red) · ${fmt(w.below * 100, 1)}% below (blue)`));
+        wrap.append(h('div', { class: 'pm-info', style: { margin: '2px 8px' } }, `≈ ${fmt(w.in * 100, opt('pcPctDec'))}% within ±${fmt(rec.tol * 1000, opt('pcMmDec'))} mm (green) · ${fmt(w.above * 100, opt('pcPctDec'))}% above (red) · ${fmt(w.below * 100, opt('pcPctDec'))}% below (blue)`));
       }
     }
     const out = h('select', {}, [['end', 'Colour of the nearest end'], ['grey', 'Grey'], ['hide', 'Hidden']].map(([k, l]) => h('option', { value: k, selected: (rec.outside || 'end') === k }, l)));
@@ -237,7 +238,7 @@ export class CloudAnalysis {
     wrap.append(field('Outside From…To', out));
     wrap.append(h('div', { class: 'pp-inline', style: { margin: '4px 8px' } },
       h('button', { class: 'mini txt', title: 'Colour scale from the minimum to the maximum value', onclick: () => set(() => { rec.colorMode = 'field:' + a.field; rec.range = [s.min, s.max]; rec.rangeFor = rec.colorMode; }) }, 'Full range'),
-      dist ? h('button', { class: 'mini txt', title: 'Colour scale ±3σ around 0', onclick: () => set(() => { const m = 3 * Math.max(s.rms, 1e-6); rec.colorMode = 'field:' + a.field; rec.range = s.min < 0 ? [-m, m] : [0, m]; rec.rangeFor = rec.colorMode; }) }, '±3σ') : null,
+      dist ? h('button', { class: 'mini txt', title: `Colour scale ±${opt('pcSigmaRange')}σ around 0`, onclick: () => set(() => { const m = opt('pcSigmaRange') * Math.max(s.rms, 1e-6); rec.colorMode = 'field:' + a.field; rec.range = s.min < 0 ? [-m, m] : [0, m]; rec.rangeFor = rec.colorMode; }) }, `±${opt('pcSigmaRange')}σ`) : null,
       h('button', { class: 'mini txt', onclick: () => this.exportStats(rec) }, 'Statistics CSV…')));
     return wrap;
   }
@@ -265,25 +266,25 @@ export class CloudAnalysis {
       const x = lo + (i + 0.5) * ((hi - lo) / bins.length);
       let col = ramp((x - rng[0]) / ((rng[1] - rng[0]) || 1));
       if (rec.tol > 0 && rec.tolFor === rec.colorMode) col = Math.abs(x) <= rec.tol ? '#33bf4d' : x > 0 ? '#d9261f' : '#2666e6';
-      const bh = Math.max(c ? 1 : 0, (Math.sqrt(c / mx)) * (H - 2));
-      ctx.fillStyle = col; ctx.fillRect(i * bw, H - bh, Math.max(1, bw - 0.5), bh);
+      const bh = Math.max(c ? opt('pcHistMinPx') : 0, (Math.sqrt(c / mx)) * (H - opt('pcHistTopPx')));
+      ctx.fillStyle = col; ctx.fillRect(i * bw, H - bh, Math.max(opt('pcHistMinPx'), bw - opt('pcHistGap')), bh);
     });
   }
   async exportStats(rec = this.selRec()) {
     const a = rec?.analysis; if (!a) return;
     const s = a.stats, dist = DIST.has(a.op), U = dist ? 1000 : 1, unit = dist ? 'mm' : '';
-    const c = (x) => (x === x ? fmt(x * U, 4).replace('.', ',') : '');
+    const c = (x) => (x === x ? fmt(x * U, opt('pcCsvDec')).replace('.', ',') : '');
     const lines = [`Cloud;${rec.name}`, `Analysis;${OPS[a.op]}`, `Field;${a.field}`, `Unit;${unit}`];
     if (a.op === 'c2c') lines.push(`Reference;${a.params.refName || ''}`, `Distance to;${a.params.model === 'plane' ? 'local surface' : 'nearest point'}`);
     if (a.op === 'c2m') lines.push(`Part;${a.params.part || ''}`);
     if (a.params.maxDist) lines.push(`Max. distance;${c(a.params.maxDist)}`);
     lines.push(`Points with a value;${s.n}`, `Points without a value;${s.nan}`, `Min;${c(s.min)}`, `Max;${c(s.max)}`, `Mean;${c(s.mean)}`, `Mean abs;${c(s.meanAbs)}`, `RMS;${c(s.rms)}`, `Std. deviation;${c(s.sd)}`);
-    if (rec.tol > 0) { const w = this.withinTol(s, rec.tol); lines.push(`Tolerance +-;${c(rec.tol)}`, `Within tolerance %;${fmt(w.in * 100, 2).replace('.', ',')}`, `Above %;${fmt(w.above * 100, 2).replace('.', ',')}`, `Below %;${fmt(w.below * 100, 2).replace('.', ',')}`); }
+    if (rec.tol > 0) { const w = this.withinTol(s, rec.tol); lines.push(`Tolerance +-;${c(rec.tol)}`, `Within tolerance %;${fmt(w.in * 100, opt('pcCsvPctDec')).replace('.', ',')}`, `Above %;${fmt(w.above * 100, opt('pcCsvPctDec')).replace('.', ',')}`, `Below %;${fmt(w.below * 100, opt('pcCsvPctDec')).replace('.', ',')}`); }
     lines.push('', 'Histogram', 'From;To;Points');
     const { lo, hi, bins } = s.hist, w = (hi - lo) / bins.length;
     bins.forEach((n, i) => lines.push(`${c(lo + i * w)};${c(lo + (i + 1) * w)};${n}`));
     const def = (this.app.path ? this.app.path.replace(/[^\\/]*$/, '') : '') + `${nm(rec)} statistics.csv`;
     const p = await api.saveFile({ defaultPath: def, filters: [{ name: 'CSV (Excel)', extensions: ['csv'] }], text: '﻿' + lines.join('\r\n') + '\r\n' });
-    if (p) toast(`Saved statistics to ${p.split(/[\\/]/).pop()}`, 'ok', 3000);
+    if (p) toast(`Saved statistics to ${p.split(/[\\/]/).pop()}`, 'ok', opt('pcToastOkMs'));
   }
 }

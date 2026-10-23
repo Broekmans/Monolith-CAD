@@ -2,6 +2,10 @@
 // count badge, eye button, states sel / dim / err / editing (green).
 import { h } from './ui.js';
 import { icon } from './icons.js';
+import { opt } from './app/options.js';
+
+// left padding of a tree row at depth (Options > Interface > Tree, 0.1.128)
+export const treePad = (depth) => opt('treePadPx') + (depth || 0) * opt('treeIndentPx');
 
 const CHEVRON = '<svg viewBox="0 0 10 10" width="10" height="10"><path d="M3 1.5L7 5 3 8.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
@@ -15,7 +19,7 @@ export function treeRow(o) {
   if (o.editing) cls.push('editing');
   if (o.twisty !== undefined) cls.push('folder');
   if (o.eye === false) cls.push('hidden-item');
-  const r = h('div', { class: cls.join(' '), style: { paddingLeft: 4 + (o.depth || 0) * 14 + 'px' }, title: o.tip || '' },
+  const r = h('div', { class: cls.join(' '), style: { paddingLeft: treePad(o.depth) + 'px' }, title: o.tip || '' },
     o.twisty !== undefined
       ? h('span', { class: 'twisty' + (o.twisty ? ' open' : ''), html: CHEVRON, onclick: (e) => { e.stopPropagation(); o.onTwisty?.(); } })
       : h('span', { class: 'twisty' }),
@@ -49,4 +53,16 @@ export function toggleFolder(doc, key) {
   doc._treeOpen[key] = !doc._treeOpen[key];
   try { const d = defaults(); d[key] = doc._treeOpen[key]; localStorage.setItem(LS, JSON.stringify(d)); } catch { /* storage off */ }
   doc.renderTree();
+}
+
+// 0.1.134: Shift+click in a tree = everything between the last clicked row (anchor) and this one, like a file list.
+// items: Map key → item of the rows that can be range-selected; same(a, b) = may be in one range (e.g. both mates).
+// Returns the items in tree order (anchor and target included), or null when there is no usable anchor.
+export function rangeItems(treeEl, items, anchorKey, key, same = () => true) {
+  if (!anchorKey || !items.has(anchorKey) || !items.has(key) || !same(items.get(anchorKey), items.get(key))) return null;
+  const order = [];
+  for (const r of treeEl.querySelectorAll('[data-item]')) { const k = r.dataset.item; if (items.has(k) && !order.includes(k)) order.push(k); }
+  const a = order.indexOf(anchorKey), b = order.indexOf(key);
+  if (a < 0 || b < 0) return null;
+  return order.slice(Math.min(a, b), Math.max(a, b) + 1).map((k) => items.get(k)).filter((it) => same(it, items.get(key)));
 }

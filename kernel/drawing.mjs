@@ -1,15 +1,15 @@
 // Drawing views: exact hidden-line removal (HLRBRep) of a part/assembly shape for one view direction.
 // Result in the view plane (mm): x along `xDir`, y along dir × xDir. Edges as polylines, with circle /
 // line info kept for dimensioning.
-import { oc, Dir, P, listFaces, bbox } from './core.mjs';
+import { oc, Dir, P, listFaces, bbox, runBool } from './core.mjs';
 
 function edgesOf(shape, cls, out, tol) {
   if (!shape || shape.IsNull()) return;
-  const ex = new oc.TopExp_Explorer_2(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+  const ex = new oc.TopExp_Explorer(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
   for (; ex.More(); ex.Next()) {
-    const e = oc.TopoDS.Edge_1(ex.Current());
+    const e = oc.TopoDS.Edge(ex.Current());
     let ad;
-    try { ad = new oc.BRepAdaptor_Curve_2(e); } catch { continue; }
+    try { ad = new oc.BRepAdaptor_Curve(e); } catch { continue; }
     const f = ad.FirstParameter(), l = ad.LastParameter();
     const t = ad.GetType(), CT = oc.GeomAbs_CurveType;
     const rec = { cls, pts: [] };
@@ -21,7 +21,7 @@ function edgesOf(shape, cls, out, tol) {
       else rec.type = 'curve';
       let ok = false;
       try {
-        const d = new oc.GCPnts_TangentialDeflection_2(ad, 0.08, tol, 2, 1e-9, 1e-7);
+        const d = new oc.GCPnts_TangentialDeflection(ad, ad.FirstParameter(), ad.LastParameter(), 0.08, tol, 2, 1e-9, 1e-7);
         const n = d.NbPoints();
         for (let i = 1; i <= n; i++) { const p = d.Value(i); rec.pts.push(p.X(), p.Y()); }
         ok = n >= 2;
@@ -34,20 +34,19 @@ function edgesOf(shape, cls, out, tol) {
 
 // dir: towards the viewer; xDir: right on the paper. hidden: also hidden edges.
 export function hlrView(shape, dir, xDir, hidden = false) {
-  const algo = new oc.HLRBRep_Algo_1();
-  algo.Add_2(shape, 0);
-  const ax = new oc.gp_Ax2_2(P([0, 0, 0]), Dir(dir), Dir(xDir));
-  algo.Projector_1(new oc.HLRAlgo_Projector_2(ax));
+  const algo = new oc.HLRBRep_Algo();
+  algo.Add(shape, 0);
+  const ax = new oc.gp_Ax2(P([0, 0, 0]), Dir(dir), Dir(xDir));
+  algo.Projector(new oc.HLRAlgo_Projector(ax));
   algo.Update();
-  algo.Hide_1();
-  const h = new oc.Handle_HLRBRep_Algo_2(algo);
-  const r = new oc.HLRBRep_HLRToShape(h);
+  algo.Hide();
+  const r = new oc.HLRBRep_HLRToShape(algo);
   const out = [];
   const tol = 0.01;
-  edgesOf(r.VCompound_1(), 'v', out, tol);
-  edgesOf(r.OutLineVCompound_1(), 'v', out, tol);
-  edgesOf(r.Rg1LineVCompound_1(), 't', out, tol); // tangent (smooth) edges, drawn thin
-  if (hidden) { edgesOf(r.HCompound_1(), 'h', out, tol); edgesOf(r.OutLineHCompound_1(), 'h', out, tol); }
+  edgesOf(r.VCompound(), 'v', out, tol);
+  edgesOf(r.OutLineVCompound(), 'v', out, tol);
+  edgesOf(r.Rg1LineVCompound(), 't', out, tol); // tangent (smooth) edges, drawn thin
+  if (hidden) { edgesOf(r.HCompound(), 'h', out, tol); edgesOf(r.OutLineHCompound(), 'h', out, tol); }
   const box = [Infinity, Infinity, -Infinity, -Infinity];
   for (const e of out) for (let i = 0; i < e.pts.length; i += 2) { box[0] = Math.min(box[0], e.pts[i]); box[1] = Math.min(box[1], e.pts[i + 1]); box[2] = Math.max(box[2], e.pts[i]); box[3] = Math.max(box[3], e.pts[i + 1]); }
   return { edges: out, box };
@@ -57,11 +56,11 @@ export function hlrView(shape, dir, xDir, hidden = false) {
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const crs = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 function polyOfEdge(e) {
-  const ad = new oc.BRepAdaptor_Curve_2(e), f = ad.FirstParameter(), l = ad.LastParameter(), out = [];
+  const ad = new oc.BRepAdaptor_Curve(e), f = ad.FirstParameter(), l = ad.LastParameter(), out = [];
   if (ad.GetType() === oc.GeomAbs_CurveType.GeomAbs_Line) { for (const t of [f, l]) { const p = ad.Value(t); out.push([p.X(), p.Y(), p.Z()]); } }
   else {
     let ok = false;
-    try { const d = new oc.GCPnts_TangentialDeflection_2(ad, 0.08, 0.01, 2, 1e-9, 1e-7); for (let i = 1; i <= d.NbPoints(); i++) { const p = d.Value(i); out.push([p.X(), p.Y(), p.Z()]); } ok = out.length >= 2; } catch { /* */ }
+    try { const d = new oc.GCPnts_TangentialDeflection(ad, ad.FirstParameter(), ad.LastParameter(), 0.08, 0.01, 2, 1e-9, 1e-7); for (let i = 1; i <= d.NbPoints(); i++) { const p = d.Value(i); out.push([p.X(), p.Y(), p.Z()]); } ok = out.length >= 2; } catch { /* */ }
     if (!ok) { out.length = 0; for (let i = 0; i <= 48; i++) { const p = ad.Value(f + ((l - f) * i) / 48); out.push([p.X(), p.Y(), p.Z()]); } }
   }
   return out;
@@ -95,9 +94,8 @@ export function sectionView(shape, plane, dir, xDir, hidden = false) {
   let D = Math.abs(m[0]) < 0.9 ? crs(m, [1, 0, 0]) : crs(m, [0, 1, 0]); const dl = Math.hypot(...D); D = D.map((v) => v / dl);
   const Y = crs(m, D), p0 = plane.p;
   const o = [0, 1, 2].map((i) => p0[i] - D[i] * L - Y[i] * L);
-  const box = new oc.BRepPrimAPI_MakeBox_5(new oc.gp_Ax2_2(P(o), Dir(m), Dir(D)), 2 * L, 2 * L, L).Shape();
-  const op = new oc.BRepAlgoAPI_Cut_3(shape, box, new oc.Message_ProgressRange_1());
-  op.Build(new oc.Message_ProgressRange_1());
+  const box = new oc.BRepPrimAPI_MakeBox(new oc.gp_Ax2(P(o), Dir(m), Dir(D)), 2 * L, 2 * L, L).Shape();
+  const op = runBool('BRepAlgoAPI_Cut', shape, box);
   if (!op.IsDone()) throw new Error('Section cut failed');
   const cut = op.Shape();
   const view = hlrView(cut, dir, xDir, hidden);
@@ -108,12 +106,12 @@ export function sectionView(shape, plane, dir, xDir, hidden = false) {
   for (const fi of listFaces(cut)) {
     if (fi.type !== 'plane' || !fi.plane) continue;
     if (Math.abs(Math.abs(dot3(fi.plane.normal, m)) - 1) > 1e-6 || Math.abs(dot3(fi.c, m) - d0) > tol * 10) continue;
-    const wex = new oc.TopExp_Explorer_2(fi.face, oc.TopAbs_ShapeEnum.TopAbs_WIRE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+    const wex = new oc.TopExp_Explorer(fi.face, oc.TopAbs_ShapeEnum.TopAbs_WIRE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
     const loops = [];
     for (; wex.More(); wex.Next()) {
       const polys = [];
-      const eex = new oc.TopExp_Explorer_2(wex.Current(), oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
-      for (; eex.More(); eex.Next()) polys.push(polyOfEdge(oc.TopoDS.Edge_1(eex.Current())));
+      const eex = new oc.TopExp_Explorer(wex.Current(), oc.TopAbs_ShapeEnum.TopAbs_EDGE, oc.TopAbs_ShapeEnum.TopAbs_SHAPE);
+      for (; eex.More(); eex.Next()) polys.push(polyOfEdge(oc.TopoDS.Edge(eex.Current())));
       for (const lp of chain(polys, Math.max(1e-3, L * 1e-5))) loops.push(lp.flatMap((q) => to2(q)));
     }
     if (loops.length) hatch.push(loops);
